@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -e
 cd "$(dirname "$0")/.."
-PATH="$HOME/.elan/bin:$PATH" lake build
+PATH="$HOME/.elan/bin:$PATH" lake build metalanguage
 for f in $(find spec -name 'spec.lean' | sort); do
   echo "== $f"
   PATH="$HOME/.elan/bin:$PATH" lake env lean "$f"

@@ -1,0 +1,24 @@
+name: ci
+on: [push, pull_request]
+jobs:
+  specs:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: install elan
+        run: |
+          curl -sSfL https://elan.lean-lang.org/elan_init.sh | sh -s -- -y
+          echo "$HOME/.elan/bin" >> "$GITHUB_PATH"
+      - run: specs/tools/check.sh
+  verus-lookup-walk:
+    runs-on: ubuntu-latest
+    continue-on-error: true   # best-effort until verus install is pinned
+    steps:
+      - uses: actions/checkout@v4
+      - name: install verus
+        run: |
+          curl -sL https://github.com/verus-lang/verus/releases/latest/download/verus-x86-linux.zip -o /tmp/verus.zip
+          unzip -q /tmp/verus.zip -d /tmp/verus-dist
+      - run: verus/lookup-walk/check.sh
+        env:
+          VERUS: /tmp/verus-dist/verus-x86-linux/verus
