@@ -38,12 +38,16 @@ inductive E2 where
   | isNotObject (e : E2)
   | isNotUndefined (e : E2)
   | hasCall (e : E2)
+  | hasCtor (e : E2)
+  | isU (e : E2)
+  | isBoolVal (b : Bool) (e : E2)
   | varNotPresent (name : String)
   | call (name : String) (args : List E2)
   deriving Repr
 
 inductive P2 where
   | getMethod (o : E2) (sym : String)
+  | getV (v : E2) (p : E2)
   | call (f : E2) (thisArg : E2) (arg : E2)
   | ordinaryToPrimitive (o : E2) (hint : E2)
   deriving Repr
@@ -182,17 +186,22 @@ syntax "present" : notPred
 declare_syntax_cat isTail
 syntax "an" "Object" : isTail
 syntax "not" notPred : isTail
+syntax "undefined" : isTail
+syntax "true" : isTail
+syntax "false" : isTail
 syntax algExpr "has" "a" "[[Call]]" "internal" "method" : algExpr
+syntax algExpr "has" "a" "[[Construct]]" "internal" "method" : algExpr
 syntax ident "(" algExpr ")" : algExpr
 
 /- `x is not …` — the tail is its own category so alternatives differ
    at the first token (shared prefixes past one token don't backtrack). -/
-syntax ident "is" isTail : algExpr
+syntax algExpr "is" isTail : algExpr
 syntax "number" : algExpr
 syntax "string" : algExpr
 
 
 syntax "GetMethod" "(" algExpr "," ident ")" : algPrim
+syntax "GetV" "(" algExpr "," algExpr ")" : algPrim
 syntax "GetMethod" "(" algExpr "," "@" "@" ident ")" : algPrim
 syntax "OrdinaryToPrimitive" "(" algExpr "," algExpr ")" : algPrim
 /- Deviation: the spec's « argList » — Lean lexes « » as identifier
@@ -289,12 +298,19 @@ macro_rules
   | `([e| false]) => ``(E2.const (JSValue.boolean Bool.false))
   | `([e| $n:num]) => ``(E2.nat ($n : Nat))
   | `([e| $n:scientific]) => ``(E2.nat $(quote (sciNat n)))
-  | `([e| $x:ident is an Object]) => ``(E2.isObject (E2.nv $(quote (toString x.getId))))
-  | `([e| $x:ident is not an Object]) => ``(E2.isNotObject (E2.nv $(quote (toString x.getId))))
-  | `([e| $x:ident is not undefined]) => ``(E2.isNotUndefined (E2.nv $(quote (toString x.getId))))
+  | `([e| $e:algExpr is an Object]) => ``(E2.isObject [e| $e])
+  | `([e| $e:algExpr is not an Object]) => ``(E2.isNotObject [e| $e])
+  | `([e| $e:algExpr is not undefined]) => ``(E2.isNotUndefined [e| $e])
   | `([e| $e:algExpr has a [[Call]] internal method]) => ``(E2.hasCall [e| $e])
-  | `([e| $x:ident is not present]) =>
-      ``(E2.varNotPresent $(quote (toString x.getId)))
+  | `([e| $e:algExpr has a [[Construct]] internal method]) => ``(E2.hasCtor [e| $e])
+  | `([e| $e:algExpr is undefined]) => ``(E2.isU [e| $e])
+  | `([e| $e:algExpr is true]) => ``(E2.isBoolVal Bool.true [e| $e])
+  | `([e| $e:algExpr is false]) => ``(E2.isBoolVal Bool.false [e| $e])
+  | `([e| $e:algExpr is not present]) =>
+      let name := match e.raw with
+        | .ident _ s _ _ => s.toString
+        | _ => "?"
+      ``(E2.varNotPresent $(quote name))
   | `([e| number]) => ``(E2.const (JSValue.str "number"))
   | `([e| string]) => ``(E2.const (JSValue.str "string"))
 
@@ -304,6 +320,8 @@ macro_rules
       ``(P2.getMethod [e| $o] $(quote (toString x.getId)))
   | `([p| GetMethod ( $o:algExpr , @ @ $x:ident )]) =>
       ``(P2.getMethod [e| $o] $(quote ("@@" ++ toString x.getId)))
+  | `([p| GetV ( $v:algExpr , $p:algExpr )]) =>
+      ``(P2.getV [e| $v] [e| $p])
   | `([p| OrdinaryToPrimitive ( $o:algExpr , $h:algExpr )]) =>
       ``(P2.ordinaryToPrimitive [e| $o] [e| $h])
   | `([p| Call ( $f:algExpr , $t:algExpr , $x:algExpr )]) =>
@@ -513,6 +531,7 @@ def isUndV : JSValue → Bool
 def isObjV : JSValue → Bool := fun _ => Bool.false
 
 def hasCallV : JSValue → Bool := fun _ => Bool.false
+def hasCtorV : JSValue → Bool := fun _ => Bool.false
 
 /- Toy semantics: no objects in this value universe, primitives
    return undefined. Calls are machine-only: the big-step evaluator
@@ -532,6 +551,18 @@ def evalE2 (env : Env) : E2 → Option JSValue
   | .hasCall e =>
       match evalE2 env e with
       | some v => some (.boolean (hasCallV v))
+      | none => none
+  | .hasCtor e =>
+      match evalE2 env e with
+      | some v => some (.boolean (hasCtorV v))
+      | none => none
+  | .isU e =>
+      match evalE2 env e with
+      | some v => some (.boolean (isUndV v))
+      | none => none
+  | .isBoolVal b e =>
+      match evalE2 env e with
+      | some v => some (.boolean (v == .boolean b))
       | none => none
   | .varNotPresent n => some (.boolean (lookup env n).isNone)
   | .call _ _ => none
@@ -606,6 +637,7 @@ inductive Arg where
 
 inductive Prim where              -- bedrock predicates (the axiom stratum)
   | pIsObj | pIsNotObj | pIsNotU | pHasCall
+  | pHasCtor | pIsU | pIsTrue | pIsFalse
   deriving Repr
 
 inductive Kon where
@@ -644,6 +676,10 @@ def applyPrim : Prim → JSValue → JSValue
   | .pIsNotObj, v => .boolean (!isObjV v)
   | .pIsNotU, v => .boolean (!isUndV v)
   | .pHasCall, v => .boolean (hasCallV v)
+  | .pHasCtor, v => .boolean (hasCtorV v)
+  | .pIsU, v => .boolean (isUndV v)
+  | .pIsTrue, v => .boolean (v == .boolean Bool.true)
+  | .pIsFalse, v => .boolean (v == .boolean Bool.false)
 
 /- The transcribed-operation registry (the corpus). -/
 abbrev AOReg := List (String × (List String × Prog))
@@ -693,6 +729,12 @@ def kstep (reg : AOReg) : KM → KM
       .krun (.kEvalS (.ee e') [] [] (.kPrim .pIsNotU (.kSpine as rs k)) :: st) env stack
   | .krun (.kEvalS (.ee (.hasCall e')) as rs k :: st) env stack =>
       .krun (.kEvalS (.ee e') [] [] (.kPrim .pHasCall (.kSpine as rs k)) :: st) env stack
+  | .krun (.kEvalS (.ee (.hasCtor e')) as rs k :: st) env stack =>
+      .krun (.kEvalS (.ee e') [] [] (.kPrim .pHasCtor (.kSpine as rs k)) :: st) env stack
+  | .krun (.kEvalS (.ee (.isU e')) as rs k :: st) env stack =>
+      .krun (.kEvalS (.ee e') [] [] (.kPrim .pIsU (.kSpine as rs k)) :: st) env stack
+  | .krun (.kEvalS (.ee (.isBoolVal b e')) as rs k :: st) env stack =>
+      .krun (.kEvalS (.ee e') [] [] (.kPrim (if b then .pIsTrue else .pIsFalse) (.kSpine as rs k)) :: st) env stack
   | .krun (.kEvalS (.ee (.varNotPresent n)) as rs k :: st) env stack =>
       .krun (.kEvalS (.ev (.boolean (lookup env n).isNone)) as rs k :: st) env stack
   | .krun (.kEvalS (.ee (.call f args)) as rs k :: st) env stack =>

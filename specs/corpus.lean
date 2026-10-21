@@ -15,6 +15,20 @@ def AO_IsCallable : AOReg :=
 #eval checkRun (renest isCallable6_2_5_1)
 
 
+/- ES 6.2.5.2 IsConstructor ( x ) — text-equal transcription. -/
+
+def isConstructor6_2_5_2 : List FStep := [alg|
+  1. If x is not an Object, return false.
+  2. If x has a [[Construct]] internal method, return true.
+  3. Return false.
+]
+
+def AO_IsConstructor : AOReg :=
+  [("IsConstructor", (["x"], build isConstructor6_2_5_2))]
+
+#eval checkRun (renest isConstructor6_2_5_2)
+
+
 /- ES 7.1.1 ToPrimitive ( input [ , preferredType ] ) — text-equal
    transcription. Semantic stubs (documented in the metalanguage):
    GetMethod/OrdinaryToPrimitive/Call return undefined until the heap
@@ -39,7 +53,24 @@ def AO_ToPrimitive : AOReg :=
 #eval checkRun (renest toPrimitive7_1_1)
 
 
-def theReg : AOReg := AO_IsCallable ++ AO_ToPrimitive
+/- ES 7.3.10 GetMethod ( V, P ) — text-equal transcription. The first
+   registry entry that CALLS another registry entry (step 3: IsCallable).
+   GetV is a stub primitive until the heap. -/
+
+def getMethod7_3_10 : List FStep := [alg|
+  1. Let func be ? GetV(V, P).
+  2. If func is undefined, return undefined.
+  3. If IsCallable(func) is false, throw a TypeError exception.
+  4. Return func.
+]
+
+def AO_GetMethod : AOReg :=
+  [("GetMethod", (["V", "P"], build getMethod7_3_10))]
+
+#eval checkRun (renest getMethod7_3_10)
+
+
+def theReg : AOReg := AO_IsCallable ++ AO_IsConstructor ++ AO_ToPrimitive ++ AO_GetMethod
 
 /- smoke: every corpus program runs, audits, and SOS/machine agree -/
 def exampleF : List FStep := [alg|
@@ -67,5 +98,7 @@ def primDemoF : List FStep := [alg|
 #eval ksteps theReg 100 (kmOf (build callDemoF))
 #eval ksteps theReg 100 (kmOf (build retDemoF))
 #eval ksteps theReg 100 (kmOf (build primDemoF))
+#eval ksteps theReg 100 (kmOf (build getMethod7_3_10))
+#eval ksteps theReg 100 (kmOf (build isConstructor6_2_5_2))
 #eval agree theReg (build exampleF)
 

@@ -45,6 +45,8 @@ def primDemoF : List FStep := [alg|
 #eval ksteps theReg 100 (kmOf (build callDemoF))
 #eval ksteps theReg 100 (kmOf (build retDemoF))
 #eval ksteps theReg 100 (kmOf (build primDemoF))
+#eval ksteps theReg 100 (kmOf (build getMethod7_3_10))
+#eval ksteps theReg 100 (kmOf (build isConstructor6_2_5_2))
 #eval agree theReg (build exampleF)
 '''
 
