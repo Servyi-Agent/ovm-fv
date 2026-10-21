@@ -38,18 +38,22 @@ inductive E2 where
   | isNotObject (e : E2)
   | isNotUndefined (e : E2)
   | hasCall (e : E2)
+  | varNotPresent (name : String)
   | call (name : String) (args : List E2)
   deriving Repr
 
 inductive P2 where
   | getMethod (o : E2) (sym : String)
+  | call (f : E2) (thisArg : E2) (arg : E2)
   | ordinaryToPrimitive (o : E2) (hint : E2)
   deriving Repr
 
 /- Clean, label-free AST (what the interpreter consumes). -/
 inductive Step where
   | ret (v : E2)
+  | retQ (op : P2)
   | throw
+  | setE (name : String) (e : E2)
   | letQ (name : String) (op : P2)
   | letE (name : String) (e : E2)
   | ifS (c : E2) (t : List Step) (e : List Step)
@@ -61,7 +65,9 @@ abbrev Prog := List Step
 /- Label-carrying parallel AST (what the audit consumes). -/
 inductive LBody where
   | ret (v : E2)
+  | retQ (op : P2)
   | throw
+  | setE (name : String) (e : E2)
   | letQ (name : String) (op : P2)
   | letE (name : String) (e : E2)
   | ifS (c : E2) (t : List (String × LBody)) (e : List (String × LBody))
@@ -74,7 +80,11 @@ abbrev LStep := String × LBody
    `renest` fills them in from the depth markers. -/
 inductive FBody where
   | ret (v : E2)
+  | retQ (op : P2)
   | throw
+  | setE (name : String) (e : E2)
+  | ifI (c : E2) (s : FBody)
+  | elseI (s : FBody)
   | letQ (name : String) (op : P2)
   | letE (name : String) (e : E2)
   | ifS (c : E2)
@@ -99,6 +109,8 @@ def strip : List LStep → Prog
 def stripBody : LBody → Step
   | .ret v => .ret v
   | .throw => .throw
+  | .retQ op => .retQ op
+  | .setE n e => .setE n e
   | .letQ n op => .letQ n op
   | .letE n e => .letE n e
   | .ifS c t e => .ifS c (strip t) (strip e)
@@ -153,20 +165,39 @@ declare_syntax_cat kwLet
 declare_syntax_cat kwReturn
 declare_syntax_cat kwThrow
 declare_syntax_cat kwThen
+declare_syntax_cat kwSet
 
 syntax ident : algExpr
 syntax "true" : algExpr
 syntax "false" : algExpr
 syntax "undefined" : algExpr
 syntax num : algExpr
-syntax algExpr "is" "an" "Object" : algExpr
-syntax algExpr "is" "not" "an" "Object" : algExpr
-syntax algExpr "has" "[[Call]]" "internal" "method" : algExpr
+syntax scientific : algExpr
+/- `x is …` — every choice level is first-token-disjoint (alternatives
+   sharing more than a first token don't backtrack). -/
+declare_syntax_cat notPred
+syntax "an" "Object" : notPred
+syntax "undefined" : notPred
+syntax "present" : notPred
+declare_syntax_cat isTail
+syntax "an" "Object" : isTail
+syntax "not" notPred : isTail
+syntax algExpr "has" "a" "[[Call]]" "internal" "method" : algExpr
 syntax ident "(" algExpr ")" : algExpr
-syntax algExpr "is" "not" "undefined" : algExpr
+
+/- `x is not …` — the tail is its own category so alternatives differ
+   at the first token (shared prefixes past one token don't backtrack). -/
+syntax ident "is" isTail : algExpr
+syntax "number" : algExpr
+syntax "string" : algExpr
+
 
 syntax "GetMethod" "(" algExpr "," ident ")" : algPrim
+syntax "GetMethod" "(" algExpr "," "@" "@" ident ")" : algPrim
 syntax "OrdinaryToPrimitive" "(" algExpr "," algExpr ")" : algPrim
+/- Deviation: the spec's « argList » — Lean lexes « » as identifier
+   delimiters, so the list brackets are dropped (single arg for now). -/
+syntax "Call" "(" algExpr "," algExpr "," algExpr ")" : algPrim
 
 syntax "If" : kwIf
 syntax "if" : kwIf
@@ -179,25 +210,50 @@ syntax "return" : kwReturn
 syntax "Throw" : kwThrow
 syntax "throw" : kwThrow
 syntax "then" : kwThen
+syntax "Set" : kwSet
+syntax "set" : kwSet
 
 /- Statements: ifs and elses carry NO body — the body is the run of
    deeper-marked steps that follows, recovered by `renest`. -/
-syntax kwLet ident "be" "?" algPrim : stmt
-syntax kwLet ident "be" algExpr : stmt
-syntax kwReturn algExpr : stmt
-syntax kwThrow : stmt
-syntax kwIf algExpr kwThen : stmt
+/- Terminal statements carry the spec's trailing period — except when
+   the expression ends in a numeral, whose dot the lexer glues into the
+   scientific token; those period-free variants come first. -/
+syntax kwLet ident "be" scientific : stmt
+syntax kwReturn scientific : stmt
+syntax kwSet ident "to" scientific : stmt
+syntax kwLet ident "be" "?" algPrim "." : stmt
+syntax kwLet ident "be" algExpr "." : stmt
+syntax kwReturn algExpr "." : stmt
+syntax kwReturn "?" algPrim "." : stmt
+syntax kwThrow "." : stmt
+syntax kwThrow "a" "TypeError" "exception" "." : stmt
+syntax kwSet ident "to" algExpr "." : stmt
+/- Block forms (sub-steps follow, deeper). The spec writes "If c, then";
+   after the comma, block (then) and inline (statement) diverge, so the
+   tail is its own first-token-disjoint category. -/
+declare_syntax_cat ifTail
+syntax kwThen : ifTail
+syntax stmt : ifTail
+syntax kwIf algExpr "," ifTail : stmt
 syntax kwElse : stmt
+/- Inline else: "Else, stmt." -/
+syntax kwElse "," stmt : stmt
 
 /- Depth markers: a run of ┊ tokens, freely spaced (many1 recovers
    cleanly at any non-┊ token, so runs end without commit errors). -/
 declare_syntax_cat label
-syntax num : label
 syntax ident : label
+/- `a` is a keyword (from "has a [[Call]]") and a sub-step label. -/
+syntax "a" : label
 
 /- A flat step: markers, a label, a statement. -/
-syntax ("┊")+ label ":" stmt : fstep
-syntax label ":" stmt : fstep
+/- Numeric labels: Lean's numeral lexer consumes an adjacent dot into a
+   single scientific token ("1."), so numeric labels parse as scientific
+   (dot included) and the elaborator strips it. -/
+syntax ("┊")+ scientific stmt : fstep
+syntax scientific stmt : fstep
+syntax ("┊")+ label "." stmt : fstep
+syntax label "." stmt : fstep
 
 declare_syntax_cat fsteps
 syntax fstep : fsteps
@@ -209,44 +265,83 @@ syntax "[e|" algExpr "]" : term
 syntax "[p|" algPrim "]" : term
 syntax "[s|" stmt "]" : term
 
+/- The numeral lexer glues a trailing dot into one scientific token
+   ("1."), so numeric labels and integer literals both arrive as
+   scientific tokens; strip the dot to recover the Nat. -/
+open Lean in
+def sciNat (n : TSyntax `scientific) : Nat :=
+  let strip : String → Nat := fun v => (String.ofList (v.toList.dropLast)).toNat?.getD 0
+  match n.raw with
+  | .atom _ v => strip v
+  | .node _ _ args =>
+    match (args[0]? : Option Lean.Syntax) with
+    | some (Lean.Syntax.atom _ v) => strip v
+    | _ => 0
+  | _ => 0
+
 open Lean in
 macro_rules
-  | `([e| $f:ident ( $a:algExpr )]) =>
-      ``(E2.call $(quote (toString f.getId)) [[e| $a]])
+  | `([e| $f:ident ( $x:algExpr )]) =>
+      ``(E2.call $(quote (toString f.getId)) [[e| $x]])
   | `([e| $x:ident]) => ``(E2.nv $(quote (toString x.getId)))
   | `([e| undefined]) => ``(E2.const JSValue.undefined)
   | `([e| true]) => ``(E2.const (JSValue.boolean Bool.true))
   | `([e| false]) => ``(E2.const (JSValue.boolean Bool.false))
   | `([e| $n:num]) => ``(E2.nat ($n : Nat))
-  | `([e| $e:algExpr is an Object]) => ``(E2.isObject [e| $e])
-  | `([e| $e:algExpr is not an Object]) => ``(E2.isNotObject [e| $e])
-  | `([e| $e:algExpr has [[Call]] internal method]) => ``(E2.hasCall [e| $e])
-  | `([e| $e:algExpr is not undefined]) => ``(E2.isNotUndefined [e| $e])
+  | `([e| $n:scientific]) => ``(E2.nat $(quote (sciNat n)))
+  | `([e| $x:ident is an Object]) => ``(E2.isObject (E2.nv $(quote (toString x.getId))))
+  | `([e| $x:ident is not an Object]) => ``(E2.isNotObject (E2.nv $(quote (toString x.getId))))
+  | `([e| $x:ident is not undefined]) => ``(E2.isNotUndefined (E2.nv $(quote (toString x.getId))))
+  | `([e| $e:algExpr has a [[Call]] internal method]) => ``(E2.hasCall [e| $e])
+  | `([e| $x:ident is not present]) =>
+      ``(E2.varNotPresent $(quote (toString x.getId)))
+  | `([e| number]) => ``(E2.const (JSValue.str "number"))
+  | `([e| string]) => ``(E2.const (JSValue.str "string"))
 
 open Lean in
 macro_rules
   | `([p| GetMethod ( $o:algExpr , $x:ident )]) =>
       ``(P2.getMethod [e| $o] $(quote (toString x.getId)))
+  | `([p| GetMethod ( $o:algExpr , @ @ $x:ident )]) =>
+      ``(P2.getMethod [e| $o] $(quote ("@@" ++ toString x.getId)))
   | `([p| OrdinaryToPrimitive ( $o:algExpr , $h:algExpr )]) =>
       ``(P2.ordinaryToPrimitive [e| $o] [e| $h])
+  | `([p| Call ( $f:algExpr , $t:algExpr , $x:algExpr )]) =>
+      ``(P2.call [e| $f] [e| $t] [e| $x])
 
 open Lean in
 macro_rules
-  | `([s| $l:kwLet $x:ident be ? $op:algPrim]) =>
+  | `([s| $l:kwLet $x:ident be $n:scientific]) =>
+      ``(FBody.letE $(quote (toString x.getId)) (E2.nat $(quote (sciNat n))))
+  | `([s| $r:kwReturn $n:scientific]) =>
+      ``(FBody.ret (E2.nat $(quote (sciNat n))))
+  | `([s| $s:kwSet $x:ident to $n:scientific]) =>
+      ``(FBody.setE $(quote (toString x.getId)) (E2.nat $(quote (sciNat n))))
+  | `([s| $l:kwLet $x:ident be ? $op:algPrim .]) =>
       ``(FBody.letQ $(quote (toString x.getId)) [p| $op])
-  | `([s| $l:kwLet $x:ident be $e:algExpr]) =>
+  | `([s| $l:kwLet $x:ident be $e:algExpr .]) =>
       ``(FBody.letE $(quote (toString x.getId)) [e| $e])
-  | `([s| $r:kwReturn $x:ident]) =>
-      ``(FBody.ret (E2.nv $(quote (toString x.getId))))
-  | `([s| $r:kwReturn undefined]) =>
-      ``(FBody.ret (E2.const JSValue.undefined))
-  | `([s| $r:kwReturn true]) =>
-      ``(FBody.ret (E2.const (JSValue.boolean Bool.true)))
-  | `([s| $r:kwReturn false]) =>
-      ``(FBody.ret (E2.const (JSValue.boolean Bool.false)))
-  | `([s| $t:kwThrow]) =>
+  | `([s| $r:kwReturn ? $op:algPrim .]) =>
+      ``(FBody.retQ [p| $op])
+  | `([s| $t:kwThrow a TypeError exception .]) =>
       ``(FBody.throw)
-  | `([s| $k:kwIf $c:algExpr $t:kwThen]) =>
+  | `([s| $s:kwSet $x:ident to $e:algExpr .]) =>
+      ``(FBody.setE $(quote (toString x.getId)) [e| $e])
+  | `([s| $k:kwIf $c:algExpr , $s:stmt]) =>
+      ``(FBody.ifI [e| $c] [s| $s])
+  | `([s| $e:kwElse , $s:stmt]) =>
+      ``(FBody.elseI [s| $s])
+  | `([s| $r:kwReturn $x:ident .]) =>
+      ``(FBody.ret (E2.nv $(quote (toString x.getId))))
+  | `([s| $r:kwReturn undefined .]) =>
+      ``(FBody.ret (E2.const JSValue.undefined))
+  | `([s| $r:kwReturn true .]) =>
+      ``(FBody.ret (E2.const (JSValue.boolean Bool.true)))
+  | `([s| $r:kwReturn false .]) =>
+      ``(FBody.ret (E2.const (JSValue.boolean Bool.false)))
+  | `([s| $t:kwThrow .]) =>
+      ``(FBody.throw)
+  | `([s| $k:kwIf $c:algExpr , $t:kwThen]) =>
       ``(FBody.ifS [e| $c])
   | `([s| $e:kwElse]) =>
       ``(FBody.elseM)
@@ -254,6 +349,23 @@ macro_rules
 /- Layout recovery: the flat stream (depth, label, body) is re-nested
    by bar count — takeBody collects the run of strictly deeper steps
    following an if/else; renest recurses into it. -/
+/- Inline bodies ("If c, stmt.") have no labelled sub-steps; they
+   desugar to a singleton branch labelled "a" — the label the step
+   would have carried as a sub-step, keeping the audit meaningful. -/
+def inlineBody : FBody → LBody
+  | .ret v => .ret v
+  | .retQ op => .retQ op
+  | .throw => .throw
+  | .setE n e => .setE n e
+  | .ifI c s => .ifS c [("a", inlineBody s)] []
+  | .elseI s => .elseM [("a", inlineBody s)]
+  -- block if/else cannot appear as an inline body (they need deeper
+  -- steps); total for Lean, loud in review if it ever shows up
+  | .ifS _ => .throw
+  | .elseM => .throw
+  | .letQ n op => .letQ n op
+  | .letE n e => .letE n e
+
 def takeBody : Nat → List FStep → List FStep × List FStep
   | _, [] => ([], [])
   | d, s :: rest =>
@@ -276,6 +388,12 @@ def renestGo : Nat → List FStep → List LStep
         renestGo f (takeBody d rest).2
   | f + 1, (d, l, .ret v) :: rest => (l, LBody.ret v) :: renestGo f rest
   | f + 1, (d, l, .throw) :: rest => (l, LBody.throw) :: renestGo f rest
+  | f + 1, (d, l, .retQ op) :: rest => (l, LBody.retQ op) :: renestGo f rest
+  | f + 1, (d, l, .setE n e) :: rest => (l, LBody.setE n e) :: renestGo f rest
+  | f + 1, (d, l, .ifI c s) :: rest =>
+      (l, LBody.ifS c [("a", inlineBody s)] []) :: renestGo f rest
+  | f + 1, (d, l, .elseI s) :: rest =>
+      (l, LBody.elseM [("a", inlineBody s)]) :: renestGo f rest
   | f + 1, (d, l, .letQ n op) :: rest =>
       (l, LBody.letQ n op) :: renestGo f rest
   | f + 1, (d, l, .letE n e) :: rest =>
@@ -288,39 +406,89 @@ def build (fs : List FStep) : Prog := strip (fuseL (renest fs))
 
 open Lean in
 macro_rules
-  | `([f| ┊ $x:ident : $s:stmt]) =>
+  | `([f| $n:scientific $s:stmt]) =>
+      let lbl := match n.raw with
+        | .atom _ v => String.ofList (v.toList.dropLast)
+        | .node _ _ args =>
+          match (args[0]? : Option Lean.Syntax) with
+          | some (Lean.Syntax.atom _ v) => String.ofList (v.toList.dropLast)
+          | _ => "?"
+        | _ => "?"
+      `([(0, $(quote lbl), [s| $s])])
+  | `([f| ┊ $n:scientific $s:stmt]) =>
+      let lbl := match n.raw with
+        | .atom _ v => String.ofList (v.toList.dropLast)
+        | .node _ _ args =>
+          match (args[0]? : Option Lean.Syntax) with
+          | some (Lean.Syntax.atom _ v) => String.ofList (v.toList.dropLast)
+          | _ => "?"
+        | _ => "?"
+      `([(1, $(quote lbl), [s| $s])])
+  | `([f| ┊ ┊ $n:scientific $s:stmt]) =>
+      let lbl := match n.raw with
+        | .atom _ v => String.ofList (v.toList.dropLast)
+        | .node _ _ args =>
+          match (args[0]? : Option Lean.Syntax) with
+          | some (Lean.Syntax.atom _ v) => String.ofList (v.toList.dropLast)
+          | _ => "?"
+        | _ => "?"
+      `([(2, $(quote lbl), [s| $s])])
+  | `([f| ┊ ┊ ┊ $n:scientific $s:stmt]) =>
+      let lbl := match n.raw with
+        | .atom _ v => String.ofList (v.toList.dropLast)
+        | .node _ _ args =>
+          match (args[0]? : Option Lean.Syntax) with
+          | some (Lean.Syntax.atom _ v) => String.ofList (v.toList.dropLast)
+          | _ => "?"
+        | _ => "?"
+      `([(3, $(quote lbl), [s| $s])])
+  | `([f| ┊ ┊ ┊ ┊ $n:scientific $s:stmt]) =>
+      let lbl := match n.raw with
+        | .atom _ v => String.ofList (v.toList.dropLast)
+        | .node _ _ args =>
+          match (args[0]? : Option Lean.Syntax) with
+          | some (Lean.Syntax.atom _ v) => String.ofList (v.toList.dropLast)
+          | _ => "?"
+        | _ => "?"
+      `([(4, $(quote lbl), [s| $s])])
+  | `([f| ┊ ┊ ┊ ┊ ┊ $n:scientific $s:stmt]) =>
+      let lbl := match n.raw with
+        | .atom _ v => String.ofList (v.toList.dropLast)
+        | .node _ _ args =>
+          match (args[0]? : Option Lean.Syntax) with
+          | some (Lean.Syntax.atom _ v) => String.ofList (v.toList.dropLast)
+          | _ => "?"
+        | _ => "?"
+      `([(5, $(quote lbl), [s| $s])])
+  | `([f| ┊ ┊ ┊ ┊ ┊ ┊ $n:scientific $s:stmt]) =>
+      let lbl := match n.raw with
+        | .atom _ v => String.ofList (v.toList.dropLast)
+        | .node _ _ args =>
+          match (args[0]? : Option Lean.Syntax) with
+          | some (Lean.Syntax.atom _ v) => String.ofList (v.toList.dropLast)
+          | _ => "?"
+        | _ => "?"
+      `([(6, $(quote lbl), [s| $s])])
+  | `([f| ┊ $x:ident . $s:stmt]) =>
       `([(1, $(quote (toString x.getId)), [s| $s])])
-  | `([f| ┊ $n:num : $s:stmt]) =>
-      `([(1, toString ($n : Nat), [s| $s])])
-  | `([f| ┊ ┊ $x:ident : $s:stmt]) =>
+  | `([f| ┊ a . $s:stmt]) => `([(1, "a", [s| $s])])
+  | `([f| ┊ ┊ $x:ident . $s:stmt]) =>
       `([(2, $(quote (toString x.getId)), [s| $s])])
-  | `([f| ┊ ┊ $n:num : $s:stmt]) =>
-      `([(2, toString ($n : Nat), [s| $s])])
-  | `([f| ┊ ┊ ┊ $x:ident : $s:stmt]) =>
+  | `([f| ┊ ┊ ┊ $x:ident . $s:stmt]) =>
       `([(3, $(quote (toString x.getId)), [s| $s])])
-  | `([f| ┊ ┊ ┊ $n:num : $s:stmt]) =>
-      `([(3, toString ($n : Nat), [s| $s])])
-  | `([f| ┊ ┊ ┊ ┊ $x:ident : $s:stmt]) =>
+  | `([f| ┊ ┊ ┊ ┊ $x:ident . $s:stmt]) =>
       `([(4, $(quote (toString x.getId)), [s| $s])])
-  | `([f| ┊ ┊ ┊ ┊ $n:num : $s:stmt]) =>
-      `([(4, toString ($n : Nat), [s| $s])])
-  | `([f| ┊ ┊ ┊ ┊ ┊ $x:ident : $s:stmt]) =>
+  | `([f| ┊ ┊ ┊ ┊ ┊ $x:ident . $s:stmt]) =>
       `([(5, $(quote (toString x.getId)), [s| $s])])
-  | `([f| ┊ ┊ ┊ ┊ ┊ $n:num : $s:stmt]) =>
-      `([(5, toString ($n : Nat), [s| $s])])
-  | `([f| ┊ ┊ ┊ ┊ ┊ ┊ $x:ident : $s:stmt]) =>
+  | `([f| ┊ ┊ ┊ ┊ ┊ ┊ $x:ident . $s:stmt]) =>
       `([(6, $(quote (toString x.getId)), [s| $s])])
-  | `([f| ┊ ┊ ┊ ┊ ┊ ┊ $n:num : $s:stmt]) =>
-      `([(6, toString ($n : Nat), [s| $s])])
-  | `([f| $x:ident : $s:stmt]) =>
+  | `([f| $x:ident . $s:stmt]) =>
       `([(0, $(quote (toString x.getId)), [s| $s])])
-  | `([f| $n:num : $s:stmt]) =>
-      `([(0, toString ($n : Nat), [s| $s])])
 
 open Lean in
 macro_rules
   | `([alg| $s:fstep]) => `([f| $s])
-  | `([alg| $a:fsteps $s:fstep]) => `([alg| $a] ++ [f| $s])
+  | `([alg| $fs:fsteps $s:fstep]) => `([alg| $fs] ++ [f| $s])
 
 /- ===== A small interpreter over the clean Prog ===== -/
 
@@ -365,6 +533,7 @@ def evalE2 (env : Env) : E2 → Option JSValue
       match evalE2 env e with
       | some v => some (.boolean (hasCallV v))
       | none => none
+  | .varNotPresent n => some (.boolean (lookup env n).isNone)
   | .call _ _ => none
   | .isNotUndefined e =>
       match evalE2 env e with
@@ -373,6 +542,7 @@ def evalE2 (env : Env) : E2 → Option JSValue
       | none => none
 
 def evalP2 : P2 → Option JSValue
+  | .call _ _ _ => some .undefined      -- stub until Call/heap
   | _ => some .undefined
 
 inductive Outcome where
@@ -391,6 +561,14 @@ def run : Env → List Step → Outcome × Env
       | some v => (.ret v, env)
       | none => (.fall, env)
   | env, .throw :: _ => (.thrown, env)
+  | env, .retQ op :: _ =>
+      match evalP2 op with
+      | some v => (.ret v, env)
+      | none => (.fall, env)
+  | env, .setE n e :: rest =>
+      match evalE2 env e with
+      | some v => run ((n, v) :: env) rest
+      | none => (.fall, env)
   | env, .letQ n op :: rest =>
       match evalP2 op with
       | some v => run ((n, v) :: env) rest
@@ -481,6 +659,12 @@ def kstep (reg : AOReg) : KM → KM
   | .krun [] _ _ => .kfell        -- fell off the end: top level, or callee w/o return
   | .krun (.step (.ret v) :: st) env stack =>
       .krun (.kEvalS (.ee v) [] [] .kRet :: st) env stack
+  | .krun (.step (.retQ op) :: st) env stack =>
+      match evalP2 op with
+      | some v => .krun (.kEvalS (.ev v) [] [] .kRet :: st) env stack
+      | none => .kfell
+  | .krun (.step (.setE n e) :: st) env stack =>
+      .krun (.kEvalS (.ee e) [] [] (.kBind n) :: st) env stack
   | .krun (.step .throw :: st) env stack => .krun (.kUnwindS :: st) env stack
   | .krun (.step (.letE n e) :: st) env stack =>
       .krun (.kEvalS (.ee e) [] [] (.kBind n) :: st) env stack
@@ -509,10 +693,12 @@ def kstep (reg : AOReg) : KM → KM
       .krun (.kEvalS (.ee e') [] [] (.kPrim .pIsNotU (.kSpine as rs k)) :: st) env stack
   | .krun (.kEvalS (.ee (.hasCall e')) as rs k :: st) env stack =>
       .krun (.kEvalS (.ee e') [] [] (.kPrim .pHasCall (.kSpine as rs k)) :: st) env stack
+  | .krun (.kEvalS (.ee (.varNotPresent n)) as rs k :: st) env stack =>
+      .krun (.kEvalS (.ev (.boolean (lookup env n).isNone)) as rs k :: st) env stack
   | .krun (.kEvalS (.ee (.call f args)) as rs k :: st) env stack =>
       .krun (.kEvalNextS args [] (.kEnter f (.kSpine as rs k)) :: st) env stack
-  | .krun (.kEvalNextS (a :: as) rs k :: st) env stack =>
-      .krun (.kEvalS (.ee a) as rs k :: st) env stack
+  | .krun (.kEvalNextS (x :: as) rs k :: st) env stack =>
+      .krun (.kEvalS (.ee x) as rs k :: st) env stack
   | .krun (.kEvalNextS [] [] _ :: _) _ _ => .kfell
   | .krun (.kEvalNextS [] rs (.kIte t e) :: st) env stack =>
       match rs with
@@ -577,6 +763,14 @@ def sosStep : SState → SState
       | some v => .sret v
       | none => .sfell
   | .srun (.throw :: _) _ => .sthrown
+  | .srun (.retQ op :: _) env =>
+      match evalP2 op with
+      | some v => .sret v
+      | none => .sfell
+  | .srun ((.setE n e) :: rest) env =>
+      match evalE2 env e with
+      | some v => .srun rest ((n, v) :: env)
+      | none => .sfell
   | .srun ((.letE n e) :: rest) env =>
       match evalE2 env e with
       | some v => .srun rest ((n, v) :: env)

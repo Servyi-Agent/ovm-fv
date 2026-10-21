@@ -21,24 +21,24 @@ def theReg : AOReg := {entries}
 
 /- smoke: every corpus program runs, audits, and SOS/machine agree -/
 def exampleF : List FStep := [alg|
-  1: if true then
-    ┊ a: let x be 1
-  2: return x
+  1. If true, then
+    ┊ a. Let x be 1.
+  2. Return x.
 ]
 
 def callDemoF : List FStep := [alg|
-  1: let c be IsCallable(true)
-  2: return c
+  1. Let c be IsCallable(true).
+  2. Return c.
 ]
 
 def retDemoF : List FStep := [alg|
-  1: let r be IsCallable(true)
-  2: return true
+  1. Let r be IsCallable(true).
+  2. Return true.
 ]
 
 def primDemoF : List FStep := [alg|
-  1: let p be ToPrimitive(undefined)
-  2: return p
+  1. Let p be ToPrimitive(undefined).
+  2. Return p.
 ]
 
 #eval ksteps theReg 50 (kmOf (build exampleF))

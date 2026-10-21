@@ -1,19 +1,12 @@
 import metalanguage
 
 
-/- ES 6.2.5.1 IsCallable ( x )
-   1. If x is not an Object, return false.
-   2. If x has a [[Call]] internal method, return true.
-   3. Return false.
-   (Grammar note: "has a [[Call]]" loses its article — `a` collides
-   with the ┊-depth label.) -/
+/- ES 6.2.5.1 IsCallable ( x ) — text-equal transcription. -/
 
 def isCallable6_2_5_1 : List FStep := [alg|
-  1: if x is not an Object then
-    ┊ a: return false
-  2: if x has [[Call]] internal method then
-    ┊ a: return true
-  3: return false
+  1. If x is not an Object, return false.
+  2. If x has a [[Call]] internal method, return true.
+  3. Return false.
 ]
 
 def AO_IsCallable : AOReg :=
@@ -22,20 +15,22 @@ def AO_IsCallable : AOReg :=
 #eval checkRun (renest isCallable6_2_5_1)
 
 
-/- ES 7.1.1 ToPrimitive ( input [ , preferredType ] )
-   preferredType is optional in the spec; modelled as a parameter
-   (unbound when the call site omits it — "not present" support
-   pending). GetMethod/OrdinaryToPrimitive are primitive stubs until
-   the heap arrives. -/
+/- ES 7.1.1 ToPrimitive ( input [ , preferredType ] ) — text-equal
+   transcription. Semantic stubs (documented in the metalanguage):
+   GetMethod/OrdinaryToPrimitive/Call return undefined until the heap
+   arrives; « preferredType » loses its list brackets (Lean lexes « »
+   as identifier delimiters). -/
 
 def toPrimitive7_1_1 : List FStep := [alg|
-  1: if input is an Object then
-    ┊ a: let exoticToPrim be ? GetMethod(input, toPrimitive)
-    ┊ b: if exoticToPrim is not undefined then
-    ┊ ┊ i: return exoticToPrim
-    ┊ c: let r2 be ? OrdinaryToPrimitive(input, preferredType)
-    ┊ d: return r2
-  2: return input
+  1. If input is an Object, then
+    ┊ a. Let exoticToPrim be ? GetMethod(input, @@toPrimitive).
+    ┊ b. If exoticToPrim is not undefined, then
+    ┊ ┊ i. Let result be ? Call(exoticToPrim, input, preferredType).
+    ┊ ┊ ii. If result is an Object, throw a TypeError exception.
+    ┊ ┊ iii. Return result.
+    ┊ c. If preferredType is not present, set preferredType to number.
+    ┊ d. Return ? OrdinaryToPrimitive(input, preferredType).
+  2. Return input.
 ]
 
 def AO_ToPrimitive : AOReg :=
@@ -48,24 +43,24 @@ def theReg : AOReg := AO_IsCallable ++ AO_ToPrimitive
 
 /- smoke: every corpus program runs, audits, and SOS/machine agree -/
 def exampleF : List FStep := [alg|
-  1: if true then
-    ┊ a: let x be 1
-  2: return x
+  1. If true, then
+    ┊ a. Let x be 1.
+  2. Return x.
 ]
 
 def callDemoF : List FStep := [alg|
-  1: let c be IsCallable(true)
-  2: return c
+  1. Let c be IsCallable(true).
+  2. Return c.
 ]
 
 def retDemoF : List FStep := [alg|
-  1: let r be IsCallable(true)
-  2: return true
+  1. Let r be IsCallable(true).
+  2. Return true.
 ]
 
 def primDemoF : List FStep := [alg|
-  1: let p be ToPrimitive(undefined)
-  2: return p
+  1. Let p be ToPrimitive(undefined).
+  2. Return p.
 ]
 
 #eval ksteps theReg 50 (kmOf (build exampleF))
