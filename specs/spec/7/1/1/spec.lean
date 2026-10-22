@@ -1,19 +1,24 @@
 import metalanguage
 
-/- ES 7.1.1 ToPrimitive ( input [ , preferredType ] ) — text-equal
-   transcription. Semantic stubs (documented in the metalanguage):
-   GetMethod/OrdinaryToPrimitive/Call return undefined until the heap
-   arrives; « preferredType » loses its list brackets (Lean lexes « »
-   as identifier delimiters). -/
+/- ES 7.1.1 ToPrimitive ( input [, preferredType ] ) - text-equal.
+   GetMethod/OrdinaryToPrimitive/Call/GetV are primitive stubs until
+   the heap. -/
 
 def toPrimitive7_1_1 : List FStep := [alg|
   1. If input is an Object, then
-    ┊ a. Let exoticToPrim be ? GetMethod(input, @@toPrimitive).
-    ┊ b. If exoticToPrim is not undefined, then
-    ┊ ┊ i. Let result be ? Call(exoticToPrim, input, preferredType).
-    ┊ ┊ ii. If result is an Object, throw a TypeError exception.
-    ┊ ┊ iii. Return result.
-    ┊ c. If preferredType is not present, set preferredType to number.
+    ┊ a. Let exoticToPrimitive be ? GetMethod(input, %Symbol.toPrimitive%).
+    ┊ b. If exoticToPrimitive is not undefined, then
+    ┊ ┊ i. If preferredType is not present, then
+    ┊ ┊ ┊ 1. Let hint be "default".
+    ┊ ┊ ii. Else if preferredType is ~string~, then
+    ┊ ┊ ┊ 1. Let hint be "string".
+    ┊ ┊ iii. Else,
+    ┊ ┊ ┊ 1. Assert: preferredType is ~number~.
+    ┊ ┊ ┊ 2. Let hint be "number".
+    ┊ ┊ iv. Let result be ? Call(exoticToPrimitive, input, « hint »).
+    ┊ ┊ v. If result is not an Object, return result.
+    ┊ ┊ vi. Throw a TypeError exception.
+    ┊ c. If preferredType is not present, set preferredType to ~number~.
     ┊ d. Return ? OrdinaryToPrimitive(input, preferredType).
   2. Return input.
 ]

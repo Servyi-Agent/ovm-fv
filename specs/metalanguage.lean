@@ -41,6 +41,8 @@ inductive E2 where
   | hasCtor (e : E2)
   | isU (e : E2)
   | isBoolVal (b : Bool) (e : E2)
+  | isStrVal (s : String) (e : E2)
+  | isNullOrUnd (e : E2)
   | varNotPresent (name : String)
   | call (name : String) (args : List E2)
   deriving Repr
@@ -56,6 +58,7 @@ inductive P2 where
 inductive Step where
   | ret (v : E2)
   | retQ (op : P2)
+  | assertE (e : E2)
   | throw
   | setE (name : String) (e : E2)
   | letQ (name : String) (op : P2)
@@ -70,6 +73,7 @@ abbrev Prog := List Step
 inductive LBody where
   | ret (v : E2)
   | retQ (op : P2)
+  | assertE (e : E2)
   | throw
   | setE (name : String) (e : E2)
   | letQ (name : String) (op : P2)
@@ -89,6 +93,8 @@ inductive FBody where
   | setE (name : String) (e : E2)
   | ifI (c : E2) (s : FBody)
   | elseI (s : FBody)
+  | elseG (c : E2)
+  | assertE (e : E2)
   | letQ (name : String) (op : P2)
   | letE (name : String) (e : E2)
   | ifS (c : E2)
@@ -100,10 +106,20 @@ abbrev FStep := Nat × String × FBody
 /- Fuse an ECMA-262 `N. Else,` step into the immediately preceding if.
    A dangling marker is kept in the output — a stray "else" can never
    silently lose its branch; it stays visible for the audit. -/
+/- else-if CHAINS nest: an else-step attaches to the end of the last
+   if's else-branch, not by overwriting it. A dangling else (no
+   preceding if) stays visible. -/
+def attach (e : List LStep) : List LStep → List LStep
+  | [] => e                                          -- pending else becomes the branch
+  | [(l2, LBody.ifS c2 t2 e2)] =>                    -- chain end: nest here
+      [(l2, LBody.ifS c2 t2 (attach e e2))]
+  | [p] => [p, ("", LBody.elseM e)]                  -- dangling: stays visible
+  | s :: rest => s :: attach e rest
+
 def fuseL : List LStep → List LStep
   | [] => []
-  | (l, LBody.ifS c t _) :: (_, LBody.elseM e) :: rest =>
-      (l, LBody.ifS c t e) :: fuseL rest
+  | (l, LBody.ifS c t e') :: (_, LBody.elseM e) :: rest =>
+      (l, LBody.ifS c t (attach e e')) :: fuseL rest
   | p :: rest => p :: fuseL rest
 
 mutual
@@ -113,6 +129,7 @@ def strip : List LStep → Prog
 def stripBody : LBody → Step
   | .ret v => .ret v
   | .throw => .throw
+  | .assertE e => .assertE e
   | .retQ op => .retQ op
   | .setE n e => .setE n e
   | .letQ n op => .letQ n op
@@ -170,6 +187,7 @@ declare_syntax_cat kwReturn
 declare_syntax_cat kwThrow
 declare_syntax_cat kwThen
 declare_syntax_cat kwSet
+declare_syntax_cat kwAssert
 
 syntax ident : algExpr
 syntax "true" : algExpr
@@ -177,6 +195,10 @@ syntax "false" : algExpr
 syntax "undefined" : algExpr
 syntax num : algExpr
 syntax scientific : algExpr
+syntax str : algExpr
+syntax "~" ident "~" : algExpr
+syntax "~" "string" "~" : algExpr
+syntax "~" "number" "~" : algExpr
 /- `x is …` — every choice level is first-token-disjoint (alternatives
    sharing more than a first token don't backtrack). -/
 declare_syntax_cat notPred
@@ -189,6 +211,10 @@ syntax "not" notPred : isTail
 syntax "undefined" : isTail
 syntax "true" : isTail
 syntax "false" : isTail
+syntax "~" ident "~" : isTail
+syntax "~" "string" "~" : isTail
+syntax "~" "number" "~" : isTail
+syntax "either" "undefined" "or" "null" : isTail
 syntax algExpr "has" "a" "[[Call]]" "internal" "method" : algExpr
 syntax algExpr "has" "a" "[[Construct]]" "internal" "method" : algExpr
 syntax ident "(" algExpr ")" : algExpr
@@ -201,6 +227,7 @@ syntax "string" : algExpr
 
 
 syntax "GetMethod" "(" algExpr "," ident ")" : algPrim
+syntax "GetMethod" "(" algExpr "," "%" ident "%" ")" : algPrim
 syntax "GetV" "(" algExpr "," algExpr ")" : algPrim
 syntax "GetMethod" "(" algExpr "," "@" "@" ident ")" : algPrim
 syntax "OrdinaryToPrimitive" "(" algExpr "," algExpr ")" : algPrim
@@ -221,6 +248,8 @@ syntax "throw" : kwThrow
 syntax "then" : kwThen
 syntax "Set" : kwSet
 syntax "set" : kwSet
+syntax "Assert" : kwAssert
+syntax "assert" : kwAssert
 
 /- Statements: ifs and elses carry NO body — the body is the run of
    deeper-marked steps that follows, recovered by `renest`. -/
@@ -236,6 +265,7 @@ syntax kwReturn algExpr "." : stmt
 syntax kwReturn "?" algPrim "." : stmt
 syntax kwThrow "." : stmt
 syntax kwThrow "a" "TypeError" "exception" "." : stmt
+syntax kwAssert ":" algExpr "." : stmt
 syntax kwSet ident "to" algExpr "." : stmt
 /- Block forms (sub-steps follow, deeper). The spec writes "If c, then";
    after the comma, block (then) and inline (statement) diverge, so the
@@ -244,9 +274,14 @@ declare_syntax_cat ifTail
 syntax kwThen : ifTail
 syntax stmt : ifTail
 syntax kwIf algExpr "," ifTail : stmt
-syntax kwElse : stmt
-/- Inline else: "Else, stmt." -/
-syntax kwElse "," stmt : stmt
+/- Else-tails, first-token-disjoint: "Else, stmt." / "Else," (block) /
+   "Else if c, then" (chain guard; the deeper block is wrapped by the
+   guard and fused into the preceding if's else-end). -/
+declare_syntax_cat elseTail
+syntax "," ifTail : elseTail
+syntax "," : elseTail
+syntax kwIf algExpr "," kwThen : elseTail
+syntax kwElse elseTail : stmt
 
 /- Depth markers: a run of ┊ tokens, freely spaced (many1 recovers
    cleanly at any non-┊ token, so runs end without commit errors). -/
@@ -298,6 +333,18 @@ macro_rules
   | `([e| false]) => ``(E2.const (JSValue.boolean Bool.false))
   | `([e| $n:num]) => ``(E2.nat ($n : Nat))
   | `([e| $n:scientific]) => ``(E2.nat $(quote (sciNat n)))
+  | `([e| $s:str]) => ``(E2.const (JSValue.str $s))
+  | `([e| ~ string ~]) => ``(E2.const (JSValue.str "string"))
+  | `([e| ~ number ~]) => ``(E2.const (JSValue.str "number"))
+  | `([e| ~ $v:ident ~]) => ``(E2.const (JSValue.str $(quote (toString v.getId))))
+  | `([e| $e:algExpr is either undefined or null]) =>
+      ``(E2.isNullOrUnd [e| $e])
+  | `([e| $e:algExpr is ~ string ~]) =>
+      ``(E2.isStrVal "string" [e| $e])
+  | `([e| $e:algExpr is ~ number ~]) =>
+      ``(E2.isStrVal "number" [e| $e])
+  | `([e| $e:algExpr is ~ $v:ident ~]) =>
+      ``(E2.isStrVal $(quote (toString v.getId)) [e| $e])
   | `([e| $e:algExpr is an Object]) => ``(E2.isObject [e| $e])
   | `([e| $e:algExpr is not an Object]) => ``(E2.isNotObject [e| $e])
   | `([e| $e:algExpr is not undefined]) => ``(E2.isNotUndefined [e| $e])
@@ -318,6 +365,8 @@ open Lean in
 macro_rules
   | `([p| GetMethod ( $o:algExpr , $x:ident )]) =>
       ``(P2.getMethod [e| $o] $(quote (toString x.getId)))
+  | `([p| GetMethod ( $o:algExpr , % $x:ident % )]) =>
+      ``(P2.getMethod [e| $o] $(quote ("%" ++ toString x.getId ++ "%")))
   | `([p| GetMethod ( $o:algExpr , @ @ $x:ident )]) =>
       ``(P2.getMethod [e| $o] $(quote ("@@" ++ toString x.getId)))
   | `([p| GetV ( $v:algExpr , $p:algExpr )]) =>
@@ -361,8 +410,12 @@ macro_rules
       ``(FBody.throw)
   | `([s| $k:kwIf $c:algExpr , $t:kwThen]) =>
       ``(FBody.ifS [e| $c])
-  | `([s| $e:kwElse]) =>
+  | `([s| $e:kwElse ,]) =>
       ``(FBody.elseM)
+  | `([s| $e:kwElse if $c:algExpr , then]) =>
+      ``(FBody.elseG [e| $c])
+  | `([s| Assert : $e:algExpr .]) =>
+      ``(FBody.assertE [e| $e])
 
 /- Layout recovery: the flat stream (depth, label, body) is re-nested
    by bar count — takeBody collects the run of strictly deeper steps
@@ -374,6 +427,7 @@ def inlineBody : FBody → LBody
   | .ret v => .ret v
   | .retQ op => .retQ op
   | .throw => .throw
+  | .assertE e => .assertE e
   | .setE n e => .setE n e
   | .ifI c s => .ifS c [("a", inlineBody s)] []
   | .elseI s => .elseM [("a", inlineBody s)]
@@ -381,6 +435,7 @@ def inlineBody : FBody → LBody
   -- steps); total for Lean, loud in review if it ever shows up
   | .ifS _ => .throw
   | .elseM => .throw
+  | .elseG _ => .throw
   | .letQ n op => .letQ n op
   | .letE n e => .letE n e
 
@@ -412,6 +467,11 @@ def renestGo : Nat → List FStep → List LStep
       (l, LBody.ifS c [("a", inlineBody s)] []) :: renestGo f rest
   | f + 1, (d, l, .elseI s) :: rest =>
       (l, LBody.elseM [("a", inlineBody s)]) :: renestGo f rest
+  | f + 1, (d, l, .elseG c) :: rest =>
+      let (t, rest2) := takeBody d rest
+      (l, LBody.elseM [("a", LBody.ifS c (renestGo f t) [])]) :: renestGo f rest2
+  | f + 1, (d, l, .assertE e) :: rest =>
+      (l, LBody.assertE e) :: renestGo f rest
   | f + 1, (d, l, .letQ n op) :: rest =>
       (l, LBody.letQ n op) :: renestGo f rest
   | f + 1, (d, l, .letE n e) :: rest =>
@@ -532,6 +592,9 @@ def isObjV : JSValue → Bool := fun _ => Bool.false
 
 def hasCallV : JSValue → Bool := fun _ => Bool.false
 def hasCtorV : JSValue → Bool := fun _ => Bool.false
+def isNullV : JSValue → Bool
+  | .null => Bool.true
+  | _ => Bool.false
 
 /- Toy semantics: no objects in this value universe, primitives
    return undefined. Calls are machine-only: the big-step evaluator
@@ -564,6 +627,14 @@ def evalE2 (env : Env) : E2 → Option JSValue
       match evalE2 env e with
       | some v => some (.boolean (v == .boolean b))
       | none => none
+  | .isNullOrUnd e =>
+      match evalE2 env e with
+      | some v => some (.boolean (isUndV v || isNullV v))
+      | none => none
+  | .isStrVal s e =>
+      match evalE2 env e with
+      | some v => some (.boolean (v == .str s))
+      | none => none
   | .varNotPresent n => some (.boolean (lookup env n).isNone)
   | .call _ _ => none
   | .isNotUndefined e =>
@@ -592,6 +663,10 @@ def run : Env → List Step → Outcome × Env
       | some v => (.ret v, env)
       | none => (.fall, env)
   | env, .throw :: _ => (.thrown, env)
+  | env, .assertE e :: rest =>
+      match evalE2 env e with
+      | some (.boolean Bool.true) => run env rest
+      | _ => (.fall, env)
   | env, .retQ op :: _ =>
       match evalP2 op with
       | some v => (.ret v, env)
@@ -638,6 +713,8 @@ inductive Arg where
 inductive Prim where              -- bedrock predicates (the axiom stratum)
   | pIsObj | pIsNotObj | pIsNotU | pHasCall
   | pHasCtor | pIsU | pIsTrue | pIsFalse
+  | pNullOrUnd
+  | pIsStr (s : String)
   deriving Repr
 
 inductive Kon where
@@ -680,6 +757,8 @@ def applyPrim : Prim → JSValue → JSValue
   | .pIsU, v => .boolean (isUndV v)
   | .pIsTrue, v => .boolean (v == .boolean Bool.true)
   | .pIsFalse, v => .boolean (v == .boolean Bool.false)
+  | .pIsStr s, v => .boolean (v == .str s)
+  | .pNullOrUnd, v => .boolean (isUndV v || isNullV v)
 
 /- The transcribed-operation registry (the corpus). -/
 abbrev AOReg := List (String × (List String × Prog))
@@ -695,6 +774,10 @@ def kstep (reg : AOReg) : KM → KM
   | .krun [] _ _ => .kfell        -- fell off the end: top level, or callee w/o return
   | .krun (.step (.ret v) :: st) env stack =>
       .krun (.kEvalS (.ee v) [] [] .kRet :: st) env stack
+  | .krun (.step (.assertE e) :: st) env stack =>
+      match evalE2 env e with
+      | some (.boolean Bool.true) => .krun st env stack
+      | _ => .kfell               -- failed assert: stuck, loudly (asserts are pure)
   | .krun (.step (.retQ op) :: st) env stack =>
       match evalP2 op with
       | some v => .krun (.kEvalS (.ev v) [] [] .kRet :: st) env stack
@@ -733,6 +816,10 @@ def kstep (reg : AOReg) : KM → KM
       .krun (.kEvalS (.ee e') [] [] (.kPrim .pHasCtor (.kSpine as rs k)) :: st) env stack
   | .krun (.kEvalS (.ee (.isU e')) as rs k :: st) env stack =>
       .krun (.kEvalS (.ee e') [] [] (.kPrim .pIsU (.kSpine as rs k)) :: st) env stack
+  | .krun (.kEvalS (.ee (.isNullOrUnd e')) as rs k :: st) env stack =>
+      .krun (.kEvalS (.ee e') [] [] (.kPrim .pNullOrUnd (.kSpine as rs k)) :: st) env stack
+  | .krun (.kEvalS (.ee (.isStrVal s e')) as rs k :: st) env stack =>
+      .krun (.kEvalS (.ee e') [] [] (.kPrim (.pIsStr s) (.kSpine as rs k)) :: st) env stack
   | .krun (.kEvalS (.ee (.isBoolVal b e')) as rs k :: st) env stack =>
       .krun (.kEvalS (.ee e') [] [] (.kPrim (if b then .pIsTrue else .pIsFalse) (.kSpine as rs k)) :: st) env stack
   | .krun (.kEvalS (.ee (.varNotPresent n)) as rs k :: st) env stack =>
@@ -805,6 +892,10 @@ def sosStep : SState → SState
       | some v => .sret v
       | none => .sfell
   | .srun (.throw :: _) _ => .sthrown
+  | .srun (.assertE e :: rest) env =>
+      match evalE2 env e with
+      | some (.boolean Bool.true) => .srun rest env
+      | _ => .sfell
   | .srun (.retQ op :: _) env =>
       match evalP2 op with
       | some v => .sret v
