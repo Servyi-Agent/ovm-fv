@@ -15,6 +15,7 @@ CASES = {
     "sec-isconstructor": "spec/6/2/5/2/spec.lean",
     "sec-toprimitive":   "spec/7/1/1/spec.lean",
     "sec-getmethod":     "spec/7/3/10/spec.lean",
+    "sec-ordinarytoprimitive": "spec/7/1/1/1/spec.lean",
 }
 MARKERS = ["1.", "a.", "i.", "1.", "a."]
 

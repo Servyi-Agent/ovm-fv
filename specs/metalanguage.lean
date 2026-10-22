@@ -27,6 +27,7 @@ audit remains purely as a typo check. -/
 inductive JSValue where
   | undefined | null | boolean (b : Bool) | number (n : Float)
   | str (s : String)
+  | listV (l : List JSValue)     -- spec List, injected for the AO layer
   deriving Repr, BEq
 instance : Inhabited JSValue := ⟨.undefined⟩
 
@@ -59,6 +60,7 @@ inductive Step where
   | ret (v : E2)
   | retQ (op : P2)
   | assertE (e : E2)
+  | forEach (x : String) (e : E2) (body : List Step)
   | throw
   | setE (name : String) (e : E2)
   | letQ (name : String) (op : P2)
@@ -74,6 +76,7 @@ inductive LBody where
   | ret (v : E2)
   | retQ (op : P2)
   | assertE (e : E2)
+  | forEach (x : String) (e : E2) (body : List (String × LBody))
   | throw
   | setE (name : String) (e : E2)
   | letQ (name : String) (op : P2)
@@ -95,6 +98,7 @@ inductive FBody where
   | elseI (s : FBody)
   | elseG (c : E2)
   | assertE (e : E2)
+  | forEach (x : String) (e : E2)
   | letQ (name : String) (op : P2)
   | letE (name : String) (e : E2)
   | ifS (c : E2)
@@ -130,6 +134,7 @@ def stripBody : LBody → Step
   | .ret v => .ret v
   | .throw => .throw
   | .assertE e => .assertE e
+  | .forEach x e b => .forEach x e (strip b)
   | .retQ op => .retQ op
   | .setE n e => .setE n e
   | .letQ n op => .letQ n op
@@ -170,6 +175,7 @@ def check : List LStep → Nat → Bool
       | none => false
 def checkBody : LBody → Bool
   | .ifS _ t e => check t 1 && check e 1
+  | .forEach _ _ b => check b 1
   | .elseM b => check b 1
   | _ => true
 end
@@ -179,6 +185,12 @@ def checkRun (l : List LStep) : Bool := check l 1
 declare_syntax_cat stmt
 declare_syntax_cat fstep
 declare_syntax_cat algExpr
+/- Spec variables whose names collide with keyword atoms ("method"
+   from "internal method") live here — the explicit extension list is
+   part of the audit. -/
+declare_syntax_cat var
+syntax ident : var
+syntax "method" : var
 declare_syntax_cat algPrim
 declare_syntax_cat kwIf
 declare_syntax_cat kwElse
@@ -188,8 +200,9 @@ declare_syntax_cat kwThrow
 declare_syntax_cat kwThen
 declare_syntax_cat kwSet
 declare_syntax_cat kwAssert
+declare_syntax_cat kwFor
 
-syntax ident : algExpr
+syntax var : algExpr
 syntax "true" : algExpr
 syntax "false" : algExpr
 syntax "undefined" : algExpr
@@ -215,6 +228,8 @@ syntax "~" ident "~" : isTail
 syntax "~" "string" "~" : isTail
 syntax "~" "number" "~" : isTail
 syntax "either" "undefined" "or" "null" : isTail
+syntax "string" : isTail
+syntax "number" : isTail
 syntax algExpr "has" "a" "[[Call]]" "internal" "method" : algExpr
 syntax algExpr "has" "a" "[[Construct]]" "internal" "method" : algExpr
 syntax ident "(" algExpr ")" : algExpr
@@ -229,6 +244,8 @@ syntax "string" : algExpr
 syntax "GetMethod" "(" algExpr "," ident ")" : algPrim
 syntax "GetMethod" "(" algExpr "," "%" ident "%" ")" : algPrim
 syntax "GetV" "(" algExpr "," algExpr ")" : algPrim
+syntax "Get" "(" algExpr "," algExpr ")" : algPrim
+syntax "Call" "(" algExpr "," algExpr ")" : algPrim
 syntax "GetMethod" "(" algExpr "," "@" "@" ident ")" : algPrim
 syntax "OrdinaryToPrimitive" "(" algExpr "," algExpr ")" : algPrim
 /- Deviation: the spec's « argList » — Lean lexes « » as identifier
@@ -250,23 +267,28 @@ syntax "Set" : kwSet
 syntax "set" : kwSet
 syntax "Assert" : kwAssert
 syntax "assert" : kwAssert
+syntax "For" : kwFor
+syntax "for" : kwFor
 
 /- Statements: ifs and elses carry NO body — the body is the run of
    deeper-marked steps that follows, recovered by `renest`. -/
 /- Terminal statements carry the spec's trailing period — except when
    the expression ends in a numeral, whose dot the lexer glues into the
    scientific token; those period-free variants come first. -/
-syntax kwLet ident "be" scientific : stmt
+syntax kwLet var "be" scientific : stmt
 syntax kwReturn scientific : stmt
-syntax kwSet ident "to" scientific : stmt
-syntax kwLet ident "be" "?" algPrim "." : stmt
-syntax kwLet ident "be" algExpr "." : stmt
+syntax kwSet var "to" scientific : stmt
+syntax kwLet var "be" "?" algPrim "." : stmt
+syntax kwLet var "be" algExpr "." : stmt
 syntax kwReturn algExpr "." : stmt
 syntax kwReturn "?" algPrim "." : stmt
 syntax kwThrow "." : stmt
 syntax kwThrow "a" "TypeError" "exception" "." : stmt
 syntax kwAssert ":" algExpr "." : stmt
-syntax kwSet ident "to" algExpr "." : stmt
+/- Loop: "For each element x of list, do" + sub-steps. The list is a
+   spec List value; the body is the run of deeper steps. -/
+syntax kwFor "each" "element" var "of" algExpr "," "do" : stmt
+syntax kwSet var "to" algExpr "." : stmt
 /- Block forms (sub-steps follow, deeper). The spec writes "If c, then";
    after the comma, block (then) and inline (statement) diverge, so the
    tail is its own first-token-disjoint category. -/
@@ -323,11 +345,58 @@ def sciNat (n : TSyntax `scientific) : Nat :=
     | _ => 0
   | _ => 0
 
+/- « "a", "b" » literals: the macro encodes the elements as one
+   unit-separated string; this decodes at runtime. -/
+open Lean in
+def varName (x : TSyntax `var) : String :=
+  let inner : Lean.Syntax → String :=
+    fun s => match s with
+      | .ident _ t _ _ => t.toString
+      | .atom _ "method" => "method"
+      | _ => "?"
+  match x.raw with
+  | .ident _ s _ _ => s.toString
+  | .atom _ "method" => "method"
+  | .node _ _ args =>
+    match (args[0]? : Option Lean.Syntax) with
+    | some w => inner w
+    | none => "?"
+  | _ => "?"
+
+def listOfStrings (s : String) : JSValue :=
+  .listV ((s.splitOn "\x1f").map JSValue.str)
+
 open Lean in
 macro_rules
   | `([e| $f:ident ( $x:algExpr )]) =>
       ``(E2.call $(quote (toString f.getId)) [[e| $x]])
-  | `([e| $x:ident]) => ``(E2.nv $(quote (toString x.getId)))
+  | `([e| $x:var]) =>
+      /- A « … » token lexes as ONE bracketed identifier. Quoted
+         elements (« "a", "b" ») become a spec-List literal; a single
+         unquoted element (« hint ») is the argument-list notation for
+         a variable. -/
+      let strDL (s : String) : String := String.ofList (s.toList.dropLast)
+      let strDF (s : String) : String := String.ofList (s.toList.drop 1)
+      let strTW (s : String) : String :=
+        String.ofList ((s.toList.dropWhile Char.isWhitespace).reverse
+          |>.dropWhile Char.isWhitespace |>.reverse)
+      let idTxt (w : Lean.Syntax) : String :=
+        match w with
+        | .ident _ t _ _ => t.toString
+        | _ => "?"
+      let txt := match x.raw with
+        | .ident _ ss _ _ => ss.toString
+        | .node _ _ args =>
+          match (args[0]? : Option Lean.Syntax) with
+          | some w => idTxt w
+          | none => "?"
+        | _ => "?"
+      if txt.startsWith "«" && txt.contains "\""
+      then
+        let inner := strDF (strDL txt)
+        let elems := (inner.splitOn ",").map (fun q => strDL (strDF (strTW q)))
+        ``(E2.const (listOfStrings $(quote (String.intercalate "\x1f" elems))))
+      else ``(E2.nv $(quote (varName x)))
   | `([e| undefined]) => ``(E2.const JSValue.undefined)
   | `([e| true]) => ``(E2.const (JSValue.boolean Bool.true))
   | `([e| false]) => ``(E2.const (JSValue.boolean Bool.false))
@@ -339,6 +408,10 @@ macro_rules
   | `([e| ~ $v:ident ~]) => ``(E2.const (JSValue.str $(quote (toString v.getId))))
   | `([e| $e:algExpr is either undefined or null]) =>
       ``(E2.isNullOrUnd [e| $e])
+  | `([e| $e:algExpr is string]) =>
+      ``(E2.isStrVal "string" [e| $e])
+  | `([e| $e:algExpr is number]) =>
+      ``(E2.isStrVal "number" [e| $e])
   | `([e| $e:algExpr is ~ string ~]) =>
       ``(E2.isStrVal "string" [e| $e])
   | `([e| $e:algExpr is ~ number ~]) =>
@@ -369,6 +442,10 @@ macro_rules
       ``(P2.getMethod [e| $o] $(quote ("%" ++ toString x.getId ++ "%")))
   | `([p| GetMethod ( $o:algExpr , @ @ $x:ident )]) =>
       ``(P2.getMethod [e| $o] $(quote ("@@" ++ toString x.getId)))
+  | `([p| Get ( $o:algExpr , $p:algExpr )]) =>
+      ``(P2.getV [e| $o] [e| $p])
+  | `([p| Call ( $f:algExpr , $t:algExpr )]) =>
+      ``(P2.call [e| $f] [e| $t] (E2.const JSValue.undefined))
   | `([p| GetV ( $v:algExpr , $p:algExpr )]) =>
       ``(P2.getV [e| $v] [e| $p])
   | `([p| OrdinaryToPrimitive ( $o:algExpr , $h:algExpr )]) =>
@@ -378,22 +455,22 @@ macro_rules
 
 open Lean in
 macro_rules
-  | `([s| $l:kwLet $x:ident be $n:scientific]) =>
-      ``(FBody.letE $(quote (toString x.getId)) (E2.nat $(quote (sciNat n))))
+  | `([s| $l:kwLet $x:var be $n:scientific]) =>
+      ``(FBody.letE $(quote (varName x)) (E2.nat $(quote (sciNat n))))
   | `([s| $r:kwReturn $n:scientific]) =>
       ``(FBody.ret (E2.nat $(quote (sciNat n))))
-  | `([s| $s:kwSet $x:ident to $n:scientific]) =>
-      ``(FBody.setE $(quote (toString x.getId)) (E2.nat $(quote (sciNat n))))
-  | `([s| $l:kwLet $x:ident be ? $op:algPrim .]) =>
-      ``(FBody.letQ $(quote (toString x.getId)) [p| $op])
-  | `([s| $l:kwLet $x:ident be $e:algExpr .]) =>
-      ``(FBody.letE $(quote (toString x.getId)) [e| $e])
+  | `([s| $s:kwSet $x:var to $n:scientific]) =>
+      ``(FBody.setE $(quote (varName x)) (E2.nat $(quote (sciNat n))))
+  | `([s| $l:kwLet $x:var be ? $op:algPrim .]) =>
+      ``(FBody.letQ $(quote (varName x)) [p| $op])
+  | `([s| $l:kwLet $x:var be $e:algExpr .]) =>
+      ``(FBody.letE $(quote (varName x)) [e| $e])
   | `([s| $r:kwReturn ? $op:algPrim .]) =>
       ``(FBody.retQ [p| $op])
   | `([s| $t:kwThrow a TypeError exception .]) =>
       ``(FBody.throw)
-  | `([s| $s:kwSet $x:ident to $e:algExpr .]) =>
-      ``(FBody.setE $(quote (toString x.getId)) [e| $e])
+  | `([s| $s:kwSet $x:var to $e:algExpr .]) =>
+      ``(FBody.setE $(quote (varName x)) [e| $e])
   | `([s| $k:kwIf $c:algExpr , $s:stmt]) =>
       ``(FBody.ifI [e| $c] [s| $s])
   | `([s| $e:kwElse , $s:stmt]) =>
@@ -416,6 +493,8 @@ macro_rules
       ``(FBody.elseG [e| $c])
   | `([s| Assert : $e:algExpr .]) =>
       ``(FBody.assertE [e| $e])
+  | `([s| $f:kwFor each element $x:var of $e:algExpr , do]) =>
+      ``(FBody.forEach $(quote (varName x)) [e| $e])
 
 /- Layout recovery: the flat stream (depth, label, body) is re-nested
    by bar count — takeBody collects the run of strictly deeper steps
@@ -436,6 +515,7 @@ def inlineBody : FBody → LBody
   | .ifS _ => .throw
   | .elseM => .throw
   | .elseG _ => .throw
+  | .forEach _ _ => .throw
   | .letQ n op => .letQ n op
   | .letE n e => .letE n e
 
@@ -472,6 +552,9 @@ def renestGo : Nat → List FStep → List LStep
       (l, LBody.elseM [("a", LBody.ifS c (renestGo f t) [])]) :: renestGo f rest2
   | f + 1, (d, l, .assertE e) :: rest =>
       (l, LBody.assertE e) :: renestGo f rest
+  | f + 1, (d, l, .forEach x e) :: rest =>
+      let (t, rest2) := takeBody d rest
+      (l, LBody.forEach x e (renestGo f t)) :: renestGo f rest2
   | f + 1, (d, l, .letQ n op) :: rest =>
       (l, LBody.letQ n op) :: renestGo f rest
   | f + 1, (d, l, .letE n e) :: rest =>
@@ -582,6 +665,7 @@ def truthy : JSValue → Bool
   | .boolean b => b
   | .number n => n != 0
   | .str s => !s.isEmpty
+  | .listV _ => Bool.true
 
 /- Bedrock predicates on values (no objects in this universe yet). -/
 def isUndV : JSValue → Bool
@@ -663,6 +747,7 @@ def run : Env → List Step → Outcome × Env
       | some v => (.ret v, env)
       | none => (.fall, env)
   | env, .throw :: _ => (.thrown, env)
+  | env, .forEach _ _ _ :: _ => (.fall, env)   -- loops are machine-level (kstep)
   | env, .assertE e :: rest =>
       match evalE2 env e with
       | some (.boolean Bool.true) => run env rest
@@ -719,6 +804,7 @@ inductive Prim where              -- bedrock predicates (the axiom stratum)
 
 inductive Kon where
   | kIte (t e : List Step)
+  | kEach (x : String) (body : List Step)
   | kBind (n : String)
   | kRet
   | kPrim (p : Prim) (k : Kon)
@@ -727,6 +813,7 @@ inductive Kon where
   deriving Repr
 
 inductive Rt where                -- runtime statements: source steps + bookkeeping
+  | kLoopS (x : String) (elems : List JSValue) (body : List Rt) (cont : List Rt)
   | step (s : Step)
   | kEvalS (cur : Arg) (as : List E2) (rs : List JSValue) (k : Kon)
   | kEvalNextS (as : List E2) (rs : List JSValue) (k : Kon)
@@ -774,6 +861,8 @@ def kstep (reg : AOReg) : KM → KM
   | .krun [] _ _ => .kfell        -- fell off the end: top level, or callee w/o return
   | .krun (.step (.ret v) :: st) env stack =>
       .krun (.kEvalS (.ee v) [] [] .kRet :: st) env stack
+  | .krun (.step (.forEach x e body) :: st) env stack =>
+      .krun (.kEvalS (.ee e) [] [] (.kEach x body) :: st) env stack
   | .krun (.step (.assertE e) :: st) env stack =>
       match evalE2 env e with
       | some (.boolean Bool.true) => .krun st env stack
@@ -833,6 +922,13 @@ def kstep (reg : AOReg) : KM → KM
       match rs with
       | .boolean b :: _ => .krun ((if b then t else e).map Rt.step ++ st) env stack
       | _ => .kfell      -- non-Boolean condition: transcription/type error, stuck loudly
+  | .krun (.kEvalNextS [] rs (.kEach x body) :: st) env stack =>
+      match rs with
+      | .listV l :: _ => .krun (.kLoopS x l (body.map Rt.step) st :: st) env stack
+      | _ => .kfell     -- For each over a non-List: stuck, loudly
+  | .krun (.kLoopS x (v :: rest') body _ :: st) env stack =>
+      .krun (body ++ [.kLoopS x rest' body st] ++ st) ((x, v) :: env) stack
+  | .krun (.kLoopS x [] _ cont :: st) env stack => .krun cont env stack
   | .krun (.kEvalNextS [] rs (.kBind n) :: st) env stack =>
       match rs with
       | v :: _ => .krun st ((n, v) :: env) stack
@@ -892,6 +988,12 @@ def sosStep : SState → SState
       | some v => .sret v
       | none => .sfell
   | .srun (.throw :: _) _ => .sthrown
+  | .srun ((.forEach x e body) :: rest) env =>
+      match evalE2 env e with
+      | some (.listV l) =>
+          -- finite unroll: set the binder before each copy of the body
+          .srun (l.flatMap (fun v => .setE x (E2.const v) :: body) ++ rest) env
+      | _ => .sfell
   | .srun (.assertE e :: rest) env =>
       match evalE2 env e with
       | some (.boolean Bool.true) => .srun rest env

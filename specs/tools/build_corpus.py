@@ -47,6 +47,18 @@ def primDemoF : List FStep := [alg|
 #eval ksteps theReg 100 (kmOf (build primDemoF))
 #eval ksteps theReg 100 (kmOf (build getMethod7_3_10))
 #eval ksteps theReg 100 (kmOf (build isConstructor6_2_5_2))
+
+/- For each over a spec List: iterate to the 2nd element, return through
+   the loop (the pending kLoopS marker is discarded by the return). -/
+def forEachDemoF : List FStep := [alg|
+  1. Let xs be « "a", "b" ».
+  2. For each element x of xs, do
+    ┊ a. If x is ~b~, Return x.
+  3. Return undefined.
+]
+
+#eval ksteps theReg 100 (kmOf (build forEachDemoF))
+#eval ksteps theReg 100 (kmOf (build ordinaryToPrimitive7_1_1_1))
 #eval agree theReg (build exampleF)
 '''
 

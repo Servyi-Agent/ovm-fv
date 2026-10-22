@@ -29,6 +29,28 @@ def AO_IsConstructor : AOReg :=
 #eval checkRun (renest isConstructor6_2_5_2)
 
 
+/- ES 7.1.1.1 OrdinaryToPrimitive ( O, hint ) - text-equal. Get and
+   Call are stubs until the heap; For each iterates a spec List. -/
+
+def ordinaryToPrimitive7_1_1_1 : List FStep := [alg|
+  1. If hint is ~string~, then
+    ┊ a. Let methodNames be « "toString", "valueOf" ».
+  2. Else,
+    ┊ a. Let methodNames be « "valueOf", "toString" ».
+  3. For each element name of methodNames, do
+    ┊ a. Let method be ? Get(obj, name).
+    ┊ b. If IsCallable(method) is true, then
+    ┊ ┊ i. Let result be ? Call(method, obj).
+    ┊ ┊ ii. If result is not an Object, return result.
+  4. Throw a TypeError exception.
+]
+
+def AO_OrdinaryToPrimitive : AOReg :=
+  [("OrdinaryToPrimitive", (["obj", "hint"], build ordinaryToPrimitive7_1_1_1))]
+
+#eval checkRun (renest ordinaryToPrimitive7_1_1_1)
+
+
 /- ES 7.1.1 ToPrimitive ( input [, preferredType ] ) - text-equal.
    GetMethod/OrdinaryToPrimitive/Call/GetV are primitive stubs until
    the heap. -/
@@ -74,7 +96,7 @@ def AO_GetMethod : AOReg :=
 #eval checkRun (renest getMethod7_3_10)
 
 
-def theReg : AOReg := AO_IsCallable ++ AO_IsConstructor ++ AO_ToPrimitive ++ AO_GetMethod
+def theReg : AOReg := AO_IsCallable ++ AO_IsConstructor ++ AO_OrdinaryToPrimitive ++ AO_ToPrimitive ++ AO_GetMethod
 
 /- smoke: every corpus program runs, audits, and SOS/machine agree -/
 def exampleF : List FStep := [alg|
@@ -104,5 +126,17 @@ def primDemoF : List FStep := [alg|
 #eval ksteps theReg 100 (kmOf (build primDemoF))
 #eval ksteps theReg 100 (kmOf (build getMethod7_3_10))
 #eval ksteps theReg 100 (kmOf (build isConstructor6_2_5_2))
+
+/- For each over a spec List: iterate to the 2nd element, return through
+   the loop (the pending kLoopS marker is discarded by the return). -/
+def forEachDemoF : List FStep := [alg|
+  1. Let xs be « "a", "b" ».
+  2. For each element x of xs, do
+    ┊ a. If x is ~b~, Return x.
+  3. Return undefined.
+]
+
+#eval ksteps theReg 100 (kmOf (build forEachDemoF))
+#eval ksteps theReg 100 (kmOf (build ordinaryToPrimitive7_1_1_1))
 #eval agree theReg (build exampleF)
 
