@@ -28,6 +28,7 @@ inductive JSValue where
   | undefined | null | boolean (b : Bool) | number (n : Float)
   | str (s : String)
   | listV (l : List JSValue)     -- spec List, injected for the AO layer
+  | compl (abrupt : Bool) (v : JSValue)  -- Completion Record, as a value
   deriving Repr, BEq
 instance : Inhabited JSValue := ⟨.undefined⟩
 
@@ -704,6 +705,7 @@ def truthy : JSValue → Bool
   | .number n => n != 0
   | .str s => !s.isEmpty
   | .listV _ => Bool.true
+  | .compl _ _ => Bool.true
 
 /- Bedrock predicates on values (no objects in this universe yet). -/
 def isUndV : JSValue → Bool
@@ -837,6 +839,8 @@ inductive Prim where              -- bedrock predicates (the axiom stratum)
   | pIsObj | pIsNotObj | pIsNotU | pHasCall
   | pHasCtor | pIsU | pIsTrue | pIsFalse
   | pNullOrUnd
+  | pWrapC
+  | pThrowC
   | pIsStr (s : String)
   deriving Repr
 
@@ -884,6 +888,8 @@ def applyPrim : Prim → JSValue → JSValue
   | .pIsFalse, v => .boolean (v == .boolean Bool.false)
   | .pIsStr s, v => .boolean (v == .str s)
   | .pNullOrUnd, v => .boolean (isUndV v || isNullV v)
+  | .pWrapC, v => .compl Bool.false v
+  | .pThrowC, v => .compl Bool.true v
 
 /- The transcribed-operation registry (the corpus). -/
 abbrev AOReg := List (String × (List String × Prog))
@@ -1095,11 +1101,12 @@ inductive Rt2 where
   | kPrimQ (op : P2)
   | kCall (f : String) (n : Nat)
   | kSet (x : String)
-  | kDrop
-  | kBranch (t e : List Rt2)
+  | kPop
+  | kIte (t e : List Rt2)
   | kAssert
   | kRet
-  | kThrow
+  | kTest
+  | kUnwrap
   | kRepeatWhile (c : E2) (body : List Rt2)
   | kRepeatTest (c : E2) (body : List Rt2)
   | kForStart (x : String) (body : List Rt2)
@@ -1115,7 +1122,6 @@ structure Fr where
 inductive FM where
   | frames (fs : List Fr)
   | fdone (v : JSValue)
-  | fthrown
   | fell
   deriving Repr
 
@@ -1124,24 +1130,26 @@ inductive FM where
 
 def compileSteps : List Step → List Rt2
   | [] => []
-  | .ret v :: rest => .kEval v :: .kRet :: compileSteps rest
+  | .ret v :: rest => .kEval v :: .kPrim1 .pWrapC :: .kRet :: compileSteps rest
   | .retQ op :: rest => .kPrimQ op :: .kRet :: compileSteps rest
-  | .throw :: rest => .kThrow :: compileSteps rest
+  | .throw :: rest =>
+      .kEval (.const JSValue.undefined) :: .kPrim1 .pThrowC :: .kRet
+        :: compileSteps rest
   | .setE n e :: rest => .kEval e :: .kSet n :: compileSteps rest
-  | .letQ n op :: rest => .kPrimQ op :: .kSet n :: compileSteps rest
+  | .letQ n op :: rest =>
+      .kPrimQ op :: .kTest :: .kIte [.kRet] [.kUnwrap] :: .kSet n :: compileSteps rest
   | .letE n e :: rest => .kEval e :: .kSet n :: compileSteps rest
   | .assertE e :: rest => .kEval e :: .kAssert :: compileSteps rest
   | .forEach x e body :: rest =>
       .kEval e :: .kForStart x (compileSteps body) :: compileSteps rest
   | .ifS c t e :: rest =>
-      .kEval c :: .kBranch (compileSteps t) (compileSteps e) :: compileSteps rest
+      .kEval c :: .kIte (compileSteps t) (compileSteps e) :: compileSteps rest
   | .elseM _ :: rest => compileSteps rest   -- unreachable post-fuseL
 
 def fmOf (p : Prog) : FM := .frames [⟨compileSteps p, [], []⟩]
 
 def fstep (reg : AOReg) : FM → FM
   | .fdone v => .fdone v
-  | .fthrown => .fthrown
   | .fell => .fell
   | .frames [] => .fell
   | .frames (⟨[], _, _⟩ :: _) => .fell        -- fell through without kRet
@@ -1177,13 +1185,17 @@ def fstep (reg : AOReg) : FM → FM
     | .kEval (.isNullOrUnd e) :: rest, _, _ =>
         .frames (⟨.kEval e :: .kPrim1 .pNullOrUnd :: f.stmts.tail!, f.env, f.eval⟩ :: fs)
     | .kEval (.call fname args) :: rest, env, eval =>
-        .frames (⟨args.map Rt2.kEval ++ [.kCall fname args.length] ++ rest, env, eval⟩ :: fs)
+        -- bare and ? calls behave identically: test, propagate, extract.
+        -- Completion(...) is the distinct no-test form (callC, to come).
+        .frames (⟨args.map Rt2.kEval
+                    ++ [.kCall fname args.length, .kTest, .kIte [.kRet] [.kUnwrap]]
+                    ++ rest, env, eval⟩ :: fs)
     | .kPrim1 p :: rest, env, v :: eval =>
         .frames (⟨rest, env, applyPrim p v :: eval⟩ :: fs)
     | .kPrim1 _ :: _, _, [] => .fell            -- stack underflow: loud
     | .kPrimQ op :: rest, env, eval =>
         match evalP2 op with
-        | some v => .frames (⟨rest, env, v :: eval⟩ :: fs)
+        | some v => .frames (⟨rest, env, .compl Bool.false v :: eval⟩ :: fs)
         | none => .fell
     | .kCall fname n :: rest, env, eval =>
         if eval.length < n then .fell
@@ -1197,23 +1209,29 @@ def fstep (reg : AOReg) : FM → FM
           | none => .fell                          -- unknown operation: loud
     | .kSet x :: rest, env, v :: eval => .frames (⟨rest, (x, v) :: env, eval⟩ :: fs)
     | .kSet _ :: _, _, [] => .fell
-    | .kDrop :: rest, env, _ :: eval => .frames (⟨rest, env, eval⟩ :: fs)
-    | .kDrop :: _, _, [] => .fell
-    | .kBranch t e :: rest, env, .boolean b :: eval =>
+    | .kPop :: rest, env, _ :: eval => .frames (⟨rest, env, eval⟩ :: fs)
+    | .kPop :: _, _, [] => .fell
+    | .kIte t e :: rest, env, .boolean b :: eval =>
         .frames (⟨(if b then t else e) ++ rest, env, eval⟩ :: fs)
-    | .kBranch _ _ :: _, _, _ => .fell             -- non-bool condition: loud
+    | .kIte _ _ :: _, _, _ => .fell                -- non-bool condition: loud
     | .kAssert :: rest, env, .boolean Bool.true :: eval => .frames (⟨rest, env, eval⟩ :: fs)
     | .kAssert :: _, _, _ => .fell                 -- failed assert: loud
     | .kRet :: _, _, v :: _ =>
         match fs with
         | caller :: fs' => .frames (⟨caller.stmts, caller.env, v :: caller.eval⟩ :: fs')
         | [] => .fdone v
-    | .kRet :: _, _, [] => .fell                   -- returned nothing: loud
-    | .kThrow :: _, _, _ =>
+    | .kRet :: _, _, [] =>
+        /- return with nothing on the eval stack: allowed, no push -/
         match fs with
-        | caller :: _ =>
-            .frames (⟨.kThrow :: caller.stmts, caller.env, caller.eval⟩ :: fs.tail!)
-        | [] => .fthrown
+        | caller :: fs' => .frames (⟨caller.stmts, caller.env, caller.eval⟩ :: fs')
+        | [] => .fell
+    | .kTest :: rest, env, .compl abrupt v :: eval =>
+        -- peek: the completion STAYS under the pushed boolean
+        .frames (⟨rest, env, .boolean abrupt :: .compl abrupt v :: eval⟩ :: fs)
+    | .kTest :: _, _, _ => .fell          -- top not a completion: loud
+    | .kUnwrap :: rest, env, .compl _ v :: eval =>
+        .frames (⟨rest, env, v :: eval⟩ :: fs)
+    | .kUnwrap :: _, _, _ => .fell        -- top not a completion: loud
     | .kRepeatWhile c body :: rest, env, eval =>
         .frames (⟨.kEval c :: .kRepeatTest c body :: rest, env, eval⟩ :: fs)
     | .kRepeatTest c body :: rest, env, .boolean b :: eval =>
@@ -1235,10 +1253,15 @@ def fsteps (reg : AOReg) : Nat → FM → FM
   | n + 1, m => fsteps reg n (fstep reg m)
 
 def sameOutcome2 : SState → FM → Bool
-  | .sret v, .fdone v' => v == v'
-  | .sthrown, .fthrown => Bool.true
+  | .sret v, .fdone (.compl Bool.false v') => v == v'
+  | .sret v, .fdone v' => v == v'          -- bare value (never through a call)
+  | .sthrown, .fdone (.compl Bool.true _) => Bool.true
   | .sfell, .fell => Bool.true
   | _, _ => Bool.false
 
 def agree2 (reg : AOReg) (p : Prog) : Bool :=
   sameOutcome2 (sosSteps 200 (.srun p [])) (fsteps reg 500 (fmOf p))
+
+def ftrace2 (reg : AOReg) : Nat → FM → List FM
+  | 0, _ => []
+  | n + 1, m => m :: ftrace2 reg n (fstep reg m)

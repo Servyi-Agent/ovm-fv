@@ -87,8 +87,9 @@ def omitDemoF : List FStep := [alg|
 #eval fsteps theReg 100 (fmOf (build retDemoF))
 #eval fsteps theReg 100 (fmOf (build primDemoF))
 #eval fsteps theReg 100 (fmOf (build forEachDemoF))
-/- otpDemoF: 2-arg call, loop over both names, throw at step 4 — the
-   throw pops a frame per step into the caller -/
+/- otpDemoF: 2-arg call, loop over both names, Throw at step 4 —
+   the throw is now a VALUE: pThrowC + kRet returns the completion
+   through the call, the self-test at the call site propagates it -/
 #eval fsteps theReg 300 (fmOf (build otpDemoF))
 #eval agree2 theReg (build exampleF)
 #eval agree2 theReg (build forEachDemoF)
