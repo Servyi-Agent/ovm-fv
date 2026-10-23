@@ -79,6 +79,21 @@ def omitDemoF : List FStep := [alg|
   2. Return q.
 ]
 #eval ksteps theReg 100 (kmOf (build omitDemoF))
+#eval agree2 theReg (build exampleF)
+
+/- Frame machine on the same corpus -/
+#eval fsteps theReg 100 (fmOf (build exampleF))
+#eval fsteps theReg 100 (fmOf (build callDemoF))
+#eval fsteps theReg 100 (fmOf (build retDemoF))
+#eval fsteps theReg 100 (fmOf (build primDemoF))
+#eval fsteps theReg 100 (fmOf (build forEachDemoF))
+/- otpDemoF: 2-arg call, loop over both names, throw at step 4 — the
+   throw pops a frame per step into the caller -/
+#eval fsteps theReg 300 (fmOf (build otpDemoF))
+#eval agree2 theReg (build exampleF)
+#eval agree2 theReg (build forEachDemoF)
+
+/- original KM agreement -/
 #eval agree theReg (build exampleF)
 '''
 

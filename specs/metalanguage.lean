@@ -1075,3 +1075,170 @@ def sameOutcome : SState → KM → Bool
 def agree (reg : AOReg) (p : Prog) : Bool :=
   sameOutcome (sosSteps 200 (.srun p [])) (ksteps reg 200 (kmOf p))
 
+/- ===== Frame machine: eval stack + frames + in-list loop markers.
+   LoopFrame IS the statement list; the final marker is the redo
+   instruction (user's design). Expressions decompose at runtime:
+
+     kEval (call f [a1..an]) :: rt  =>  kEval a1 :: … :: kEval an :: kCall f n :: rt
+     kEval (isObject e)      :: rt  =>  kEval e :: kPrim1 pIsObj :: rt
+
+   Consumers pop the eval stack (top of stack = LAST pushed operand):
+     kCall f n : pop n -> new frame (env = params.zip popped.reverse)
+     kRet      : top of eval -> caller's eval, pop frame (stuck if empty)
+     kThrow    : pop one frame per step, kThrow at the caller's head
+     kSet/kDrop/kBranch/kAssert: pop 1
+   Invariant (lemma, not type): eval stack empty at statement boundaries. -/
+
+inductive Rt2 where
+  | kEval (e : E2)
+  | kPrim1 (p : Prim)
+  | kPrimQ (op : P2)
+  | kCall (f : String) (n : Nat)
+  | kSet (x : String)
+  | kDrop
+  | kBranch (t e : List Rt2)
+  | kAssert
+  | kRet
+  | kThrow
+  | kRepeatWhile (c : E2) (body : List Rt2)
+  | kRepeatTest (c : E2) (body : List Rt2)
+  | kForStart (x : String) (body : List Rt2)
+  | kForBody (x : String) (elems : List JSValue) (body : List Rt2)
+  deriving Repr
+
+structure Fr where
+  stmts : List Rt2
+  env   : Env
+  eval  : List JSValue
+  deriving Repr
+
+inductive FM where
+  | frames (fs : List Fr)
+  | fdone (v : JSValue)
+  | fthrown
+  | fell
+  deriving Repr
+
+/- Statement compilation (expressions stay as data; only statements
+   become instruction sequences). -/
+
+def compileSteps : List Step → List Rt2
+  | [] => []
+  | .ret v :: rest => .kEval v :: .kRet :: compileSteps rest
+  | .retQ op :: rest => .kPrimQ op :: .kRet :: compileSteps rest
+  | .throw :: rest => .kThrow :: compileSteps rest
+  | .setE n e :: rest => .kEval e :: .kSet n :: compileSteps rest
+  | .letQ n op :: rest => .kPrimQ op :: .kSet n :: compileSteps rest
+  | .letE n e :: rest => .kEval e :: .kSet n :: compileSteps rest
+  | .assertE e :: rest => .kEval e :: .kAssert :: compileSteps rest
+  | .forEach x e body :: rest =>
+      .kEval e :: .kForStart x (compileSteps body) :: compileSteps rest
+  | .ifS c t e :: rest =>
+      .kEval c :: .kBranch (compileSteps t) (compileSteps e) :: compileSteps rest
+  | .elseM _ :: rest => compileSteps rest   -- unreachable post-fuseL
+
+def fmOf (p : Prog) : FM := .frames [⟨compileSteps p, [], []⟩]
+
+def fstep (reg : AOReg) : FM → FM
+  | .fdone v => .fdone v
+  | .fthrown => .fthrown
+  | .fell => .fell
+  | .frames [] => .fell
+  | .frames (⟨[], _, _⟩ :: _) => .fell        -- fell through without kRet
+  | .frames (f :: fs) =>
+    match f.stmts, f.env, f.eval with
+    | [], _, _ => .fell
+    | .kEval (.const v) :: rest, env, eval => .frames (⟨rest, env, v :: eval⟩ :: fs)
+    | .kEval (.nat n) :: rest, env, eval =>
+        .frames (⟨rest, env, .number n.toFloat :: eval⟩ :: fs)
+    | .kEval (.nv x) :: rest, env, eval =>
+        match lookup env x with
+        | some v => .frames (⟨rest, env, v :: eval⟩ :: fs)
+        | none => .fell                        -- unbound: stuck, loudly
+    | .kEval (.varNotPresent x) :: rest, env, eval =>
+        .frames (⟨rest, env, .boolean (lookup env x).isNone :: eval⟩ :: fs)
+    | .kEval (.isObject e) :: rest, _, _ =>
+        .frames (⟨.kEval e :: .kPrim1 .pIsObj :: f.stmts.tail!, f.env, f.eval⟩ :: fs)
+    | .kEval (.isNotObject e) :: rest, _, _ =>
+        .frames (⟨.kEval e :: .kPrim1 .pIsNotObj :: f.stmts.tail!, f.env, f.eval⟩ :: fs)
+    | .kEval (.isNotUndefined e) :: rest, _, _ =>
+        .frames (⟨.kEval e :: .kPrim1 .pIsNotU :: f.stmts.tail!, f.env, f.eval⟩ :: fs)
+    | .kEval (.isU e) :: rest, _, _ =>
+        .frames (⟨.kEval e :: .kPrim1 .pIsU :: f.stmts.tail!, f.env, f.eval⟩ :: fs)
+    | .kEval (.hasCall e) :: rest, _, _ =>
+        .frames (⟨.kEval e :: .kPrim1 .pHasCall :: f.stmts.tail!, f.env, f.eval⟩ :: fs)
+    | .kEval (.hasCtor e) :: rest, _, _ =>
+        .frames (⟨.kEval e :: .kPrim1 .pHasCtor :: f.stmts.tail!, f.env, f.eval⟩ :: fs)
+    | .kEval (.isBoolVal b e) :: rest, _, _ =>
+        .frames (⟨.kEval e :: .kPrim1 (if b then .pIsTrue else .pIsFalse)
+                    :: f.stmts.tail!, f.env, f.eval⟩ :: fs)
+    | .kEval (.isStrVal s e) :: rest, _, _ =>
+        .frames (⟨.kEval e :: .kPrim1 (.pIsStr s) :: f.stmts.tail!, f.env, f.eval⟩ :: fs)
+    | .kEval (.isNullOrUnd e) :: rest, _, _ =>
+        .frames (⟨.kEval e :: .kPrim1 .pNullOrUnd :: f.stmts.tail!, f.env, f.eval⟩ :: fs)
+    | .kEval (.call fname args) :: rest, env, eval =>
+        .frames (⟨args.map Rt2.kEval ++ [.kCall fname args.length] ++ rest, env, eval⟩ :: fs)
+    | .kPrim1 p :: rest, env, v :: eval =>
+        .frames (⟨rest, env, applyPrim p v :: eval⟩ :: fs)
+    | .kPrim1 _ :: _, _, [] => .fell            -- stack underflow: loud
+    | .kPrimQ op :: rest, env, eval =>
+        match evalP2 op with
+        | some v => .frames (⟨rest, env, v :: eval⟩ :: fs)
+        | none => .fell
+    | .kCall fname n :: rest, env, eval =>
+        if eval.length < n then .fell
+        else
+          let popped := eval.take n
+          let older := eval.drop n
+          match findAO reg fname with
+          | some (ps, body) =>
+              .frames (⟨compileSteps body, ps.zip popped.reverse, []⟩
+                       :: ⟨rest, env, older⟩ :: fs)
+          | none => .fell                          -- unknown operation: loud
+    | .kSet x :: rest, env, v :: eval => .frames (⟨rest, (x, v) :: env, eval⟩ :: fs)
+    | .kSet _ :: _, _, [] => .fell
+    | .kDrop :: rest, env, _ :: eval => .frames (⟨rest, env, eval⟩ :: fs)
+    | .kDrop :: _, _, [] => .fell
+    | .kBranch t e :: rest, env, .boolean b :: eval =>
+        .frames (⟨(if b then t else e) ++ rest, env, eval⟩ :: fs)
+    | .kBranch _ _ :: _, _, _ => .fell             -- non-bool condition: loud
+    | .kAssert :: rest, env, .boolean Bool.true :: eval => .frames (⟨rest, env, eval⟩ :: fs)
+    | .kAssert :: _, _, _ => .fell                 -- failed assert: loud
+    | .kRet :: _, _, v :: _ =>
+        match fs with
+        | caller :: fs' => .frames (⟨caller.stmts, caller.env, v :: caller.eval⟩ :: fs')
+        | [] => .fdone v
+    | .kRet :: _, _, [] => .fell                   -- returned nothing: loud
+    | .kThrow :: _, _, _ =>
+        match fs with
+        | caller :: _ =>
+            .frames (⟨.kThrow :: caller.stmts, caller.env, caller.eval⟩ :: fs.tail!)
+        | [] => .fthrown
+    | .kRepeatWhile c body :: rest, env, eval =>
+        .frames (⟨.kEval c :: .kRepeatTest c body :: rest, env, eval⟩ :: fs)
+    | .kRepeatTest c body :: rest, env, .boolean b :: eval =>
+        .frames (⟨(if b then body ++ [.kRepeatWhile c body] else rest), env, eval⟩ :: fs)
+    | .kRepeatTest _ _ :: _, _, _ => .fell
+    | .kForStart x body :: rest, env, .listV [] :: eval =>
+        .frames (⟨rest, env, eval⟩ :: fs)
+    | .kForStart x body :: rest, env, .listV (v :: vs) :: eval =>
+        .frames (⟨.kEval (.const v) :: .kSet x :: body
+                    ++ [.kForBody x vs body] ++ rest, env, eval⟩ :: fs)
+    | .kForStart _ _ :: _, _, _ => .fell           -- For each over non-List: loud
+    | .kForBody x (v :: vs) body :: rest, env, eval =>
+        .frames (⟨.kEval (.const v) :: .kSet x :: body
+                    ++ [.kForBody x vs body] ++ rest, env, eval⟩ :: fs)
+    | .kForBody _ [] _ :: rest, env, eval => .frames (⟨rest, env, eval⟩ :: fs)
+
+def fsteps (reg : AOReg) : Nat → FM → FM
+  | 0, m => m
+  | n + 1, m => fsteps reg n (fstep reg m)
+
+def sameOutcome2 : SState → FM → Bool
+  | .sret v, .fdone v' => v == v'
+  | .sthrown, .fthrown => Bool.true
+  | .sfell, .fell => Bool.true
+  | _, _ => Bool.false
+
+def agree2 (reg : AOReg) (p : Prog) : Bool :=
+  sameOutcome2 (sosSteps 200 (.srun p [])) (fsteps reg 500 (fmOf p))
