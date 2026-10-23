@@ -232,7 +232,21 @@ syntax "string" : isTail
 syntax "number" : isTail
 syntax algExpr "has" "a" "[[Call]]" "internal" "method" : algExpr
 syntax algExpr "has" "a" "[[Construct]]" "internal" "method" : algExpr
-syntax ident "(" algExpr ")" : algExpr
+/- n-ary calls: zero or more comma-separated arguments. Heads accept
+   identifiers PLUS keyword-colliding names (the primitive-declared
+   operation names) — same explicit-list discipline as `var`. -/
+declare_syntax_cat callArgs
+syntax algExpr : callArgs
+syntax callArgs "," algExpr : callArgs
+declare_syntax_cat aoName
+syntax ident : aoName
+syntax "OrdinaryToPrimitive" : aoName
+syntax "GetMethod" : aoName
+syntax "GetV" : aoName
+syntax "Get" : aoName
+syntax "Call" : aoName
+syntax aoName "(" ")" : algExpr
+syntax aoName "(" callArgs ")" : algExpr
 
 /- `x is not …` — the tail is its own category so alternatives differ
    at the first token (shared prefixes past one token don't backtrack). -/
@@ -328,6 +342,7 @@ syntax fsteps fstep : fsteps
 syntax "[alg|" fsteps "]" : term
 syntax "[f|" fstep "]" : term
 syntax "[e|" algExpr "]" : term
+syntax "[ca|" callArgs "]" : term
 syntax "[p|" algPrim "]" : term
 syntax "[s|" stmt "]" : term
 
@@ -347,6 +362,22 @@ def sciNat (n : TSyntax `scientific) : Nat :=
 
 /- « "a", "b" » literals: the macro encodes the elements as one
    unit-separated string; this decodes at runtime. -/
+open Lean in
+def aoNameOf (x : TSyntax `aoName) : String :=
+  let inner (w : Lean.Syntax) : String :=
+    match w with
+    | .ident _ t _ _ => t.toString
+    | .atom _ v => v
+    | _ => "?"
+  match x.raw with
+  | .ident _ s _ _ => s.toString
+  | .atom _ v => v
+  | .node _ _ args =>
+    match (args[0]? : Option Lean.Syntax) with
+    | some w => inner w
+    | none => "?"
+  | _ => "?"
+
 open Lean in
 def varName (x : TSyntax `var) : String :=
   let inner : Lean.Syntax → String :=
@@ -368,8 +399,10 @@ def listOfStrings (s : String) : JSValue :=
 
 open Lean in
 macro_rules
-  | `([e| $f:ident ( $x:algExpr )]) =>
-      ``(E2.call $(quote (toString f.getId)) [[e| $x]])
+  | `([e| $f:aoName ( )]) =>
+      ``(E2.call $(quote (aoNameOf f)) [])
+  | `([e| $f:aoName ( $as:callArgs )]) =>
+      ``(E2.call $(quote (aoNameOf f)) [ca| $as])
   | `([e| $x:var]) =>
       /- A « … » token lexes as ONE bracketed identifier. Quoted
          elements (« "a", "b" ») become a spec-List literal; a single
@@ -433,6 +466,11 @@ macro_rules
       ``(E2.varNotPresent $(quote name))
   | `([e| number]) => ``(E2.const (JSValue.str "number"))
   | `([e| string]) => ``(E2.const (JSValue.str "string"))
+
+open Lean in
+macro_rules
+  | `([ca| $x:algExpr]) => `([[e| $x]])
+  | `([ca| $xs:callArgs , $x:algExpr]) => `([ca| $xs] ++ [[e| $x]])
 
 open Lean in
 macro_rules

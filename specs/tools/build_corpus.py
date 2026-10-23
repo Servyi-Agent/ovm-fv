@@ -59,6 +59,26 @@ def forEachDemoF : List FStep := [alg|
 
 #eval ksteps theReg 100 (kmOf (build forEachDemoF))
 #eval ksteps theReg 100 (kmOf (build ordinaryToPrimitive7_1_1_1))
+
+/- A real two-argument call: OrdinaryToPrimitive(undefined, ~string~) enters
+   the registry with both params bound; the loop iterates over both
+   method names; stubbed Get -> undefined -> IsCallable false; the
+   loop exhausts; step 4 throws. -/
+def otpDemoF : List FStep := [alg|
+  1. Let r be OrdinaryToPrimitive(undefined, ~string~).
+  2. Return r.
+]
+
+#eval checkRun (renest otpDemoF)
+#eval ksteps theReg 200 (kmOf (build otpDemoF))
+
+/- Omission: fewer args than params — preferredType stays unbound,
+   the not-present defaulting path runs (already shown by primDemoF). -/
+def omitDemoF : List FStep := [alg|
+  1. Let q be ToPrimitive(undefined).
+  2. Return q.
+]
+#eval ksteps theReg 100 (kmOf (build omitDemoF))
 #eval agree theReg (build exampleF)
 '''
 
