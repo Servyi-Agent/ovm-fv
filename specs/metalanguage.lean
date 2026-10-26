@@ -1398,7 +1398,17 @@ def compileSteps : List Step → List Rt2
   | [] => []
   | .ret v :: rest => .kEval v :: .kPrim1 .pWrapC :: .kRet :: compileSteps rest
   | .retQ op :: rest => .kPrimQ op :: .kRet :: compileSteps rest
-  | .retE e :: rest => .kEval e :: .kTest :: .kIte [.kRet] [.kUnwrap, .kRet] :: compileSteps rest
+  | .retE e :: rest =>
+      -- `Return ? e`: if e is a call/imeth its kEval decomposition already
+      -- self-tests (propagating abrupt / unwrapping normal), so the value
+      -- arrives raw and we just wrap it. Any other shape: test here.
+      ((match e with
+        | .call _ _ | .imeth _ _ _ =>
+            [.kEval e, .kPrim1 .pWrapC, .kRet]
+        | _ =>
+            [.kEval e, .kTest, .kIte [.kRet] [.kUnwrap, .kPrim1 .pWrapC, .kRet]])
+        : List Rt2)
+        ++ compileSteps rest
   | .retNewSlot sn vv :: rest =>
       .kEval (.nv vv) :: .kNewSlot sn :: .kPrim1 .pWrapC :: .kRet
         :: compileSteps rest

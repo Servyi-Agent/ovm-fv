@@ -260,10 +260,17 @@ def omitDemoF : List FStep := [alg|
 /- original KM agreement -/
 #eval agree theReg (build exampleF)
 
-/- The full lookup chain, live: GetMethod -> GetV -> ToObject ->
-   OrdinaryGet -> native MOP. A heap object with own property "x" = 42,
+/- The full lookup chain, live: GetV -> ToObject -> OrdinaryGet ->
+   native MOP. A heap object with own property "x" = 42,
    reached via propertyKey "x". -/
 def lookupDemoF : List FStep := [alg|
+  1. Let m be GetV(input, propertyKey).
+  2. Return m.
+]
+
+/- GetMethod on a non-callable, non-undefined value: spec says
+   step 4 throws a TypeError (compl true undefined). -/
+def getMethodDemoF : List FStep := [alg|
   1. Let m be GetMethod(input, propertyKey).
   2. Return m.
 ]
@@ -278,5 +285,8 @@ def demoHeap : Heap :=
 #eval checkRun (renest lookupDemoF)
 #eval fsteps theReg
     1000 (.frames [⟨compileSteps (build lookupDemoF),
+        [("input", .obj 0), ("propertyKey", .str "x")], []⟩] demoHeap 1)
+#eval fsteps theReg
+    1000 (.frames [⟨compileSteps (build getMethodDemoF),
         [("input", .obj 0), ("propertyKey", .str "x")], []⟩] demoHeap 1)
 
