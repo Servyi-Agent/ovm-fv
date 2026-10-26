@@ -63,7 +63,7 @@ def trans_alg(path):
 fail = 0
 for cid, path in sorted(CASES.items()):
     a, b = spec_alg(cid), trans_alg(path)
-    a = apply_deviations(cid, a)
+    a = [apply_deviations(cid, s) for s in a]
     if a == b:
         print(f"EQUAL  {cid:22s} {path}  ({len(a)} steps)")
     else:
