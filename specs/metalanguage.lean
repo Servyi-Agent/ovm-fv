@@ -24,14 +24,32 @@ structurally impossible. Numbering becomes decoration: identifiers
 serve as roman labels (no keyword shadowing), and the consecutiveness
 audit remains purely as a typo check. -/
 
+/- ===== Objects ===== -/
+
+/- Property Descriptor — verbatim six optional fields (ES 6.2.6.1). -/
+mutual
+inductive Descriptor where
+  | mk (value : Option JSValue) (writable : Option Bool)
+      (getter : Option Nat) (setter : Option Nat)
+      (enumerable : Option Bool) (configurable : Option Bool)
+  deriving Repr, BEq
 inductive JSValue where
   | undefined | null | boolean (b : Bool) | number (n : Float)
   | str (s : String)
   | listV (l : List JSValue)     -- spec List, injected for the AO layer
   | compl (abrupt : Bool) (v : JSValue)  -- Completion Record, as a value
   | obj (loc : Nat)                     -- object reference
+  | descV (d : Descriptor)              -- Property Descriptor, as a value
   deriving Repr, BEq
-instance : Inhabited JSValue := ⟨.undefined⟩
+end
+
+def IsAccessorDescriptor (d : Descriptor) : Bool :=
+  match d with
+  | .mk _ _ getter setter _ _ => getter.isSome || setter.isSome
+
+def IsDataDescriptor (d : Descriptor) : Bool :=
+  match d with
+  | .mk value writable _ _ _ _ => value.isSome || writable.isSome
 
 inductive E2 where
   | nv (name : String)
@@ -46,6 +64,9 @@ inductive E2 where
   | isBoolVal (b : Bool) (e : E2)
   | isStrVal (s : String) (e : E2)
   | isNullOrUnd (e : E2)
+  | isNull (e : E2)
+  | imeth (name : String) (recv : E2) (args : List E2)
+  | ifield (name : String) (e : E2)
   | varNotPresent (name : String)
   | call (name : String) (args : List E2)
   deriving Repr
@@ -61,6 +82,7 @@ inductive P2 where
 inductive Step where
   | ret (v : E2)
   | retQ (op : P2)
+  | retE (e : E2)
   | assertE (e : E2)
   | forEach (x : String) (e : E2) (body : List Step)
   | throw
@@ -73,10 +95,72 @@ inductive Step where
 
 abbrev Prog := List Step
 
+/- Internal-slot universe: closed by construction (ES declares the set). -/
+inductive Slot where
+  | call | construct | strData | dateValue
+  deriving Repr, BEq
+
+def slotOrd : Slot → Nat
+  | .call => 0 | .construct => 1 | .strData => 2 | .dateValue => 3
+
+/- Property keys: String or Symbol (symbolic here). -/
+inductive PKey where
+  | str (s : String)
+  | sym (id : Nat)
+  deriving Repr, BEq
+
+/- Object kinds — the interpreter dispatches on this tag. -/
+inductive Kind where
+  | ordinary
+  | builtin (params : List String) (body : Prog)
+  | string (s : String)                   -- String exotic
+  deriving Repr
+
+structure JsObj where
+  kind       : Kind
+  proto      : Option Nat                 -- [[Prototype]] (none = null)
+  extensible : Bool                       -- [[Extensible]]
+  slots      : List (Nat × JSValue)       -- sparse internal slots (slotOrd-keyed)
+  props      : List (PKey × Descriptor)   -- ordered own properties
+  deriving Repr
+
+def slotGet (o : JsObj) (s : Slot) : Option JSValue :=
+  o.slots.lookup (slotOrd s)   -- List.lookup returns the VALUE directly
+
+def slotSet (o : JsObj) (s : Slot) (v : JSValue) : JsObj where
+  kind := o.kind
+  proto := o.proto
+  extensible := o.extensible
+  slots := (slotOrd s, v) :: o.slots.filter (fun (k, _) => k != slotOrd s)
+  props := o.props
+
+def objWith (kind : Kind) (proto : Option Nat) : JsObj where
+  kind := kind
+  proto := proto
+  extensible := Bool.true
+  slots := []
+  props := []
+
+/- Heap: object locations → objects, as a function (user's choice). -/
+abbrev Heap := Nat → Option JsObj
+
+def emptyHeap : Heap := fun _ => none
+
+instance : Repr Heap := ⟨fun _ _ => "<heap>"⟩
+
+def heapSet (h : Heap) (loc : Nat) (o : JsObj) : Heap :=
+  fun l => if l == loc then some o else h l
+
+instance : Inhabited JSValue := ⟨.undefined⟩
+
+
+
+
 /- Label-carrying parallel AST (what the audit consumes). -/
 inductive LBody where
   | ret (v : E2)
   | retQ (op : P2)
+  | retE (e : E2)
   | assertE (e : E2)
   | forEach (x : String) (e : E2) (body : List (String × LBody))
   | throw
@@ -94,6 +178,7 @@ abbrev LStep := String × LBody
 inductive FBody where
   | ret (v : E2)
   | retQ (op : P2)
+  | retE (e : E2)
   | throw
   | setE (name : String) (e : E2)
   | ifI (c : E2) (s : FBody)
@@ -138,6 +223,7 @@ def stripBody : LBody → Step
   | .assertE e => .assertE e
   | .forEach x e b => .forEach x e (strip b)
   | .retQ op => .retQ op
+  | .retE e => .retE e
   | .setE n e => .setE n e
   | .letQ n op => .letQ n op
   | .letE n e => .letE n e
@@ -205,6 +291,7 @@ declare_syntax_cat kwAssert
 declare_syntax_cat kwFor
 
 syntax var : algExpr
+syntax "%" ident "%" : algExpr
 syntax "true" : algExpr
 syntax "false" : algExpr
 syntax "undefined" : algExpr
@@ -230,6 +317,7 @@ syntax "~" ident "~" : isTail
 syntax "~" "string" "~" : isTail
 syntax "~" "number" "~" : isTail
 syntax "either" "undefined" "or" "null" : isTail
+syntax "null" : isTail
 syntax "string" : isTail
 syntax "number" : isTail
 syntax algExpr "has" "a" "[[Call]]" "internal" "method" : algExpr
@@ -249,6 +337,17 @@ syntax "Get" : aoName
 syntax "Call" : aoName
 syntax aoName "(" ")" : algExpr
 syntax aoName "(" callArgs ")" : algExpr
+/- Internal-method calls: obj.[[Get]](P, receiver) — MOP dispatch. -/
+/- ".[[" and "]]" as single tokens avoid the shared-prefix commit on "."
+   (which would break every statement's trailing period). -/
+/- Field read declared last; paren forms first so `]] (` commits there. -/
+/- 1+-arg calls parse and pattern-match; ZERO-arg internal-method calls
+   cannot be pattern-matched (empty parens are grouping in patterns), so
+   the sole zero-arg case, [[GetPrototypeOf]], is written in field-read
+   form — documented deviation at each transcription site. -/
+syntax algExpr ".[[" aoName "]" "]" "(" callArgs ")" : algExpr
+/- Record field read: desc.[[Value]]. -/
+syntax algExpr ".[[" aoName "]" "]" : algExpr
 
 /- `x is not …` — the tail is its own category so alternatives differ
    at the first token (shared prefixes past one token don't backtrack). -/
@@ -294,10 +393,10 @@ syntax "for" : kwFor
 syntax kwLet var "be" scientific : stmt
 syntax kwReturn scientific : stmt
 syntax kwSet var "to" scientific : stmt
-syntax kwLet var "be" "?" algPrim "." : stmt
+syntax kwLet var "be" "?" algExpr "." : stmt
 syntax kwLet var "be" algExpr "." : stmt
 syntax kwReturn algExpr "." : stmt
-syntax kwReturn "?" algPrim "." : stmt
+syntax kwReturn "?" algExpr "." : stmt
 syntax kwThrow "." : stmt
 syntax kwThrow "a" "TypeError" "exception" "." : stmt
 syntax kwAssert ":" algExpr "." : stmt
@@ -438,9 +537,14 @@ macro_rules
   | `([e| $n:num]) => ``(E2.nat ($n : Nat))
   | `([e| $n:scientific]) => ``(E2.nat $(quote (sciNat n)))
   | `([e| $s:str]) => ``(E2.const (JSValue.str $s))
+  | `([e| $r:algExpr .[[ $m:aoName ] ] ( $as:callArgs )]) =>
+      ``(E2.imeth $(quote (aoNameOf m)) [e| $r] [ca| $as])
+  | `([e| $r:algExpr .[[ $m:aoName ] ]]) =>
+      ``(E2.ifield $(quote (aoNameOf m)) [e| $r])
   | `([e| ~ string ~]) => ``(E2.const (JSValue.str "string"))
   | `([e| ~ number ~]) => ``(E2.const (JSValue.str "number"))
   | `([e| ~ $v:ident ~]) => ``(E2.const (JSValue.str $(quote (toString v.getId))))
+  | `([e| $x:var is null]) => ``(E2.isNull (E2.nv $(quote (varName x))))
   | `([e| $e:algExpr is either undefined or null]) =>
       ``(E2.isNullOrUnd [e| $e])
   | `([e| $e:algExpr is string]) =>
@@ -466,13 +570,15 @@ macro_rules
         | .ident _ s _ _ => s.toString
         | _ => "?"
       ``(E2.varNotPresent $(quote name))
+  | `([e| % $x:ident % ]) =>
+      ``(E2.const (JSValue.str $(quote ("%" ++ toString x.getId ++ "%"))))
   | `([e| number]) => ``(E2.const (JSValue.str "number"))
   | `([e| string]) => ``(E2.const (JSValue.str "string"))
 
 open Lean in
 macro_rules
-  | `([ca| $x:algExpr]) => `([[e| $x]])
-  | `([ca| $xs:callArgs , $x:algExpr]) => `([ca| $xs] ++ [[e| $x]])
+  | `([ca| $x:algExpr]) => `([[e| $x] ])
+  | `([ca| $xs:callArgs , $x:algExpr]) => `([ca| $xs] ++ [[e| $x] ])
 
 open Lean in
 macro_rules
@@ -501,12 +607,12 @@ macro_rules
       ``(FBody.ret (E2.nat $(quote (sciNat n))))
   | `([s| $s:kwSet $x:var to $n:scientific]) =>
       ``(FBody.setE $(quote (varName x)) (E2.nat $(quote (sciNat n))))
-  | `([s| $l:kwLet $x:var be ? $op:algPrim .]) =>
-      ``(FBody.letQ $(quote (varName x)) [p| $op])
+  | `([s| $l:kwLet $x:var be ? $e:algExpr .]) =>
+      ``(FBody.letE $(quote (varName x)) [e| $e])
   | `([s| $l:kwLet $x:var be $e:algExpr .]) =>
       ``(FBody.letE $(quote (varName x)) [e| $e])
-  | `([s| $r:kwReturn ? $op:algPrim .]) =>
-      ``(FBody.retQ [p| $op])
+  | `([s| $r:kwReturn ? $e:algExpr .]) =>
+      ``(FBody.retE [e| $e])
   | `([s| $t:kwThrow a TypeError exception .]) =>
       ``(FBody.throw)
   | `([s| $s:kwSet $x:var to $e:algExpr .]) =>
@@ -515,14 +621,16 @@ macro_rules
       ``(FBody.ifI [e| $c] [s| $s])
   | `([s| $e:kwElse , $s:stmt]) =>
       ``(FBody.elseI [s| $s])
-  | `([s| $r:kwReturn $x:ident .]) =>
-      ``(FBody.ret (E2.nv $(quote (toString x.getId))))
+  | `([s| $r:kwReturn $x:var .]) =>
+      ``(FBody.ret (E2.nv $(quote (varName x))))
   | `([s| $r:kwReturn undefined .]) =>
       ``(FBody.ret (E2.const JSValue.undefined))
   | `([s| $r:kwReturn true .]) =>
       ``(FBody.ret (E2.const (JSValue.boolean Bool.true)))
   | `([s| $r:kwReturn false .]) =>
       ``(FBody.ret (E2.const (JSValue.boolean Bool.false)))
+  | `([s| $r:kwReturn $e:algExpr .]) =>
+      ``(FBody.ret [e| $e])
   | `([s| $t:kwThrow .]) =>
       ``(FBody.throw)
   | `([s| $k:kwIf $c:algExpr , $t:kwThen]) =>
@@ -545,6 +653,7 @@ macro_rules
 def inlineBody : FBody → LBody
   | .ret v => .ret v
   | .retQ op => .retQ op
+  | .retE e => .retE e
   | .throw => .throw
   | .assertE e => .assertE e
   | .setE n e => .setE n e
@@ -582,6 +691,7 @@ def renestGo : Nat → List FStep → List LStep
   | f + 1, (d, l, .ret v) :: rest => (l, LBody.ret v) :: renestGo f rest
   | f + 1, (d, l, .throw) :: rest => (l, LBody.throw) :: renestGo f rest
   | f + 1, (d, l, .retQ op) :: rest => (l, LBody.retQ op) :: renestGo f rest
+  | f + 1, (d, l, .retE e) :: rest => (l, LBody.retE e) :: renestGo f rest
   | f + 1, (d, l, .setE n e) :: rest => (l, LBody.setE n e) :: renestGo f rest
   | f + 1, (d, l, .ifI c s) :: rest =>
       (l, LBody.ifS c [("a", inlineBody s)] []) :: renestGo f rest
@@ -692,82 +802,6 @@ macro_rules
   | `([alg| $fs:fsteps $s:fstep]) => `([alg| $fs] ++ [f| $s])
 
 
-/- ===== Objects ===== -/
-
-/- Property Descriptor — verbatim six optional fields (ES 6.2.6.1). -/
-structure Descriptor where
-  value        : Option JSValue
-  writable     : Option Bool
-  getter       : Option Nat              -- [[Get]]: object loc or undefined
-  setter       : Option Nat
-  enumerable   : Option Bool
-  configurable : Option Bool
-  deriving Repr
-
-def IsAccessorDescriptor (d : Descriptor) : Bool :=
-  d.getter.isSome || d.setter.isSome
-def IsDataDescriptor (d : Descriptor) : Bool :=
-  d.value.isSome || d.writable.isSome
-
-/- Internal-slot universe: closed by construction (ES declares the set). -/
-inductive Slot where
-  | call | construct | strData | dateValue
-  deriving Repr, BEq
-
-def slotOrd : Slot → Nat
-  | .call => 0 | .construct => 1 | .strData => 2 | .dateValue => 3
-
-/- Property keys: String or Symbol (symbolic here). -/
-inductive PKey where
-  | str (s : String)
-  | sym (id : Nat)
-  deriving Repr, BEq
-
-/- Object kinds — the interpreter dispatches on this tag. -/
-inductive Kind where
-  | ordinary
-  | builtin (params : List String) (body : Prog)
-  | string (s : String)                   -- String exotic
-  deriving Repr
-
-structure JsObj where
-  kind       : Kind
-  proto      : Option Nat                 -- [[Prototype]] (none = null)
-  extensible : Bool                       -- [[Extensible]]
-  slots      : List (Nat × JSValue)      -- sparse internal slots (slotOrd-keyed)
-  props      : List (PKey × Descriptor)   -- ordered own properties
-  deriving Repr
-
-/- Heap: object locations → objects, as a function (user's choice). -/
-abbrev Heap := Nat → Option JsObj
-
-def emptyHeap : Heap := fun _ => none
-
-instance : Repr Heap := ⟨fun _ _ => "<heap>"⟩
-
-def heapGet (h : Heap) (loc : Nat) : Option JsObj := h loc
-
-def heapSet (h : Heap) (loc : Nat) (o : JsObj) : Heap :=
-  fun l => if l == loc then some o else h l
-
-/- Allocation. -/
-def slotGet (o : JsObj) (s : Slot) : Option JSValue :=
-  o.slots.lookup (slotOrd s)   -- List.lookup returns the VALUE directly
-
-def slotSet (o : JsObj) (s : Slot) (v : JSValue) : JsObj where
-  kind := o.kind
-  proto := o.proto
-  extensible := o.extensible
-  slots := (slotOrd s, v) :: o.slots.filter (fun (k, _) => k != slotOrd s)
-  props := o.props
-
-def objWith (kind : Kind) (proto : Option Nat) : JsObj where
-  kind := kind
-  proto := proto
-  extensible := Bool.true
-  slots := []
-  props := []
-
 /- ===== A small interpreter over the clean Prog ===== -/
 
 abbrev Env := List (String × JSValue)
@@ -785,6 +819,7 @@ def truthy : JSValue → Bool
   | .listV _ => Bool.true
   | .compl _ _ => Bool.true
   | .obj _ => Bool.true
+  | .descV _ => Bool.true
 
 /- Bedrock predicates on values (no objects in this universe yet). -/
 def isUndV : JSValue → Bool
@@ -841,6 +876,12 @@ def evalE2 (h : Heap) (env : Env) : E2 → Option JSValue
       match evalE2 h env e with
       | some v => some (.boolean (isUndV v || isNullV v))
       | none => none
+  | .isNull e =>
+      match evalE2 h env e with
+      | some v => some (.boolean (isNullV v))
+      | none => none
+  | .imeth _ _ _ => none     -- machine-level (MOP dispatch)
+  | .ifield _ _ => none      -- machine-level (record field read)
   | .isStrVal s e =>
       match evalE2 h env e with
       | some v => some (.boolean (v == .str s))
@@ -878,6 +919,10 @@ def run : Env → List Step → Outcome × Env
       match evalE2 emptyHeap env e with
       | some (.boolean Bool.true) => run env rest
       | _ => (.fall, env)
+  | env, .retE e :: _ =>
+      match evalE2 emptyHeap env e with
+      | some v => (.ret v, env)
+      | none => (.fall, env)
   | env, .retQ op :: _ =>
       match evalP2 op with
       | some v => (.ret v, env)
@@ -927,6 +972,8 @@ inductive Prim where              -- bedrock predicates (the axiom stratum)
   | pNullOrUnd
   | pWrapC
   | pThrowC
+  | pIsNull
+  | pDescField (s : String)
   | pIsStr (s : String)
   deriving Repr
 
@@ -976,6 +1023,23 @@ def applyPrim (h : Heap) : Prim → JSValue → JSValue
   | .pNullOrUnd, v => .boolean (isUndV v || isNullV v)
   | .pWrapC, v => .compl Bool.false v
   | .pThrowC, v => .compl Bool.true v
+  | .pIsNull, v => .boolean (isNullV v)
+  | .pDescField s, v =>
+      -- record field read on a descriptor value (undefined if absent)
+      match v with
+      | .descV (.mk value writable getter setter enumerable configurable) =>
+          let natToObj (o : Option Nat) : JSValue :=
+            match o with | some l => .obj l | none => JSValue.undefined
+          let boolToVal (o : Option Bool) : JSValue :=
+            match o with | some b => .boolean b | none => JSValue.undefined
+          if s == "Value" then value.getD JSValue.undefined
+          else if s == "Getter" then natToObj getter
+          else if s == "Setter" then natToObj setter
+          else if s == "Writable" then boolToVal writable
+          else if s == "Enumerable" then boolToVal enumerable
+          else if s == "Configurable" then boolToVal configurable
+          else JSValue.undefined
+      | _ => JSValue.undefined
 
 /- The transcribed-operation registry (the corpus). -/
 abbrev AOReg := List (String × (List String × Prog))
@@ -997,6 +1061,8 @@ def kstep (reg : AOReg) : KM → KM
       match evalE2 emptyHeap env e with
       | some (.boolean Bool.true) => .krun st env stack
       | _ => .kfell               -- failed assert: stuck, loudly (asserts are pure)
+  | .krun (.step (.retE e) :: st) env stack =>
+      .krun (.kEvalS (.ee e) [] [] .kRet :: st) env stack
   | .krun (.step (.retQ op) :: st) env stack =>
       match evalP2 op with
       | some v => .krun (.kEvalS (.ev v) [] [] .kRet :: st) env stack
@@ -1037,6 +1103,12 @@ def kstep (reg : AOReg) : KM → KM
       .krun (.kEvalS (.ee e') [] [] (.kPrim .pIsU (.kSpine as rs k)) :: st) env stack
   | .krun (.kEvalS (.ee (.isNullOrUnd e')) as rs k :: st) env stack =>
       .krun (.kEvalS (.ee e') [] [] (.kPrim .pNullOrUnd (.kSpine as rs k)) :: st) env stack
+  | .krun (.kEvalS (.ee (.isNull e')) as rs k :: st) env stack =>
+      .krun (.kEvalS (.ee e') [] [] (.kPrim .pIsNull (.kSpine as rs k)) :: st) env stack
+  | .krun (.kEvalS (.ee (.imeth _ _ _)) as rs k :: st) env stack =>
+      .krun (.kEvalS (.ee (.nv "IMETH-NATIVE")) as rs k :: st) env stack
+  | .krun (.kEvalS (.ee (.ifield nm e')) as rs k :: st) env stack =>
+      .krun (.kEvalS (.ee e') [] [] (.kPrim (.pDescField nm) (.kSpine as rs k)) :: st) env stack
   | .krun (.kEvalS (.ee (.isStrVal s e')) as rs k :: st) env stack =>
       .krun (.kEvalS (.ee e') [] [] (.kPrim (.pIsStr s) (.kSpine as rs k)) :: st) env stack
   | .krun (.kEvalS (.ee (.isBoolVal b e')) as rs k :: st) env stack =>
@@ -1128,6 +1200,10 @@ def sosStep : SState → SState
       match evalE2 emptyHeap env e with
       | some (.boolean Bool.true) => .srun rest env
       | _ => .sfell
+  | .srun (.retE e :: _) env =>
+      match evalE2 emptyHeap env e with
+      | some v => .sret v
+      | none => .sfell
   | .srun (.retQ op :: _) env =>
       match evalP2 op with
       | some v => .sret v
@@ -1193,6 +1269,7 @@ inductive Rt2 where
   | kRet
   | kTest
   | kUnwrap
+  | kIMeth (name : String) (n : Nat)
   | kRepeatWhile (c : E2) (body : List Rt2)
   | kRepeatTest (c : E2) (body : List Rt2)
   | kForStart (x : String) (body : List Rt2)
@@ -1218,6 +1295,7 @@ def compileSteps : List Step → List Rt2
   | [] => []
   | .ret v :: rest => .kEval v :: .kPrim1 .pWrapC :: .kRet :: compileSteps rest
   | .retQ op :: rest => .kPrimQ op :: .kRet :: compileSteps rest
+  | .retE e :: rest => .kEval e :: .kTest :: .kIte [.kRet] [.kUnwrap, .kRet] :: compileSteps rest
   | .throw :: rest =>
       .kEval (.const JSValue.undefined) :: .kPrim1 .pThrowC :: .kRet
         :: compileSteps rest
@@ -1269,6 +1347,15 @@ def fstep (reg : AOReg) : FM → FM
                     :: f.stmts.tail!, f.env, f.eval⟩ :: fs)
     | .kEval (.isStrVal s e) :: rest, _, _ =>
         done (⟨.kEval e :: .kPrim1 (.pIsStr s) :: f.stmts.tail!, f.env, f.eval⟩ :: fs)
+    | .kEval (.isNull e) :: rest, _, _ =>
+        done (⟨.kEval e :: .kPrim1 .pIsNull :: rest, f.env, f.eval⟩ :: fs)
+    | .kEval (.imeth nm recv args) :: rest, _, _ =>
+        -- MOP dispatch: receiver first, then args, then the dispatch op
+        done (⟨.kEval recv :: args.map Rt2.kEval
+                    ++ [.kIMeth nm args.length, .kTest, .kIte [.kRet] [.kUnwrap]] ++ rest,
+                    f.env, f.eval⟩ :: fs)
+    | .kEval (.ifield nm e) :: rest, _, _ =>
+        done (⟨.kEval e :: .kPrim1 (.pDescField nm) :: rest, f.env, f.eval⟩ :: fs)
     | .kEval (.isNullOrUnd e) :: rest, _, _ =>
         done (⟨.kEval e :: .kPrim1 .pNullOrUnd :: f.stmts.tail!, f.env, f.eval⟩ :: fs)
     | .kEval (.call fname args) :: rest, env, eval =>
@@ -1294,9 +1381,11 @@ def fstep (reg : AOReg) : FM → FM
               done (⟨compileSteps body, ps.zip popped.reverse, []⟩
                        :: ⟨rest, env, older⟩ :: fs)
           | none =>
-              -- registry miss: is the TOP of stack (below popped args is
-              -- the callee? no — callee not on stack for named calls).
-              .fell                          -- unknown operation: loud
+              -- registry miss: prim-named calls (GetV/Get/Call/…)
+              -- evaluate natively (stub: undefined), all others loud
+              if ["GetV", "Get", "Call", "GetMethod", "OrdinaryToPrimitive"].contains fname
+              then done (⟨rest, env, .compl Bool.false JSValue.undefined :: older⟩ :: fs)
+              else .fell
     | .kSet x :: rest, env, v :: eval => done (⟨rest, (x, v) :: env, eval⟩ :: fs)
     | .kSet _ :: _, _, [] => .fell
     | .kPop :: rest, env, _ :: eval => done (⟨rest, env, eval⟩ :: fs)
@@ -1315,6 +1404,35 @@ def fstep (reg : AOReg) : FM → FM
         match fs with
         | caller :: fs' => done (⟨caller.stmts, caller.env, caller.eval⟩ :: fs')
         | [] => .fell
+    | .kIMeth nm n :: rest, env, eval =>
+        -- stack: [argn..arg1, recv, ...] (receiver pushed first)
+        if eval.length < n + 1 then .fell
+        else
+          let recvIdx := eval.length - 1
+          let all := eval
+          let recvv := all.getD (eval.length - 1) JSValue.undefined
+          let argsw := (eval.dropLast).take n
+          let older := (eval.dropLast).drop n
+          match nm, argsw.reverse, recvv with
+          | "Get", [p, rcv], .obj loc =>
+              match findAO reg "OrdinaryGet" with
+              | some (ps, body) =>
+                  done (⟨compileSteps body, ps.zip [recvv, p, rcv], []⟩ :: ⟨rest, env, older⟩ :: fs)
+              | none => .fell
+          | "GetOwnProperty", [p], .obj loc =>
+              match heap loc with
+              | some o =>
+                  let k := match p with | .str s => PKey.str s | _ => PKey.str "?"
+                  let d := (o.props.find? (fun (pk, _) => pk == k)).map (·.2)
+                  done (⟨rest, env, .compl Bool.false (d.map JSValue.descV |>.getD JSValue.undefined) :: older⟩ :: fs)
+              | none => .fell
+          | "GetPrototypeOf", [], .obj loc =>
+              match heap loc with
+              | some o =>
+                  let pv := match o.proto with | some l => .obj l | none => JSValue.null
+                  done (⟨rest, env, .compl Bool.false pv :: older⟩ :: fs)
+              | none => .fell
+          | _, _, _ => .fell              -- unknown method / non-object receiver: loud
     | .kTest :: rest, env, .compl abrupt v :: eval =>
         -- peek: the completion STAYS under the pushed boolean
         done (⟨rest, env, .boolean abrupt :: .compl abrupt v :: eval⟩ :: fs)

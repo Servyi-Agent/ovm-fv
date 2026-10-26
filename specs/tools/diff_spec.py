@@ -15,6 +15,7 @@ CASES = {
     "sec-isconstructor": "spec/6/2/5/2/spec.lean",
     "sec-toprimitive":   "spec/7/1/1/spec.lean",
     "sec-getmethod":     "spec/7/3/10/spec.lean",
+    "sec-ordinaryget":   "spec/7/3/2/spec.lean",
     "sec-ordinarytoprimitive": "spec/7/1/1/1/spec.lean",
 }
 MARKERS = ["1.", "a.", "i.", "1.", "a."]
@@ -49,6 +50,7 @@ def trans_alg(path):
 fail = 0
 for cid, path in sorted(CASES.items()):
     a, b = spec_alg(cid), trans_alg(path)
+    a = apply_deviations(cid, a)
     if a == b:
         print(f"EQUAL  {cid:22s} {path}  ({len(a)} steps)")
     else:
