@@ -35,7 +35,7 @@ inductive Descriptor where
   deriving Repr, BEq
 inductive JSValue where
   | undefined | null | boolean (b : Bool) | number (n : Float)
-  | str (s : String)
+  | str (s : «String»)
   | listV (l : List JSValue)     -- spec List, injected for the AO layer
   | compl (abrupt : Bool) (v : JSValue)  -- Completion Record, as a value
   | obj (loc : Nat)                     -- object reference
@@ -52,7 +52,7 @@ def IsDataDescriptor (d : Descriptor) : Bool :=
   | .mk value writable _ _ _ _ => value.isSome || writable.isSome
 
 inductive E2 where
-  | nv (name : String)
+  | nv (name : «String»)
   | nat (n : Nat)
   | const (v : JSValue)
   | isObject (e : E2)
@@ -62,17 +62,19 @@ inductive E2 where
   | hasCtor (e : E2)
   | isU (e : E2)
   | isBoolVal (b : Bool) (e : E2)
-  | isStrVal (s : String) (e : E2)
+  | isStrVal (s : «String») (e : E2)
   | isNullOrUnd (e : E2)
   | isNull (e : E2)
-  | imeth (name : String) (recv : E2) (args : List E2)
-  | ifield (name : String) (e : E2)
-  | varNotPresent (name : String)
-  | call (name : String) (args : List E2)
+  | isType (ty : «String») (e : E2)
+  | hasField (name : «String») (e : E2)
+  | imeth (name : «String») (recv : E2) (args : List E2)
+  | ifield (name : «String») (e : E2)
+  | varNotPresent (name : «String»)
+  | call (name : «String») (args : List E2)
   deriving Repr
 
 inductive P2 where
-  | getMethod (o : E2) (sym : String)
+  | getMethod (o : E2) (sym : «String»)
   | getV (v : E2) (p : E2)
   | call (f : E2) (thisArg : E2) (arg : E2)
   | ordinaryToPrimitive (o : E2) (hint : E2)
@@ -83,12 +85,13 @@ inductive Step where
   | ret (v : E2)
   | retQ (op : P2)
   | retE (e : E2)
+  | retNewSlot (slotName : «String») (valVar : «String»)
   | assertE (e : E2)
-  | forEach (x : String) (e : E2) (body : List Step)
+  | forEach (x : «String») (e : E2) (body : List Step)
   | throw
-  | setE (name : String) (e : E2)
-  | letQ (name : String) (op : P2)
-  | letE (name : String) (e : E2)
+  | setE (name : «String») (e : E2)
+  | letQ (name : «String») (op : P2)
+  | letE (name : «String») (e : E2)
   | ifS (c : E2) (t : List Step) (e : List Step)
   | elseM (body : List Step)
   deriving Repr
@@ -98,14 +101,27 @@ abbrev Prog := List Step
 /- Internal-slot universe: closed by construction (ES declares the set). -/
 inductive Slot where
   | call | construct | strData | dateValue
+  | boolData | numData | symData | bigData
   deriving Repr, BEq
 
 def slotOrd : Slot → Nat
   | .call => 0 | .construct => 1 | .strData => 2 | .dateValue => 3
+  | .boolData => 4 | .numData => 5 | .symData => 6 | .bigData => 7
+
+def slotOfName : «String» → Option Nat
+  | "Call" => some (slotOrd .call)
+  | "Construct" => some (slotOrd .construct)
+  | "StringData" => some (slotOrd .strData)
+  | "DateValue" => some (slotOrd .dateValue)
+  | "BooleanData" => some (slotOrd .boolData)
+  | "NumberData" => some (slotOrd .numData)
+  | "SymbolData" => some (slotOrd .symData)
+  | "BigIntData" => some (slotOrd .bigData)
+  | _ => none
 
 /- Property keys: String or Symbol (symbolic here). -/
 inductive PKey where
-  | str (s : String)
+  | str (s : «String»)
   | sym (id : Nat)
   deriving Repr, BEq
 
@@ -113,7 +129,7 @@ inductive PKey where
 inductive Kind where
   | ordinary
   | builtin (params : List String) (body : Prog)
-  | string (s : String)                   -- String exotic
+  | string (s : «String»)                   -- String exotic
   deriving Repr
 
 structure JsObj where
@@ -161,14 +177,15 @@ inductive LBody where
   | ret (v : E2)
   | retQ (op : P2)
   | retE (e : E2)
+  | retNewSlot (slotName : «String») (valVar : «String»)
   | assertE (e : E2)
-  | forEach (x : String) (e : E2) (body : List (String × LBody))
+  | forEach (x : «String») (e : E2) (body : List («String» × LBody))
   | throw
-  | setE (name : String) (e : E2)
-  | letQ (name : String) (op : P2)
-  | letE (name : String) (e : E2)
-  | ifS (c : E2) (t : List (String × LBody)) (e : List (String × LBody))
-  | elseM (body : List (String × LBody))
+  | setE (name : «String») (e : E2)
+  | letQ (name : «String») (op : P2)
+  | letE (name : «String») (e : E2)
+  | ifS (c : E2) (t : List («String» × LBody)) (e : List («String» × LBody))
+  | elseM (body : List («String» × LBody))
   deriving Repr
 
 abbrev LStep := String × LBody
@@ -180,14 +197,15 @@ inductive FBody where
   | retQ (op : P2)
   | retE (e : E2)
   | throw
-  | setE (name : String) (e : E2)
+  | setE (name : «String») (e : E2)
   | ifI (c : E2) (s : FBody)
   | elseI (s : FBody)
   | elseG (c : E2)
   | assertE (e : E2)
-  | forEach (x : String) (e : E2)
-  | letQ (name : String) (op : P2)
-  | letE (name : String) (e : E2)
+  | forEach (x : «String») (e : E2)
+  | retNewSlot (slotName : «String») (valVar : «String»)
+  | letQ (name : «String») (op : P2)
+  | letE (name : «String») (e : E2)
   | ifS (c : E2)
   | elseM
   deriving Repr
@@ -219,6 +237,7 @@ def strip : List LStep → Prog
   | (l, b) :: rest => stripBody b :: strip rest
 def stripBody : LBody → Step
   | .ret v => .ret v
+  | .retNewSlot sn vv => .retNewSlot sn vv
   | .throw => .throw
   | .assertE e => .assertE e
   | .forEach x e b => .forEach x e (strip b)
@@ -235,12 +254,12 @@ end
 def toProg (l : List LStep) : Prog := strip (fuseL l)
 
 /- Consecutiveness audit: label ordinals per scheme (1→1, a→1, i→1). -/
-def romanOrd : String → Option Nat
+def romanOrd : «String» → Option Nat
   | "i" => some 1 | "ii" => some 2 | "iii" => some 3
   | "iv" => some 4 | "v" => some 5 | "vi" => some 6
   | _ => none
 
-def labelOrd (s : String) : Option Nat :=
+def labelOrd (s : «String») : Option Nat :=
   match s.toNat? with
   | some n => some n
   | none =>
@@ -314,6 +333,11 @@ syntax "undefined" : isTail
 syntax "true" : isTail
 syntax "false" : isTail
 syntax "~" ident "~" : isTail
+syntax "a" "Boolean" : isTail
+syntax "a" "Number" : isTail
+syntax "a" "String" : isTail
+syntax "a" "Symbol" : isTail
+syntax "a" "BigInt" : isTail
 syntax "~" "string" "~" : isTail
 syntax "~" "number" "~" : isTail
 syntax "either" "undefined" "or" "null" : isTail
@@ -329,6 +353,9 @@ declare_syntax_cat callArgs
 syntax algExpr : callArgs
 syntax callArgs "," algExpr : callArgs
 declare_syntax_cat aoName
+/- "has a [[Value]] field" — descriptor field presence. -/
+declare_syntax_cat hasTail
+syntax "a" "[" "[" aoName "]" "]" "field" : hasTail
 syntax ident : aoName
 syntax "OrdinaryToPrimitive" : aoName
 syntax "GetMethod" : aoName
@@ -351,6 +378,7 @@ syntax algExpr ".[[" aoName "]" "]" : algExpr
 
 /- `x is not …` — the tail is its own category so alternatives differ
    at the first token (shared prefixes past one token don't backtrack). -/
+syntax algExpr "has" hasTail : algExpr
 syntax algExpr "is" isTail : algExpr
 syntax "number" : algExpr
 syntax "string" : algExpr
@@ -400,6 +428,17 @@ syntax kwReturn "?" algExpr "." : stmt
 syntax kwThrow "." : stmt
 syntax kwThrow "a" "TypeError" "exception" "." : stmt
 syntax kwAssert ":" algExpr "." : stmt
+/- "Return a new Boolean object whose [[BooleanData]] internal slot is
+   set to arg." — the wrapper-creation form (ToObject). -/
+declare_syntax_cat typeName
+syntax ident : typeName
+syntax "Boolean" : typeName
+syntax "Number" : typeName
+syntax "String" : typeName
+syntax "Symbol" : typeName
+syntax "BigInt" : typeName
+syntax kwReturn "a" "new" typeName "object" "whose" "[" "[" aoName "]" "]"
+    "internal" "slot" "is" "set" "to" var "." : stmt
 /- Loop: "For each element x of list, do" + sub-steps. The list is a
    spec List value; the body is the run of deeper steps. -/
 syntax kwFor "each" "element" var "of" algExpr "," "do" : stmt
@@ -452,7 +491,7 @@ syntax "[s|" stmt "]" : term
    scientific tokens; strip the dot to recover the Nat. -/
 open Lean in
 def sciNat (n : TSyntax `scientific) : Nat :=
-  let strip : String → Nat := fun v => (String.ofList (v.toList.dropLast)).toNat?.getD 0
+  let strip : «String» → Nat := fun v => («String».ofList (v.toList.dropLast)).toNat?.getD 0
   match n.raw with
   | .atom _ v => strip v
   | .node _ _ args =>
@@ -464,8 +503,8 @@ def sciNat (n : TSyntax `scientific) : Nat :=
 /- « "a", "b" » literals: the macro encodes the elements as one
    unit-separated string; this decodes at runtime. -/
 open Lean in
-def aoNameOf (x : TSyntax `aoName) : String :=
-  let inner (w : Lean.Syntax) : String :=
+def aoNameOf (x : TSyntax `aoName) : «String» :=
+  let inner (w : Lean.Syntax) : «String» :=
     match w with
     | .ident _ t _ _ => t.toString
     | .atom _ v => v
@@ -480,8 +519,8 @@ def aoNameOf (x : TSyntax `aoName) : String :=
   | _ => "?"
 
 open Lean in
-def varName (x : TSyntax `var) : String :=
-  let inner : Lean.Syntax → String :=
+def varName (x : TSyntax `var) : «String» :=
+  let inner : Lean.Syntax → «String» :=
     fun s => match s with
       | .ident _ t _ _ => t.toString
       | .atom _ "method" => "method"
@@ -495,7 +534,7 @@ def varName (x : TSyntax `var) : String :=
     | none => "?"
   | _ => "?"
 
-def listOfStrings (s : String) : JSValue :=
+def listOfStrings (s : «String») : JSValue :=
   .listV ((s.splitOn "\x1f").map JSValue.str)
 
 open Lean in
@@ -509,12 +548,12 @@ macro_rules
          elements (« "a", "b" ») become a spec-List literal; a single
          unquoted element (« hint ») is the argument-list notation for
          a variable. -/
-      let strDL (s : String) : String := String.ofList (s.toList.dropLast)
-      let strDF (s : String) : String := String.ofList (s.toList.drop 1)
-      let strTW (s : String) : String :=
-        String.ofList ((s.toList.dropWhile Char.isWhitespace).reverse
+      let strDL (s : «String») : «String» := «String».ofList (s.toList.dropLast)
+      let strDF (s : «String») : «String» := «String».ofList (s.toList.drop 1)
+      let strTW (s : «String») : «String» :=
+        «String».ofList ((s.toList.dropWhile Char.isWhitespace).reverse
           |>.dropWhile Char.isWhitespace |>.reverse)
-      let idTxt (w : Lean.Syntax) : String :=
+      let idTxt (w : Lean.Syntax) : «String» :=
         match w with
         | .ident _ t _ _ => t.toString
         | _ => "?"
@@ -529,7 +568,7 @@ macro_rules
       then
         let inner := strDF (strDL txt)
         let elems := (inner.splitOn ",").map (fun q => strDL (strDF (strTW q)))
-        ``(E2.const (listOfStrings $(quote (String.intercalate "\x1f" elems))))
+        ``(E2.const (listOfStrings $(quote («String».intercalate "\x1f" elems))))
       else ``(E2.nv $(quote (varName x)))
   | `([e| undefined]) => ``(E2.const JSValue.undefined)
   | `([e| true]) => ``(E2.const (JSValue.boolean Bool.true))
@@ -557,7 +596,14 @@ macro_rules
       ``(E2.isStrVal "number" [e| $e])
   | `([e| $e:algExpr is ~ $v:ident ~]) =>
       ``(E2.isStrVal $(quote (toString v.getId)) [e| $e])
+  | `([e| $e:algExpr has a [ [$m:aoName ] ] field]) =>
+      ``(E2.hasField $(quote (aoNameOf m)) [e| $e])
   | `([e| $e:algExpr is an Object]) => ``(E2.isObject [e| $e])
+  | `([e| $e:algExpr is a Boolean]) => ``(E2.isType "Boolean" [e| $e])
+  | `([e| $e:algExpr is a Number]) => ``(E2.isType "Number" [e| $e])
+  | `([e| $e:algExpr is a String]) => ``(E2.isType "String" [e| $e])
+  | `([e| $e:algExpr is a Symbol]) => ``(E2.isType "Symbol" [e| $e])
+  | `([e| $e:algExpr is a BigInt]) => ``(E2.isType "BigInt" [e| $e])
   | `([e| $e:algExpr is not an Object]) => ``(E2.isNotObject [e| $e])
   | `([e| $e:algExpr is not undefined]) => ``(E2.isNotUndefined [e| $e])
   | `([e| $e:algExpr has a [[Call]] internal method]) => ``(E2.hasCall [e| $e])
@@ -613,6 +659,9 @@ macro_rules
       ``(FBody.letE $(quote (varName x)) [e| $e])
   | `([s| $r:kwReturn ? $e:algExpr .]) =>
       ``(FBody.retE [e| $e])
+  | `([s| $r:kwReturn a new $t:typeName object whose [ [ $s:aoName ] ]
+      internal slot is set to $x:var .]) =>
+      ``(FBody.retNewSlot $(quote (aoNameOf s)) $(quote (varName x)))
   | `([s| $t:kwThrow a TypeError exception .]) =>
       ``(FBody.throw)
   | `([s| $s:kwSet $x:var to $e:algExpr .]) =>
@@ -654,6 +703,7 @@ def inlineBody : FBody → LBody
   | .ret v => .ret v
   | .retQ op => .retQ op
   | .retE e => .retE e
+  | .retNewSlot sn vv => .retNewSlot sn vv
   | .throw => .throw
   | .assertE e => .assertE e
   | .setE n e => .setE n e
@@ -692,6 +742,8 @@ def renestGo : Nat → List FStep → List LStep
   | f + 1, (d, l, .throw) :: rest => (l, LBody.throw) :: renestGo f rest
   | f + 1, (d, l, .retQ op) :: rest => (l, LBody.retQ op) :: renestGo f rest
   | f + 1, (d, l, .retE e) :: rest => (l, LBody.retE e) :: renestGo f rest
+  | f + 1, (d, l, .retNewSlot sn vv) :: rest =>
+      (l, LBody.retNewSlot sn vv) :: renestGo f rest
   | f + 1, (d, l, .setE n e) :: rest => (l, LBody.setE n e) :: renestGo f rest
   | f + 1, (d, l, .ifI c s) :: rest =>
       (l, LBody.ifS c [("a", inlineBody s)] []) :: renestGo f rest
@@ -719,64 +771,64 @@ open Lean in
 macro_rules
   | `([f| $n:scientific $s:stmt]) =>
       let lbl := match n.raw with
-        | .atom _ v => String.ofList (v.toList.dropLast)
+        | .atom _ v => «String».ofList (v.toList.dropLast)
         | .node _ _ args =>
           match (args[0]? : Option Lean.Syntax) with
-          | some (Lean.Syntax.atom _ v) => String.ofList (v.toList.dropLast)
+          | some (Lean.Syntax.atom _ v) => «String».ofList (v.toList.dropLast)
           | _ => "?"
         | _ => "?"
       `([(0, $(quote lbl), [s| $s])])
   | `([f| ┊ $n:scientific $s:stmt]) =>
       let lbl := match n.raw with
-        | .atom _ v => String.ofList (v.toList.dropLast)
+        | .atom _ v => «String».ofList (v.toList.dropLast)
         | .node _ _ args =>
           match (args[0]? : Option Lean.Syntax) with
-          | some (Lean.Syntax.atom _ v) => String.ofList (v.toList.dropLast)
+          | some (Lean.Syntax.atom _ v) => «String».ofList (v.toList.dropLast)
           | _ => "?"
         | _ => "?"
       `([(1, $(quote lbl), [s| $s])])
   | `([f| ┊ ┊ $n:scientific $s:stmt]) =>
       let lbl := match n.raw with
-        | .atom _ v => String.ofList (v.toList.dropLast)
+        | .atom _ v => «String».ofList (v.toList.dropLast)
         | .node _ _ args =>
           match (args[0]? : Option Lean.Syntax) with
-          | some (Lean.Syntax.atom _ v) => String.ofList (v.toList.dropLast)
+          | some (Lean.Syntax.atom _ v) => «String».ofList (v.toList.dropLast)
           | _ => "?"
         | _ => "?"
       `([(2, $(quote lbl), [s| $s])])
   | `([f| ┊ ┊ ┊ $n:scientific $s:stmt]) =>
       let lbl := match n.raw with
-        | .atom _ v => String.ofList (v.toList.dropLast)
+        | .atom _ v => «String».ofList (v.toList.dropLast)
         | .node _ _ args =>
           match (args[0]? : Option Lean.Syntax) with
-          | some (Lean.Syntax.atom _ v) => String.ofList (v.toList.dropLast)
+          | some (Lean.Syntax.atom _ v) => «String».ofList (v.toList.dropLast)
           | _ => "?"
         | _ => "?"
       `([(3, $(quote lbl), [s| $s])])
   | `([f| ┊ ┊ ┊ ┊ $n:scientific $s:stmt]) =>
       let lbl := match n.raw with
-        | .atom _ v => String.ofList (v.toList.dropLast)
+        | .atom _ v => «String».ofList (v.toList.dropLast)
         | .node _ _ args =>
           match (args[0]? : Option Lean.Syntax) with
-          | some (Lean.Syntax.atom _ v) => String.ofList (v.toList.dropLast)
+          | some (Lean.Syntax.atom _ v) => «String».ofList (v.toList.dropLast)
           | _ => "?"
         | _ => "?"
       `([(4, $(quote lbl), [s| $s])])
   | `([f| ┊ ┊ ┊ ┊ ┊ $n:scientific $s:stmt]) =>
       let lbl := match n.raw with
-        | .atom _ v => String.ofList (v.toList.dropLast)
+        | .atom _ v => «String».ofList (v.toList.dropLast)
         | .node _ _ args =>
           match (args[0]? : Option Lean.Syntax) with
-          | some (Lean.Syntax.atom _ v) => String.ofList (v.toList.dropLast)
+          | some (Lean.Syntax.atom _ v) => «String».ofList (v.toList.dropLast)
           | _ => "?"
         | _ => "?"
       `([(5, $(quote lbl), [s| $s])])
   | `([f| ┊ ┊ ┊ ┊ ┊ ┊ $n:scientific $s:stmt]) =>
       let lbl := match n.raw with
-        | .atom _ v => String.ofList (v.toList.dropLast)
+        | .atom _ v => «String».ofList (v.toList.dropLast)
         | .node _ _ args =>
           match (args[0]? : Option Lean.Syntax) with
-          | some (Lean.Syntax.atom _ v) => String.ofList (v.toList.dropLast)
+          | some (Lean.Syntax.atom _ v) => «String».ofList (v.toList.dropLast)
           | _ => "?"
         | _ => "?"
       `([(6, $(quote lbl), [s| $s])])
@@ -804,9 +856,9 @@ macro_rules
 
 /- ===== A small interpreter over the clean Prog ===== -/
 
-abbrev Env := List (String × JSValue)
+abbrev Env := List («String» × JSValue)
 
-def lookup : Env → String → Option JSValue
+def lookup : Env → «String» → Option JSValue
   | [], _ => none
   | (k, v) :: r, k' => if k == k' then some v else lookup r k'
 
@@ -844,6 +896,114 @@ def isNullV : JSValue → Bool
 /- Toy semantics: no objects in this value universe, primitives
    return undefined. Calls are machine-only: the big-step evaluator
    cannot enter the registry. -/
+inductive Prim where              -- bedrock predicates (the axiom stratum)
+  | pIsObj | pIsNotObj | pIsNotU | pHasCall
+  | pHasCtor | pIsU | pIsTrue | pIsFalse
+  | pNullOrUnd
+  | pWrapC
+  | pThrowC
+  | pIsNull
+  | pIsType (s : «String»)
+  | pHasField (s : «String»)
+  | pDescField (s : «String»)
+  | pIsStr (s : «String»)
+  deriving Repr
+
+inductive Kon where
+  | kIte (t e : List Step)
+  | kEach (x : «String») (body : List Step)
+  | kBind (n : «String»)
+  | kRet
+  | kPrim (p : Prim) (k : Kon)
+  | kEnter (f : «String») (k : Kon)
+  | kSpine (as : List E2) (rs : List JSValue) (k : Kon)
+  deriving Repr
+
+inductive Arg where
+  | ev (v : JSValue)              -- already a value
+  | ee (e : E2)                   -- pending expression
+  deriving Repr
+
+
+inductive Rt where                -- runtime statements: source steps + bookkeeping
+  | kLoopS (x : «String») (elems : List JSValue) (body : List Rt) (cont : List Rt)
+  | step (s : Step)
+  | kEvalS (cur : Arg) (as : List E2) (rs : List JSValue) (k : Kon)
+  | kEvalNextS (as : List E2) (rs : List JSValue) (k : Kon)
+  | kUnwindS
+  deriving Repr
+
+/- Control boundaries as frames: the callee REPLACES the current list
+   (caller continuation saved in the frame — cannot be spliced wrong),
+   and return POPS one frame (no scanning, cannot discard past a
+   boundary). break/continue/try later = more Frame kinds. -/
+inductive Frame where
+  | kRestoreF (ce : Env) (st : List Rt) (k : Kon)
+  deriving Repr
+
+inductive KM where
+  | krun (cur : List Rt) (env : Env) (stack : List Frame)
+  | kdone (v : JSValue)
+  | kthrown
+  | kfell
+  deriving Repr
+
+
+def applyPrim (h : Heap) : Prim → JSValue → JSValue
+  | .pIsObj, v => .boolean (isObjV v)
+  | .pIsNotObj, v => .boolean (!isObjV v)
+  | .pIsNotU, v => .boolean (!isUndV v)
+  | .pHasCall, v => .boolean (hasCallV h v)
+  | .pHasCtor, v => .boolean (hasCtorV h v)
+  | .pIsU, v => .boolean (isUndV v)
+  | .pIsTrue, v => .boolean (v == .boolean Bool.true)
+  | .pIsFalse, v => .boolean (v == .boolean Bool.false)
+  | .pIsStr s, v => .boolean (v == .str s)
+  | .pNullOrUnd, v => .boolean (isUndV v || isNullV v)
+  | .pWrapC, v => .compl Bool.false v
+  | .pThrowC, v => .compl Bool.true v
+  | .pIsNull, v => .boolean (isNullV v)
+  | .pIsType s, v =>
+      .boolean (
+        match s with
+        | "Boolean" => match v with | .boolean _ => Bool.true | _ => Bool.false
+        | "Number" => match v with | .number _ => Bool.true | _ => Bool.false
+        | "String" => match v with | .str _ => Bool.true | _ => Bool.false
+        | "Symbol" => Bool.false   -- no Symbol values in this universe yet
+        | "BigInt" => Bool.false   -- no BigInt values yet
+        | _ => Bool.false)
+  | .pHasField s, v =>
+      .boolean (
+        match v with
+        | .descV (.mk value writable getter setter enumerable configurable) =>
+            if s == "Value" then value.isSome
+            else if s == "Writable" then writable.isSome
+            else if s == "Getter" then getter.isSome
+            else if s == "Setter" then setter.isSome
+            else if s == "Enumerable" then enumerable.isSome
+            else if s == "Configurable" then configurable.isSome
+            else Bool.false
+        | _ => Bool.false)
+  | .pDescField s, v =>
+      -- record field read on a descriptor value (undefined if absent)
+      match v with
+      | .descV (.mk value writable getter setter enumerable configurable) =>
+          let natToObj (o : Option Nat) : JSValue :=
+            match o with | some l => .obj l | none => JSValue.undefined
+          let boolToVal (o : Option Bool) : JSValue :=
+            match o with | some b => .boolean b | none => JSValue.undefined
+          if s == "Value" then value.getD JSValue.undefined
+          else if s == "Getter" then natToObj getter
+          else if s == "Setter" then natToObj setter
+          else if s == "Writable" then boolToVal writable
+          else if s == "Enumerable" then boolToVal enumerable
+          else if s == "Configurable" then boolToVal configurable
+          else JSValue.undefined
+      | _ => JSValue.undefined
+
+/- The transcribed-operation registry (the corpus). -/
+abbrev AOReg := List («String» × (List «String» × Prog))
+
 def evalE2 (h : Heap) (env : Env) : E2 → Option JSValue
   | .nv n => lookup env n
   | .nat n => some (.number n.toFloat)
@@ -879,6 +1039,14 @@ def evalE2 (h : Heap) (env : Env) : E2 → Option JSValue
   | .isNull e =>
       match evalE2 h env e with
       | some v => some (.boolean (isNullV v))
+      | none => none
+  | .hasField nm e =>
+      match evalE2 h env e with
+      | some v => some (applyPrim h (.pHasField nm) v)
+      | none => none
+  | .isType ty e =>
+      match evalE2 h env e with
+      | some v => some (applyPrim h (.pIsType ty) v)
       | none => none
   | .imeth _ _ _ => none     -- machine-level (MOP dispatch)
   | .ifield _ _ => none      -- machine-level (record field read)
@@ -919,6 +1087,7 @@ def run : Env → List Step → Outcome × Env
       match evalE2 emptyHeap env e with
       | some (.boolean Bool.true) => run env rest
       | _ => (.fall, env)
+  | env, .retNewSlot _ _ :: _ => (.fall, env)   -- heap-allocating: machine-level
   | env, .retE e :: _ =>
       match evalE2 emptyHeap env e with
       | some v => (.ret v, env)
@@ -961,90 +1130,8 @@ def run : Env → List Step → Outcome × Env
    suspended consumers, kRestoreS is a frame. Calls enter registered
    transcribed algorithms (IsCallable, ...) with a fresh env. ===== -/
 
-inductive Arg where
-  | ev (v : JSValue)              -- already a value
-  | ee (e : E2)                   -- pending expression
-  deriving Repr
 
-inductive Prim where              -- bedrock predicates (the axiom stratum)
-  | pIsObj | pIsNotObj | pIsNotU | pHasCall
-  | pHasCtor | pIsU | pIsTrue | pIsFalse
-  | pNullOrUnd
-  | pWrapC
-  | pThrowC
-  | pIsNull
-  | pDescField (s : String)
-  | pIsStr (s : String)
-  deriving Repr
-
-inductive Kon where
-  | kIte (t e : List Step)
-  | kEach (x : String) (body : List Step)
-  | kBind (n : String)
-  | kRet
-  | kPrim (p : Prim) (k : Kon)
-  | kEnter (f : String) (k : Kon)
-  | kSpine (as : List E2) (rs : List JSValue) (k : Kon)
-  deriving Repr
-
-inductive Rt where                -- runtime statements: source steps + bookkeeping
-  | kLoopS (x : String) (elems : List JSValue) (body : List Rt) (cont : List Rt)
-  | step (s : Step)
-  | kEvalS (cur : Arg) (as : List E2) (rs : List JSValue) (k : Kon)
-  | kEvalNextS (as : List E2) (rs : List JSValue) (k : Kon)
-  | kUnwindS
-  deriving Repr
-
-/- Control boundaries as frames: the callee REPLACES the current list
-   (caller continuation saved in the frame — cannot be spliced wrong),
-   and return POPS one frame (no scanning, cannot discard past a
-   boundary). break/continue/try later = more Frame kinds. -/
-inductive Frame where
-  | kRestoreF (ce : Env) (st : List Rt) (k : Kon)
-  deriving Repr
-
-inductive KM where
-  | krun (cur : List Rt) (env : Env) (stack : List Frame)
-  | kdone (v : JSValue)
-  | kthrown
-  | kfell
-  deriving Repr
-
-def applyPrim (h : Heap) : Prim → JSValue → JSValue
-  | .pIsObj, v => .boolean (isObjV v)
-  | .pIsNotObj, v => .boolean (!isObjV v)
-  | .pIsNotU, v => .boolean (!isUndV v)
-  | .pHasCall, v => .boolean (hasCallV h v)
-  | .pHasCtor, v => .boolean (hasCtorV h v)
-  | .pIsU, v => .boolean (isUndV v)
-  | .pIsTrue, v => .boolean (v == .boolean Bool.true)
-  | .pIsFalse, v => .boolean (v == .boolean Bool.false)
-  | .pIsStr s, v => .boolean (v == .str s)
-  | .pNullOrUnd, v => .boolean (isUndV v || isNullV v)
-  | .pWrapC, v => .compl Bool.false v
-  | .pThrowC, v => .compl Bool.true v
-  | .pIsNull, v => .boolean (isNullV v)
-  | .pDescField s, v =>
-      -- record field read on a descriptor value (undefined if absent)
-      match v with
-      | .descV (.mk value writable getter setter enumerable configurable) =>
-          let natToObj (o : Option Nat) : JSValue :=
-            match o with | some l => .obj l | none => JSValue.undefined
-          let boolToVal (o : Option Bool) : JSValue :=
-            match o with | some b => .boolean b | none => JSValue.undefined
-          if s == "Value" then value.getD JSValue.undefined
-          else if s == "Getter" then natToObj getter
-          else if s == "Setter" then natToObj setter
-          else if s == "Writable" then boolToVal writable
-          else if s == "Enumerable" then boolToVal enumerable
-          else if s == "Configurable" then boolToVal configurable
-          else JSValue.undefined
-      | _ => JSValue.undefined
-
-/- The transcribed-operation registry (the corpus). -/
-abbrev AOReg := List (String × (List String × Prog))
-
-def findAO : AOReg → String → Option (List String × Prog)
+def findAO : AOReg → «String» → Option (List «String» × Prog)
   | [], _ => none
   | (n, e) :: r, n' => if n == n' then some e else findAO r n'
 
@@ -1061,6 +1148,16 @@ def kstep (reg : AOReg) : KM → KM
       match evalE2 emptyHeap env e with
       | some (.boolean Bool.true) => .krun st env stack
       | _ => .kfell               -- failed assert: stuck, loudly (asserts are pure)
+  | .krun (.step (.retNewSlot sn vv) :: st) env stack =>
+      match lookup env vv with
+      | some v =>
+          match slotOfName sn with
+          | some ord =>
+              let obj := { (objWith .ordinary none) with slots := [(ord, v)] }
+              .krun (.kEvalS (.ev (.obj 0)) [] [] .kRet :: st)
+                env stack -- heap not threaded through KM: object at loc 0
+          | none => .kfell
+      | none => .kfell
   | .krun (.step (.retE e) :: st) env stack =>
       .krun (.kEvalS (.ee e) [] [] .kRet :: st) env stack
   | .krun (.step (.retQ op) :: st) env stack =>
@@ -1103,6 +1200,10 @@ def kstep (reg : AOReg) : KM → KM
       .krun (.kEvalS (.ee e') [] [] (.kPrim .pIsU (.kSpine as rs k)) :: st) env stack
   | .krun (.kEvalS (.ee (.isNullOrUnd e')) as rs k :: st) env stack =>
       .krun (.kEvalS (.ee e') [] [] (.kPrim .pNullOrUnd (.kSpine as rs k)) :: st) env stack
+  | .krun (.kEvalS (.ee (.hasField nm e')) as rs k :: st) env stack =>
+      .krun (.kEvalS (.ee e') [] [] (.kPrim (.pHasField nm) (.kSpine as rs k)) :: st) env stack
+  | .krun (.kEvalS (.ee (.isType ty e')) as rs k :: st) env stack =>
+      .krun (.kEvalS (.ee e') [] [] (.kPrim (.pIsType ty) (.kSpine as rs k)) :: st) env stack
   | .krun (.kEvalS (.ee (.isNull e')) as rs k :: st) env stack =>
       .krun (.kEvalS (.ee e') [] [] (.kPrim .pIsNull (.kSpine as rs k)) :: st) env stack
   | .krun (.kEvalS (.ee (.imeth _ _ _)) as rs k :: st) env stack =>
@@ -1200,6 +1301,7 @@ def sosStep : SState → SState
       match evalE2 emptyHeap env e with
       | some (.boolean Bool.true) => .srun rest env
       | _ => .sfell
+  | .srun (.retNewSlot _ _ :: _) env => .sfell   -- heap-allocating: machine-level
   | .srun (.retE e :: _) env =>
       match evalE2 emptyHeap env e with
       | some v => .sret v
@@ -1261,19 +1363,20 @@ inductive Rt2 where
   | kEval (e : E2)
   | kPrim1 (p : Prim)
   | kPrimQ (op : P2)
-  | kCall (f : String) (n : Nat)
-  | kSet (x : String)
+  | kCall (f : «String») (n : Nat)
+  | kSet (x : «String»)
   | kPop
   | kIte (t e : List Rt2)
   | kAssert
   | kRet
   | kTest
   | kUnwrap
-  | kIMeth (name : String) (n : Nat)
+  | kIMeth (name : «String») (n : Nat)
+  | kNewSlot (slotName : «String»)
   | kRepeatWhile (c : E2) (body : List Rt2)
   | kRepeatTest (c : E2) (body : List Rt2)
-  | kForStart (x : String) (body : List Rt2)
-  | kForBody (x : String) (elems : List JSValue) (body : List Rt2)
+  | kForStart (x : «String») (body : List Rt2)
+  | kForBody (x : «String») (elems : List JSValue) (body : List Rt2)
   deriving Repr
 
 structure Fr where
@@ -1296,6 +1399,9 @@ def compileSteps : List Step → List Rt2
   | .ret v :: rest => .kEval v :: .kPrim1 .pWrapC :: .kRet :: compileSteps rest
   | .retQ op :: rest => .kPrimQ op :: .kRet :: compileSteps rest
   | .retE e :: rest => .kEval e :: .kTest :: .kIte [.kRet] [.kUnwrap, .kRet] :: compileSteps rest
+  | .retNewSlot sn vv :: rest =>
+      .kEval (.nv vv) :: .kNewSlot sn :: .kPrim1 .pWrapC :: .kRet
+        :: compileSteps rest
   | .throw :: rest =>
       .kEval (.const JSValue.undefined) :: .kPrim1 .pThrowC :: .kRet
         :: compileSteps rest
@@ -1347,6 +1453,10 @@ def fstep (reg : AOReg) : FM → FM
                     :: f.stmts.tail!, f.env, f.eval⟩ :: fs)
     | .kEval (.isStrVal s e) :: rest, _, _ =>
         done (⟨.kEval e :: .kPrim1 (.pIsStr s) :: f.stmts.tail!, f.env, f.eval⟩ :: fs)
+    | .kEval (.hasField nm e) :: rest, _, _ =>
+        done (⟨.kEval e :: .kPrim1 (.pHasField nm) :: rest, f.env, f.eval⟩ :: fs)
+    | .kEval (.isType ty e) :: rest, _, _ =>
+        done (⟨.kEval e :: .kPrim1 (.pIsType ty) :: rest, f.env, f.eval⟩ :: fs)
     | .kEval (.isNull e) :: rest, _, _ =>
         done (⟨.kEval e :: .kPrim1 .pIsNull :: rest, f.env, f.eval⟩ :: fs)
     | .kEval (.imeth nm recv args) :: rest, _, _ =>
@@ -1405,14 +1515,13 @@ def fstep (reg : AOReg) : FM → FM
         | caller :: fs' => done (⟨caller.stmts, caller.env, caller.eval⟩ :: fs')
         | [] => .fell
     | .kIMeth nm n :: rest, env, eval =>
-        -- stack: [argn..arg1, recv, ...] (receiver pushed first)
+        -- stack: [argn..arg1, recv, ...older] (receiver pushed FIRST,
+        -- args on top; receiver at index n from the top)
         if eval.length < n + 1 then .fell
         else
-          let recvIdx := eval.length - 1
-          let all := eval
-          let recvv := all.getD (eval.length - 1) JSValue.undefined
-          let argsw := (eval.dropLast).take n
-          let older := (eval.dropLast).drop n
+          let argsw := eval.take n
+          let recvv := eval.getD n JSValue.undefined
+          let older := eval.drop (n + 1)
           match nm, argsw.reverse, recvv with
           | "Get", [p, rcv], .obj loc =>
               match findAO reg "OrdinaryGet" with
@@ -1433,6 +1542,18 @@ def fstep (reg : AOReg) : FM → FM
                   done (⟨rest, env, .compl Bool.false pv :: older⟩ :: fs)
               | none => .fell
           | _, _, _ => .fell              -- unknown method / non-object receiver: loud
+    | .kNewSlot _ :: _, _, [] => .fell
+    | .kNewSlot sn :: rest, env, v :: eval =>
+        match slotOfName sn with
+        | some ord =>
+            let obj := { (objWith .ordinary none) with
+                          slots := [(ord, v)] }
+            done (⟨rest, env, .obj nl :: eval⟩ :: fs)
+            |> fun m => match m with
+              | .frames fs' heap nl' =>
+                  .frames fs' (heapSet heap nl obj) (nl + 1)
+              | m => m
+        | none => .fell
     | .kTest :: rest, env, .compl abrupt v :: eval =>
         -- peek: the completion STAYS under the pushed boolean
         done (⟨rest, env, .boolean abrupt :: .compl abrupt v :: eval⟩ :: fs)

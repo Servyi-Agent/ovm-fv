@@ -29,6 +29,34 @@ def AO_IsConstructor : AOReg :=
 #eval checkRun (renest isConstructor6_2_5_2)
 
 
+/- ES 6.2.6.2 IsDataDescriptor ( Desc ) - text-equal. -/
+
+def isDataDescriptor6_2_6_2 : List FStep := [alg|
+  1. If propertyDesc has a [[Value]] field, return true.
+  2. If propertyDesc has a [[Writable]] field, return true.
+  3. Return false.
+]
+
+def AO_IsDataDescriptor : AOReg :=
+  [("IsDataDescriptor", (["propertyDesc"], build isDataDescriptor6_2_6_2))]
+
+#eval checkRun (renest isDataDescriptor6_2_6_2)
+
+
+/- ES 6.2.6.3 IsAccessorDescriptor ( Desc ) - text-equal. -/
+
+def isAccessorDescriptor6_2_6_3 : List FStep := [alg|
+  1. If propertyDesc has a [[Getter]] field, return true.
+  2. If propertyDesc has a [[Setter]] field, return true.
+  3. Return false.
+]
+
+def AO_IsAccessorDescriptor : AOReg :=
+  [("IsAccessorDescriptor", (["propertyDesc"], build isAccessorDescriptor6_2_6_3))]
+
+#eval checkRun (renest isAccessorDescriptor6_2_6_3)
+
+
 /- ES 7.1.1.1 OrdinaryToPrimitive ( O, hint ) - text-equal. Get and
    Call are stubs until the heap; For each iterates a spec List. -/
 
@@ -80,6 +108,38 @@ def AO_ToPrimitive : AOReg :=
 #eval checkRun (renest toPrimitive7_1_1)
 
 
+/- ES 7.1.13 ToObject ( argument ) - text-equal. -/
+
+def toObject7_1_13 : List FStep := [alg|
+  1. If arg is either undefined or null, throw a TypeError exception.
+  2. If arg is a Boolean, return a new Boolean object whose [[BooleanData]] internal slot is set to arg.
+  3. If arg is a Number, return a new Number object whose [[NumberData]] internal slot is set to arg.
+  4. If arg is a String, return a new String object whose [[StringData]] internal slot is set to arg.
+  5. If arg is a Symbol, return a new Symbol object whose [[SymbolData]] internal slot is set to arg.
+  6. If arg is a BigInt, return a new BigInt object whose [[BigIntData]] internal slot is set to arg.
+  7. Assert: arg is an Object.
+  8. Return arg.
+]
+
+def AO_ToObject : AOReg :=
+  [("ToObject", (["arg"], build toObject7_1_13))]
+
+#eval checkRun (renest toObject7_1_13)
+
+
+/- ES 7.3.1 GetV ( V, P ) - text-equal. -/
+
+def getV7_3_1 : List FStep := [alg|
+  1. Let obj be ? ToObject(value).
+  2. Return ? obj.[[Get]](propertyKey, value).
+]
+
+def AO_GetV : AOReg :=
+  [("GetV", (["value", "propertyKey"], build getV7_3_1))]
+
+#eval checkRun (renest getV7_3_1)
+
+
 /- ES 7.3.10 GetMethod ( V, P ) - text-equal. GetV stubbed until the
    heap. Step 3 calls IsCallable (registry). -/
 
@@ -120,7 +180,7 @@ def AO_OrdinaryGet : AOReg :=
 #eval checkRun (renest ordinaryGet7_3_2)
 
 
-def theReg : AOReg := AO_IsCallable ++ AO_IsConstructor ++ AO_OrdinaryToPrimitive ++ AO_ToPrimitive ++ AO_GetMethod ++ AO_OrdinaryGet
+def theReg : AOReg := AO_IsCallable ++ AO_IsConstructor ++ AO_IsDataDescriptor ++ AO_IsAccessorDescriptor ++ AO_OrdinaryToPrimitive ++ AO_ToPrimitive ++ AO_ToObject ++ AO_GetV ++ AO_GetMethod ++ AO_OrdinaryGet
 
 /- smoke: every corpus program runs, audits, and SOS/machine agree -/
 def exampleF : List FStep := [alg|
@@ -199,4 +259,24 @@ def omitDemoF : List FStep := [alg|
 
 /- original KM agreement -/
 #eval agree theReg (build exampleF)
+
+/- The full lookup chain, live: GetMethod -> GetV -> ToObject ->
+   OrdinaryGet -> native MOP. A heap object with own property "x" = 42,
+   reached via propertyKey "x". -/
+def lookupDemoF : List FStep := [alg|
+  1. Let m be GetMethod(input, propertyKey).
+  2. Return m.
+]
+
+def demoHeap : Heap :=
+  heapSet emptyHeap 0 {
+    (objWith .ordinary none) with
+      props := [(PKey.str "x",
+        Descriptor.mk (some (JSValue.number 42)) (some Bool.true)
+          none none (some Bool.true) (some Bool.true))] }
+
+#eval checkRun (renest lookupDemoF)
+#eval fsteps theReg
+    1000 (.frames [⟨compileSteps (build lookupDemoF),
+        [("input", .obj 0), ("propertyKey", .str "x")], []⟩] demoHeap 1)
 

@@ -16,6 +16,8 @@ CASES = {
     "sec-toprimitive":   "spec/7/1/1/spec.lean",
     "sec-getmethod":     "spec/7/3/10/spec.lean",
     "sec-ordinaryget":   "spec/7/3/2/spec.lean",
+    "sec-toobject":      "spec/7/1/13/spec.lean",
+    "sec-getv":          "spec/7/3/1/spec.lean",
     "sec-ordinarytoprimitive": "spec/7/1/1/1/spec.lean",
 }
 MARKERS = ["1.", "a.", "i.", "1.", "a."]
@@ -48,6 +50,10 @@ def apply_deviations(cid: str, step) -> tuple:
     for c, frm, to in DEVIATIONS:
         if c == cid:
             text = text.replace(frm, to)
+    # cross-reference trailers ("See for a description of X objects.")
+    # are links, not algorithm text
+    import re as _re
+    text = _re.sub(r'Seeforadescriptionof\w+objects\.?$', '', text)
     return (mark, text)
 
 def trans_alg(path):

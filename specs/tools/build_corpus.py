@@ -96,6 +96,26 @@ def omitDemoF : List FStep := [alg|
 
 /- original KM agreement -/
 #eval agree theReg (build exampleF)
+
+/- The full lookup chain, live: GetMethod -> GetV -> ToObject ->
+   OrdinaryGet -> native MOP. A heap object with own property "x" = 42,
+   reached via propertyKey "x". -/
+def lookupDemoF : List FStep := [alg|
+  1. Let m be GetMethod(input, propertyKey).
+  2. Return m.
+]
+
+def demoHeap : Heap :=
+  heapSet emptyHeap 0 {
+    (objWith .ordinary none) with
+      props := [(PKey.str "x",
+        Descriptor.mk (some (JSValue.number 42)) (some Bool.true)
+          none none (some Bool.true) (some Bool.true))] }
+
+#eval checkRun (renest lookupDemoF)
+#eval fsteps theReg
+    1000 (.frames [⟨compileSteps (build lookupDemoF),
+        [("input", .obj 0), ("propertyKey", .str "x")], []⟩] demoHeap 1)
 '''
 
 out = ["import metalanguage", ""]
