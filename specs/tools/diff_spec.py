@@ -36,6 +36,19 @@ def spec_alg(clause_id):
     depth_of = {w: i for i, w in enumerate(widths)}
     return [(MARKERS[depth_of[w]], re.sub(r"\s+", "", t)) for w, t in lines]
 
+# Documented deviations (text-equality exceptions):
+# 1. zero-arg MOP calls `x.[[M]]()` -> field-read form (grammar can't
+#    pattern-match empty parens)
+DEVIATIONS = [
+    ("sec-ordinaryget", ".[[GetPrototypeOf]]().", ".[[GetPrototypeOf]]."),
+]
+
+def apply_deviations(cid: str, s: str) -> str:
+    for c, frm, to in DEVIATIONS:
+        if c == cid:
+            s = s.replace(frm, to)
+    return s
+
 def trans_alg(path):
     src = open(os.path.join(ROOT, path), encoding="utf-8").read()
     body = re.search(r"\[alg\|(.*)\]", src, re.S).group(1)
