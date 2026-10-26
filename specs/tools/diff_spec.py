@@ -43,11 +43,12 @@ DEVIATIONS = [
     ("sec-ordinaryget", ".[[GetPrototypeOf]]().", ".[[GetPrototypeOf]]."),
 ]
 
-def apply_deviations(cid: str, s: str) -> str:
+def apply_deviations(cid: str, step) -> tuple:
+    mark, text = step
     for c, frm, to in DEVIATIONS:
         if c == cid:
-            s = s.replace(frm, to)
-    return s
+            text = text.replace(frm, to)
+    return (mark, text)
 
 def trans_alg(path):
     src = open(os.path.join(ROOT, path), encoding="utf-8").read()
