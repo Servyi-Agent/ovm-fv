@@ -305,19 +305,20 @@ def demoHeap : Heap :=
    Delivery is always a completion; the table types the payload.
    To be extracted from spec.html headers eventually (diff_spec-style). -/
 def corpusSigs : SigTable := [
-  ("IsCallable",          ([.raw], .raw)),
-  ("IsConstructor",       ([.raw], .raw)),
-  ("IsDataDescriptor",    ([.raw], .raw)),
-  ("IsAccessorDescriptor",([.raw], .raw)),
-  ("OrdinaryToPrimitive", ([.raw, .raw], .raw)),
-  ("ToPrimitive",         ([.raw, .raw], .raw)),
-  ("ToObject",            ([.raw], .raw)),
-  ("GetV",                ([.raw, .raw], .raw)),
-  ("GetMethod",           ([.raw, .raw], .raw)),
-  ("OrdinaryGet",         ([.raw, .raw, .raw], .raw)),
+  -- value-refined signatures (payload types; delivery is always compl)
+  ("IsCallable",          ([.any], .boolean)),
+  ("IsConstructor",       ([.any], .boolean)),
+  ("IsDataDescriptor",    ([.any], .boolean)),
+  ("IsAccessorDescriptor",([.any], .boolean)),
+  ("OrdinaryToPrimitive", ([.any, .any], .any)),
+  ("ToPrimitive",         ([.any, .any], .any)),
+  ("ToObject",            ([.any], .obj)),
+  ("GetV",                ([.any, .any], .any)),
+  ("GetMethod",           ([.any, .any], .any)),
+  ("OrdinaryGet",         ([.any, .any, .any], .any)),
   -- prim-named calls the machine handles natively on registry miss:
-  ("Get",                 ([.raw, .raw], .raw)),
-  ("Call",                ([.raw, .raw, .raw], .raw))  -- trailing argsList optional (7.1.1.1 elides it)
+  ("Get",                 ([.any, .any], .any)),
+  ("Call",                ([.any, .any, .any], .any))  -- trailing argsList optional (7.1.1.1 elides it)
 ]
 
 /- the issue-#1 regression loop typechecks too: body neutral, cond boolean -/
@@ -329,27 +330,32 @@ def corpusSigs : SigTable := [
 #eval typecheckReg corpusSigs 2000 theReg
 #eval typecheckRegOk corpusSigs 2000 theReg
 -- the demos typecheck as frames (Γ = params, or empty for top-level)
-#eval typecheckSeq corpusSigs 2000 [("input", .raw), ("propertyKey", .raw)] (compileSteps (build lookupDemoF))
-#eval typecheckSeq corpusSigs 2000 [("input", .raw), ("propertyKey", .raw)] (compileSteps (build getMethodDemoF))
+#eval typecheckSeq corpusSigs 2000 [("input", .any), ("propertyKey", .any)] (compileSteps (build lookupDemoF))
+#eval typecheckSeq corpusSigs 2000 [("input", .any), ("propertyKey", .any)] (compileSteps (build getMethodDemoF))
 
 /- negative tests: the two historical bugs must be REJECTED.
    Bug 1 (missing rewrap): kUnwrap leaves raw, kRet demands compl. -/
 def bug1 : List Rt2 :=
   [.kPrimQ (P2.getV (E2.nv "v") (E2.nv "p")), .kTest,
    .kIte [.kRet] [.kUnwrap, .kRet]]
-#eval typecheckSeq corpusSigs 2000 [("v", .raw), ("p", .raw)] bug1
+#eval typecheckSeq corpusSigs 2000 [("v", .any), ("p", .any)] bug1
 /- Bug 2 (double self-test): kEval of a call yields the payload type
    (raw), a stray kTest demands a completion. -/
 def bug2 : List Rt2 :=
   [.kEval (E2.call "GetV" [E2.nv "v", E2.nv "p"]), .kTest,
    .kIte [.kRet] [.kUnwrap, .kPrim1 .pWrapC, .kRet]]
-#eval typecheckSeq corpusSigs 2000 [("v", .raw), ("p", .raw)] bug2
+#eval typecheckSeq corpusSigs 2000 [("v", .any), ("p", .any)] bug2
 /- Signature-driven argument checking: IteratorClose-style param
    (raw, compl). -/
-def closeSigs : SigTable := [("FakeClose", ([.raw, .compl], .raw))]
+def closeSigs : SigTable := [("FakeClose", ([.any, .compl], .any))]
 def badArg : List Rt2 :=
   [.kEval (E2.call "FakeClose" [E2.nv "r", E2.nv "c"]), .kPrim1 .pWrapC, .kRet]
 def goodArg : List Rt2 := badArg
-#eval typecheckSeq closeSigs 2000 [("r", .raw), ("c", .raw)] badArg
-#eval typecheckSeq closeSigs 2000 [("r", .raw), ("c", .compl)] goodArg
+#eval typecheckSeq closeSigs 2000 [("r", .any), ("c", .any)] badArg
+#eval typecheckSeq closeSigs 2000 [("r", .any), ("c", .compl)] goodArg
+/- Stricter typing: a number where kIte demands a boolean. This is the
+   class of bug runtime smoke tests miss on dead paths. -/
+def bug3 : List Rt2 :=
+  [.kEval (.const (JSValue.number 5)), .kIte [] []]
+#eval typecheckSeq corpusSigs 2000 [] bug3
 
