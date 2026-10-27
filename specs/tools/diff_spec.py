@@ -19,24 +19,44 @@ CASES = {
     "sec-toobject":      "spec/7/1/13/spec.lean",
     "sec-getv":          "spec/7/3/1/spec.lean",
     "sec-ordinarytoprimitive": "spec/7/1/1/1/spec.lean",
+    "sec-isdatadescriptor": "spec/6/2/6/2/spec.lean",
+    "sec-isaccessordescriptor": "spec/6/2/6/3/spec.lean",
 }
 MARKERS = ["1.", "a.", "i.", "1.", "a."]
 
 def spec_alg(clause_id):
     src = open(SPEC_HTML, encoding="utf-8").read()
-    m = re.search(r'<emu-clause id="%s".*?</emu-clause>' % clause_id, src, re.S)
-    alg = re.search(r"<emu-alg>(.*?)</emu-alg>", m.group(0), re.S).group(1)
-    text = html.unescape(re.sub(r"<[^>]+>", "", alg))
+    m = re.search(r'<emu-clause [^>]*?id=(?:"%s"|%s)(?=[\s>])[^>]*>' % (clause_id, clause_id), src)
+    if not m:
+        raise SystemExit(f"clause {clause_id} not found")
+    end = src.find('</emu-clause>', m.end())
+    seg = src[m.start():end]
+    alg = re.search(r"<emu-alg>(.*?)</emu-alg>", seg, re.S).group(1)
+    # Built spec: <ol><li> structure, numbering via CSS. Synthesize the
+    # canonical markers (1. a. i. 1.) from the list nesting.
+    toks = [(mm.start(), mm.end())
+            for mm in re.finditer(r"<li\b[^>]*>|<ol>|</ol>", alg)]
+    def fmt(depth, n):
+        return MARKERS[depth] if depth < len(MARKERS) else "?"
     lines = []
-    for raw in text.splitlines():
-        line = raw.replace("_", "").replace("*", "").strip()
-        m2 = re.match(r"^(\d+)\.\s*(.*)$", line)
-        if m2:
-            lines.append((len(raw) - len(raw.lstrip()), m2.group(2)))
-    # map indent widths to depth order
-    widths = sorted({w for w, _ in lines})
-    depth_of = {w: i for i, w in enumerate(widths)}
-    return [(MARKERS[depth_of[w]], re.sub(r"\s+", "", t)) for w, t in lines]
+    counters = []
+    for k, (p, q) in enumerate(toks):
+        tok = alg[p:q]
+        if tok == "<ol>":
+            counters.append(0)
+        elif tok == "</ol>":
+            if counters: counters.pop()
+        else:  # <li ...>
+            if not counters: counters = [0]
+            counters[-1] += 1
+            end = toks[k + 1][0] if k + 1 < len(toks) else len(alg)
+            body = alg[q : end]
+            body = re.sub(r"<ol>.*$", "", body, flags=re.S)  # drop nested list
+            text = html.unescape(re.sub(r"<[^>]+>", "", body))
+            text = text.replace("_", "").replace("*", "").strip()
+            lines.append((fmt(len(counters) - 1, counters[-1]),
+                          re.sub(r"\s+", "", text)))
+    return lines
 
 # Documented deviations (text-equality exceptions):
 # 1. zero-arg MOP calls `x.[[M]]()` -> field-read form (grammar can't
@@ -50,10 +70,12 @@ def apply_deviations(cid: str, step) -> tuple:
     for c, frm, to in DEVIATIONS:
         if c == cid:
             text = text.replace(frm, to)
-    # cross-reference trailers ("See for a description of X objects.")
+    # emu-val markers on our side: ~string~ -> string
+    text = re.sub(r'~([\w.]+)~', r'\1', text)
+    # cross-reference trailers ("See 20.3 for a description of X objects.")
     # are links, not algorithm text
-    import re as _re
-    text = _re.sub(r'Seeforadescriptionof\w+objects\.?$', '', text)
+    text = re.sub(r'See\d+(\.\d+)*foradescriptionof[\w-]+objects\.?$', '', text)
+    text = re.sub(r'Seeforadescriptionof[\w-]+objects\.?$', '', text)
     return (mark, text)
 
 def trans_alg(path):
@@ -64,7 +86,9 @@ def trans_alg(path):
         m2 = re.match(r"^((?:┊\s*)*)(\w+)\.\s*(.*)$", raw.strip())
         if m2:
             d = raw.count("┊")
-            out.append((MARKERS[d] if d < len(MARKERS) else "?", re.sub(r"\s+", "", m2.group(3))))
+            t = re.sub(r"\s+", "", m2.group(3))
+            t = re.sub(r"~([\w.]+)~", r"\1", t)   # emu-val markers
+            out.append((MARKERS[d] if d < len(MARKERS) else "?", t))
     return out
 
 fail = 0

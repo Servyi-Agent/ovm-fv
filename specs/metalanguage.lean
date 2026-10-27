@@ -71,6 +71,7 @@ inductive E2 where
   | ifield (name : «String») (e : E2)
   | varNotPresent (name : «String»)
   | call (name : «String») (args : List E2)
+  | listE (es : List E2)
   deriving Repr
 
 inductive P2 where
@@ -537,6 +538,9 @@ def varName (x : TSyntax `var) : «String» :=
 def listOfStrings (s : «String») : JSValue :=
   .listV ((s.splitOn "\x1f").map JSValue.str)
 
+def listOfNvs (s : «String») : List E2 :=
+  ((s.splitOn "\x1f").map E2.nv)
+
 open Lean in
 macro_rules
   | `([e| $f:aoName ( )]) =>
@@ -564,11 +568,19 @@ macro_rules
           | some w => idTxt w
           | none => "?"
         | _ => "?"
-      if txt.startsWith "«" && txt.contains "\""
+      if txt.startsWith "«" && txt.contains "\"" && !txt.contains "~"
       then
         let inner := strDF (strDL txt)
         let elems := (inner.splitOn ",").map (fun q => strDL (strDF (strTW q)))
         ``(E2.const (listOfStrings $(quote («String».intercalate "\x1f" elems))))
+      else if txt.startsWith "«" && txt.endsWith "»"
+      then
+        /- `« a, b »` without quotes: a List of VARIABLES.
+           (Singleton `« hint »` is the spec's arguments-List form.) -/
+        let inner0 := strDF (strDL txt)
+        let inner := «String».ofList ((inner0.toList.drop 1).dropLast)
+        let elems := (String.splitOn inner ",").map strTW
+        ``(E2.listE (listOfNvs $(quote («String».intercalate "\x1f" elems))))
       else ``(E2.nv $(quote (varName x)))
   | `([e| undefined]) => ``(E2.const JSValue.undefined)
   | `([e| true]) => ``(E2.const (JSValue.boolean Bool.true))
@@ -1004,8 +1016,21 @@ def applyPrim (h : Heap) : Prim → JSValue → JSValue
 /- The transcribed-operation registry (the corpus). -/
 abbrev AOReg := List («String» × (List «String» × Prog))
 
+mutual
+def evalListE (h : Heap) (env : Env) : List E2 → Option (List JSValue)
+  | [] => some []
+  | e :: rest =>
+      match evalE2 h env e, evalListE h env rest with
+      | some v, some vs => some (v :: vs)
+      | _, _ => none
+termination_by es => sizeOf es
+
 def evalE2 (h : Heap) (env : Env) : E2 → Option JSValue
   | .nv n => lookup env n
+  | .listE es =>
+      match evalListE h env es with
+      | some vs => some (.listV vs)
+      | none => none
   | .nat n => some (.number n.toFloat)
   | .const v => some v
   | .isObject e =>
@@ -1061,6 +1086,8 @@ def evalE2 (h : Heap) (env : Env) : E2 → Option JSValue
       | some .undefined => some (.boolean Bool.false)
       | some _ => some (.boolean Bool.true)
       | none => none
+termination_by e => sizeOf e
+end
 
 def evalP2 : P2 → Option JSValue
   | .call _ _ _ => some .undefined      -- stub until Call/heap
@@ -1206,6 +1233,10 @@ def kstep (reg : AOReg) : KM → KM
       .krun (.kEvalS (.ee e') [] [] (.kPrim (.pIsType ty) (.kSpine as rs k)) :: st) env stack
   | .krun (.kEvalS (.ee (.isNull e')) as rs k :: st) env stack =>
       .krun (.kEvalS (.ee e') [] [] (.kPrim .pIsNull (.kSpine as rs k)) :: st) env stack
+  | .krun (.kEvalS (.ee (.listE es)) as rs k :: st) env stack =>
+      match evalListE emptyHeap env es with
+      | some vs => .krun (.kEvalS (.ev (.listV vs)) as rs k :: st) env stack
+      | none => .kfell
   | .krun (.kEvalS (.ee (.imeth _ _ _)) as rs k :: st) env stack =>
       .krun (.kEvalS (.ee (.nv "IMETH-NATIVE")) as rs k :: st) env stack
   | .krun (.kEvalS (.ee (.ifield nm e')) as rs k :: st) env stack =>
@@ -1372,6 +1403,7 @@ inductive Rt2 where
   | kTest
   | kUnwrap
   | kIMeth (name : «String») (n : Nat)
+  | kMkList (n : Nat)
   | kNewSlot (slotName : «String»)
   | kRepeatWhile (c : E2) (body : List Rt2)
   | kRepeatTest (c : E2) (body : List Rt2)
@@ -1387,9 +1419,13 @@ structure Fr where
 
 inductive FM where
   | frames (fs : List Fr) (heap : Heap) (nextLoc : Nat)
-  | fdone (v : JSValue)
-  | fell
+  | fdone (v : JSValue) (fs : List Fr) (heap : Heap) (nextLoc : Nat) (n : Nat)
+  | fell (fs : List Fr) (heap : Heap) (nextLoc : Nat) (n : Nat)
   deriving Repr
+  -- fdone/fell RETAIN the final machine state and count further
+  -- (absorbing) transitions: `step (done k n) = done k (1+n)`. This is
+  -- what makes step-indexed composition lemmas expressible (issue #2)
+  -- and gives fell a debugging payload (issue #3).
 
 /- Statement compilation (expressions stay as data; only statements
    become instruction sequences). -/
@@ -1429,21 +1465,20 @@ def compileSteps : List Step → List Rt2
 def fmOf (p : Prog) : FM := .frames [⟨compileSteps p, [], []⟩] emptyHeap 0
 
 def fstep (reg : AOReg) : FM → FM
-  | .fdone v => .fdone v
-  | .fell => .fell
-  | .frames [] _ _ => .fell
-  | .frames (⟨[], _, _⟩ :: _) _ _ => .fell    -- fell through without kRet
+  | .fdone v fs heap nl n => .fdone v fs heap nl (n + 1)
+  | .fell fs heap nl n => .fell fs heap nl (n + 1)
+  | .frames [] heap nl => .fell [] heap nl 0
   | .frames (f :: fs) heap nl =>
     let done : List Fr → FM := fun fs' => .frames fs' heap nl
     match f.stmts, f.env, f.eval with
-    | [], _, _ => .fell
+    | [], _, _ => .fell (f :: fs) heap nl 0    -- fell through without kRet
     | .kEval (.const v) :: rest, env, eval => done (⟨rest, env, v :: eval⟩ :: fs)
     | .kEval (.nat n) :: rest, env, eval =>
         done (⟨rest, env, .number n.toFloat :: eval⟩ :: fs)
     | .kEval (.nv x) :: rest, env, eval =>
         match lookup env x with
         | some v => done (⟨rest, env, v :: eval⟩ :: fs)
-        | none => .fell                        -- unbound: stuck, loudly
+        | none => .fell (f :: fs) heap nl 0     -- unbound: stuck, loudly
     | .kEval (.varNotPresent x) :: rest, env, eval =>
         done (⟨rest, env, .boolean (lookup env x).isNone :: eval⟩ :: fs)
     | .kEval (.isObject e) :: rest, _, _ =>
@@ -1484,15 +1519,17 @@ def fstep (reg : AOReg) : FM → FM
         done (⟨args.map Rt2.kEval
                     ++ [.kCall fname args.length, .kTest, .kIte [.kRet] [.kUnwrap]]
                     ++ rest, env, eval⟩ :: fs)
+    | .kEval (.listE es) :: rest, env, eval =>
+        done (⟨es.map Rt2.kEval ++ [.kMkList es.length] ++ rest, env, eval⟩ :: fs)
     | .kPrim1 p :: rest, env, v :: eval =>
         done (⟨rest, env, applyPrim heap p v :: eval⟩ :: fs)
-    | .kPrim1 _ :: _, _, [] => .fell            -- stack underflow: loud
+    | .kPrim1 _ :: _, _, [] => .fell (f :: fs) heap nl 0  -- stack underflow: loud
     | .kPrimQ op :: rest, env, eval =>
         match evalP2 op with
         | some v => done (⟨rest, env, .compl Bool.false v :: eval⟩ :: fs)
-        | none => .fell
+        | none => .fell (f :: fs) heap nl 0
     | .kCall fname n :: rest, env, eval =>
-        if eval.length < n then .fell
+        if eval.length < n then .fell (f :: fs) heap nl 0
         else
           let popped := eval.take n
           let older := eval.drop n
@@ -1505,29 +1542,29 @@ def fstep (reg : AOReg) : FM → FM
               -- evaluate natively (stub: undefined), all others loud
               if ["GetV", "Get", "Call", "GetMethod", "OrdinaryToPrimitive"].contains fname
               then done (⟨rest, env, .compl Bool.false JSValue.undefined :: older⟩ :: fs)
-              else .fell
+              else .fell (f :: fs) heap nl 0
     | .kSet x :: rest, env, v :: eval => done (⟨rest, (x, v) :: env, eval⟩ :: fs)
-    | .kSet _ :: _, _, [] => .fell
+    | .kSet _ :: _, _, [] => .fell (f :: fs) heap nl 0
     | .kPop :: rest, env, _ :: eval => done (⟨rest, env, eval⟩ :: fs)
-    | .kPop :: _, _, [] => .fell
+    | .kPop :: _, _, [] => .fell (f :: fs) heap nl 0
     | .kIte t e :: rest, env, .boolean b :: eval =>
         done (⟨(if b then t else e) ++ rest, env, eval⟩ :: fs)
-    | .kIte _ _ :: _, _, _ => .fell                -- non-bool condition: loud
+    | .kIte _ _ :: _, _, _ => .fell (f :: fs) heap nl 0  -- non-bool condition: loud
     | .kAssert :: rest, env, .boolean Bool.true :: eval => done (⟨rest, env, eval⟩ :: fs)
-    | .kAssert :: _, _, _ => .fell                 -- failed assert: loud
+    | .kAssert :: _, _, _ => .fell (f :: fs) heap nl 0   -- failed assert: loud
     | .kRet :: _, _, v :: _ =>
         match fs with
         | caller :: fs' => done (⟨caller.stmts, caller.env, v :: caller.eval⟩ :: fs')
-        | [] => .fdone v
+        | [] => .fdone v [] heap nl 0
     | .kRet :: _, _, [] =>
         /- return with nothing on the eval stack: allowed, no push -/
         match fs with
         | caller :: fs' => done (⟨caller.stmts, caller.env, caller.eval⟩ :: fs')
-        | [] => .fell
+        | [] => .fell (f :: fs) heap nl 0
     | .kIMeth nm n :: rest, env, eval =>
         -- stack: [argn..arg1, recv, ...older] (receiver pushed FIRST,
         -- args on top; receiver at index n from the top)
-        if eval.length < n + 1 then .fell
+        if eval.length < n + 1 then .fell (f :: fs) heap nl 0
         else
           let argsw := eval.take n
           let recvv := eval.getD n JSValue.undefined
@@ -1537,22 +1574,22 @@ def fstep (reg : AOReg) : FM → FM
               match findAO reg "OrdinaryGet" with
               | some (ps, body) =>
                   done (⟨compileSteps body, ps.zip [recvv, p, rcv], []⟩ :: ⟨rest, env, older⟩ :: fs)
-              | none => .fell
+              | none => .fell (f :: fs) heap nl 0
           | "GetOwnProperty", [p], .obj loc =>
               match heap loc with
               | some o =>
                   let k := match p with | .str s => PKey.str s | _ => PKey.str "?"
                   let d := (o.props.find? (fun (pk, _) => pk == k)).map (·.2)
                   done (⟨rest, env, .compl Bool.false (d.map JSValue.descV |>.getD JSValue.undefined) :: older⟩ :: fs)
-              | none => .fell
+              | none => .fell (f :: fs) heap nl 0
           | "GetPrototypeOf", [], .obj loc =>
               match heap loc with
               | some o =>
                   let pv := match o.proto with | some l => .obj l | none => JSValue.null
                   done (⟨rest, env, .compl Bool.false pv :: older⟩ :: fs)
-              | none => .fell
-          | _, _, _ => .fell              -- unknown method / non-object receiver: loud
-    | .kNewSlot _ :: _, _, [] => .fell
+              | none => .fell (f :: fs) heap nl 0
+          | _, _, _ => .fell (f :: fs) heap nl 0              -- unknown method / non-object receiver: loud
+    | .kNewSlot _ :: _, _, [] => .fell (f :: fs) heap nl 0
     | .kNewSlot sn :: rest, env, v :: eval =>
         match slotOfName sn with
         | some ord =>
@@ -1563,25 +1600,30 @@ def fstep (reg : AOReg) : FM → FM
               | .frames fs' heap nl' =>
                   .frames fs' (heapSet heap nl obj) (nl + 1)
               | m => m
-        | none => .fell
+        | none => .fell (f :: fs) heap nl 0
+    | .kMkList n :: rest, env, eval =>
+        if eval.length < n then .fell (f :: fs) heap nl 0
+        else done (⟨rest, env, .listV (eval.take n).reverse :: eval.drop n⟩ :: fs)
     | .kTest :: rest, env, .compl abrupt v :: eval =>
         -- peek: the completion STAYS under the pushed boolean
         done (⟨rest, env, .boolean abrupt :: .compl abrupt v :: eval⟩ :: fs)
-    | .kTest :: _, _, _ => .fell          -- top not a completion: loud
+    | .kTest :: _, _, _ => .fell (f :: fs) heap nl 0          -- top not a completion: loud
     | .kUnwrap :: rest, env, .compl _ v :: eval =>
         done (⟨rest, env, v :: eval⟩ :: fs)
-    | .kUnwrap :: _, _, _ => .fell        -- top not a completion: loud
+    | .kUnwrap :: _, _, _ => .fell (f :: fs) heap nl 0        -- top not a completion: loud
     | .kRepeatWhile c body :: rest, env, eval =>
         done (⟨.kEval c :: .kRepeatTest c body :: rest, env, eval⟩ :: fs)
     | .kRepeatTest c body :: rest, env, .boolean b :: eval =>
-        done (⟨(if b then body ++ [.kRepeatWhile c body] else rest), env, eval⟩ :: fs)
-    | .kRepeatTest _ _ :: _, _, _ => .fell
+        -- loop continuation must PRESERVE rest (issue #1): the
+        -- re-armed kRepeatWhile re-enters with the same tail.
+        done (⟨(if b then body ++ [.kRepeatWhile c body] ++ rest else rest), env, eval⟩ :: fs)
+    | .kRepeatTest _ _ :: _, _, _ => .fell (f :: fs) heap nl 0
     | .kForStart x body :: rest, env, .listV [] :: eval =>
         done (⟨rest, env, eval⟩ :: fs)
     | .kForStart x body :: rest, env, .listV (v :: vs) :: eval =>
         done (⟨.kEval (.const v) :: .kSet x :: body
                     ++ [.kForBody x vs body] ++ rest, env, eval⟩ :: fs)
-    | .kForStart _ _ :: _, _, _ => .fell           -- For each over non-List: loud
+    | .kForStart _ _ :: _, _, _ => .fell (f :: fs) heap nl 0           -- For each over non-List: loud
     | .kForBody x (v :: vs) body :: rest, env, eval =>
         done (⟨.kEval (.const v) :: .kSet x :: body
                     ++ [.kForBody x vs body] ++ rest, env, eval⟩ :: fs)
@@ -1592,10 +1634,10 @@ def fsteps (reg : AOReg) : Nat → FM → FM
   | n + 1, m => fsteps reg n (fstep reg m)
 
 def sameOutcome2 : SState → FM → Bool
-  | .sret v, .fdone (.compl Bool.false v') => v == v'
-  | .sret v, .fdone v' => v == v'          -- bare value (never through a call)
-  | .sthrown, .fdone (.compl Bool.true _) => Bool.true
-  | .sfell, .fell => Bool.true
+  | .sret v, .fdone (.compl Bool.false v') _ _ _ _ => v == v'
+  | .sret v, .fdone v' _ _ _ _ => v == v'   -- bare value (never through a call)
+  | .sthrown, .fdone (.compl Bool.true _) _ _ _ _ => Bool.true
+  | .sfell, .fell _ _ _ _ => Bool.true
   | _, _ => Bool.false
 
 def agree2 (reg : AOReg) (p : Prog) : Bool :=
@@ -1604,3 +1646,273 @@ def agree2 (reg : AOReg) (p : Prog) : Bool :=
 def ftrace2 (reg : AOReg) : Nat → FM → List FM
   | 0, _ => []
   | n + 1, m => m :: ftrace2 reg n (fstep reg m)
+
+/- ## Static typing of compiled instruction sequences
+   Types classify the PAYLOAD; delivery is always a completion.
+   `typeOfE (call f as)`: check each argument against `paramTys(f)`,
+   push `retTy(f)` — the runtime self-test (propagate-or-unwrap) is
+   implicit in that one rule. -/
+
+inductive STy where
+  | raw | compl | unit
+  deriving Repr, BEq
+
+abbrev SigTable := List («String» × (List STy × STy))
+
+def sigFind : SigTable → «String» → Option (List STy × STy)
+  | [], _ => none
+  | (n, s) :: rest, f => if n == f then some s else sigFind rest f
+
+abbrev TyEnv := List («String» × STy)
+
+def zipTy : List «String» → List STy → TyEnv
+  | [], [] => []
+  | x :: xs, t :: ts => (x, t) :: zipTy xs ts
+  | _, _ => []
+
+def tyLookup : TyEnv → «String» → Option STy
+  | [], _ => none
+  | (n, t) :: r, x => if n == x then some t else tyLookup r x
+
+def mopArity : «String» → Option Nat   -- MOP internal methods (receiver excluded)
+  | "Get" => some 2
+  | "GetOwnProperty" => some 1
+  | "GetPrototypeOf" => some 0
+  | _ => none
+
+mutual
+def typesOf (sigs : SigTable) (Γ : TyEnv) : List E2 → Option (List STy)
+  | [] => some []
+  | x :: xs =>
+      match typeOfE sigs Γ x, typesOf sigs Γ xs with
+      | some t, some ts => some (t :: ts)
+      | _, _ => none
+termination_by es => sizeOf es
+
+def typeOfE (sigs : SigTable) (Γ : TyEnv) : E2 → Option STy
+  | .nv x => tyLookup Γ x
+  | .nat _ => some .raw
+  | .const _ => some .raw
+  | .varNotPresent _ => some .raw
+  | .call f as =>
+      match sigFind sigs f with
+      | some (ps, ret) =>
+          -- exact match, or the trailing parameter is optional
+          -- (spec: Call(F, V) elides the arguments List)
+          if typesOf sigs Γ as == some ps
+             || (typesOf sigs Γ as).isSome
+                && as.length == ps.length - 1
+                && (typesOf sigs Γ as).getD [] == ps.dropLast
+          then some ret else none
+      | none => none
+  | .imeth nm recv args =>
+      match mopArity nm with
+      | some k =>
+          if args.length == k then
+            match typeOfE sigs Γ recv, typesOf sigs Γ args with
+            | some .raw, some ts =>
+                if ts.all (fun t => t == STy.raw) then some .raw else none
+            | _, _ => none
+          else none
+      | none => none
+  | .listE es =>
+      match typesOf sigs Γ es with
+      | some ts => if ts.all (fun t => t == STy.raw) then some .raw else none
+      | none => none
+  | .isObject x | .isNotObject x | .isNotUndefined x | .hasCall x | .hasCtor x
+  | .isU x | .isBoolVal _ x | .isStrVal _ x | .isNullOrUnd x | .isNull x
+  | .isType _ x | .hasField _ x | .ifield _ x =>
+      if typeOfE sigs Γ x == some .raw then some .raw else none
+termination_by e => sizeOf e
+end
+
+/- Result of checking a path: exited via kRet, fell through with the
+   given abstract stack, or rejected AT an instruction with a reason
+   and the abstract stack at that point. -/
+inductive TCResult where
+  | exits
+  | falls (σ : List STy) (Γ : TyEnv)
+  | reject (site : Rt2) (why : «String») (σ : List STy)
+  deriving Repr
+
+/- Branch join for variable types: UNION (a binding from either branch
+   survives; unbound-on-some-path stays a loud runtime concern, not a
+   protocol violation). Rebinding the same name at a different type is
+   a genuine protocol smell and rejects. -/
+def ΓUnion : TyEnv → TyEnv → Option TyEnv
+  | [], Γ₂ => some Γ₂
+  | (n, t) :: r, Γ₂ =>
+      match tyLookup Γ₂ n with
+      | some t' => if t == t' then ΓUnion r Γ₂ else none
+      | none => match ΓUnion r Γ₂ with
+        | some Γ' => some ((n, t) :: Γ')
+        | none => none
+
+def popTy (t : STy) (σ : List STy) : Option (List STy) :=
+  match σ with
+  | t' :: σ' => if t == t' then some σ' else none
+  | [] => none
+
+def primSig (p : Prim) : STy × STy :=
+  match p with
+  | .pWrapC | .pThrowC => (.raw, .compl)
+  | _ => (.raw, .raw)
+
+/- `checkSeq sigs fuel Γ is σ`: walk instruction list `is` with
+   variable types Γ and abstract stack σ. -/
+def checkSeq : SigTable → Nat → TyEnv → List Rt2 → List STy → TCResult
+  | _, _, Γ, [], σ => .falls σ Γ
+  | _, 0, _, i :: _, σ => .reject i "fuel exhausted" σ
+  | sigs, fuel + 1, Γ, .kEval e :: rest, σ =>
+      match typeOfE sigs Γ e with
+      | some t => checkSeq sigs fuel Γ rest (t :: σ)
+      | none => .reject (.kEval e) "ill-typed expression (unbound variable, unknown operation, or argument type mismatch)" σ
+  | sigs, fuel + 1, Γ, .kPrim1 p :: rest, σ =>
+      let (tin, tout) := primSig p
+      match popTy tin σ with
+      | some σ' => checkSeq sigs fuel Γ rest (tout :: σ')
+      | none => .reject (.kPrim1 p) "prim expects a different top-of-stack type" σ
+  | sigs, fuel + 1, Γ, .kPrimQ op :: rest, σ =>
+      let subok : Bool := match op with
+        | .getMethod o _ => typeOfE sigs Γ o == some .raw
+        | .getV v p =>
+            typeOfE sigs Γ v == some .raw && typeOfE sigs Γ p == some .raw
+        | .call fn t x =>
+            [fn, t, x].all (fun e => typeOfE sigs Γ e == some .raw)
+        | .ordinaryToPrimitive o h =>
+            typeOfE sigs Γ o == some .raw && typeOfE sigs Γ h == some .raw
+      if subok then checkSeq sigs fuel Γ rest (.compl :: σ)
+      else .reject (.kPrimQ op) "P2 operand ill-typed" σ
+  | sigs, fuel + 1, Γ, .kCall f n :: rest, σ =>
+      match sigFind sigs f with
+      | some (ps, _) =>
+          if ps.length == n then
+            match popTyN n .raw σ with
+            | some σ' => checkSeq sigs fuel Γ rest (.compl :: σ')
+            | none => .reject (.kCall f n) "call: argument stack mismatch" σ
+          else .reject (.kCall f n) "call arity does not match signature" σ
+      | none => .reject (.kCall f n) "no signature for callee" σ
+  | sigs, fuel + 1, Γ, .kSet x :: rest, σ =>
+      match σ with
+      | t :: σ' => checkSeq sigs fuel ((x, t) :: Γ) rest σ'
+      | [] => .reject (.kSet x) "kSet on empty stack" σ
+  | sigs, fuel + 1, Γ, .kPop :: rest, σ =>
+      match σ with
+      | _ :: σ' => checkSeq sigs fuel Γ rest σ'
+      | [] => .reject .kPop "kPop on empty stack" σ
+  | sigs, fuel + 1, Γ, .kIte t e :: rest, σ =>
+      match popTy .raw σ with
+      | none => .reject (.kIte t e) "kIte: condition is not raw" σ
+      | some σ' =>
+          let join (r₁ r₂ : TCResult) : TCResult :=
+            match r₁, r₂ with
+            | .reject site why s, _ => .reject site why s
+            | _, .reject site why s => .reject site why s
+            | .exits, r | r, .exits => r
+            | .falls σ₁ Γ₁, .falls σ₂ Γ₂ =>
+                if σ₁ == σ₂ then
+                  match ΓUnion Γ₁ Γ₂ with
+                  | some Γⱼ => .falls σ₁ Γⱼ
+                  | none => .reject (.kIte t e) "branches bind a variable at different types" σ'
+                else .reject (.kIte t e) "branches join with different stacks" σ'
+          match join (checkSeq sigs fuel Γ t σ') (checkSeq sigs fuel Γ e σ') with
+          | .exits => .exits
+          | .falls σⱼ Γⱼ => checkSeq sigs fuel Γⱼ rest σⱼ
+          | r => r
+  | sigs, fuel + 1, Γ, .kAssert :: rest, σ =>
+      match popTy .raw σ with
+      | some σ' => checkSeq sigs fuel Γ rest σ'
+      | none => .reject .kAssert "kAssert: top is not raw" σ
+  | _, _, _, .kRet :: _, σ =>
+      match σ with
+      | .compl :: _ => .exits        -- value return: wire format is compl
+      | [] => .exits                  -- unit return (no value)
+      | _ => .reject .kRet "kRet: top of stack is not a completion" σ
+  | sigs, fuel + 1, Γ, .kTest :: rest, σ =>
+      match popTy .compl σ with
+      | some σ' => checkSeq sigs fuel Γ rest (.raw :: .compl :: σ')
+      | none => .reject .kTest "kTest: top of stack is not a completion" σ
+  | sigs, fuel + 1, Γ, .kUnwrap :: rest, σ =>
+      match popTy .compl σ with
+      | some σ' => checkSeq sigs fuel Γ rest (.raw :: σ')
+      | none => .reject .kUnwrap "kUnwrap: top of stack is not a completion" σ
+  | sigs, fuel + 1, Γ, .kIMeth nm n :: rest, σ =>
+      if mopArity nm == some n then
+        match popTyN (n + 1) .raw σ with
+        | some σ' => checkSeq sigs fuel Γ rest (.compl :: σ')
+        | none => .reject (.kIMeth nm n) "MOP dispatch: receiver/args not raw" σ
+      else .reject (.kIMeth nm n) "unknown MOP method or wrong arity" σ
+  | sigs, fuel + 1, Γ, .kMkList n :: rest, σ =>
+      match popTyN n .raw σ with
+      | some σ' => checkSeq sigs fuel Γ rest (.raw :: σ')
+      | none => .reject (.kMkList n) "kMkList: elements not raw" σ
+  | sigs, fuel + 1, Γ, .kNewSlot sn :: rest, σ =>
+      match popTy .raw σ with
+      | some σ' => checkSeq sigs fuel Γ rest (.raw :: σ')
+      | none => .reject (.kNewSlot sn) "kNewSlot on non-raw" σ
+  | sigs, fuel + 1, Γ, .kRepeatWhile c body :: rest, σ =>
+      if typeOfE sigs Γ c != some .raw
+      then .reject (.kRepeatWhile c body) "loop condition is not raw" σ
+      else checkLoopBody sigs fuel Γ body σ rest
+  | sigs, fuel + 1, Γ, .kRepeatTest c body :: rest, σ =>
+      -- pops the boolean verdict: loop (body neutral) or fall through
+      match popTy .raw σ with
+      | none => .reject (.kRepeatTest c body) "loop verdict is not raw" σ
+      | some σ' => checkLoopBody sigs fuel Γ body σ' rest
+  | sigs, fuel + 1, Γ, .kForStart x body :: rest, σ =>
+      match popTy .raw σ with
+      | none => .reject (.kForStart x body) "for-each over non-raw" σ
+      | some σ' => checkLoopBody sigs fuel ((x, .raw) :: Γ) body σ' rest
+  | sigs, fuel + 1, Γ, .kForBody x _ body :: rest, σ =>
+      checkLoopBody sigs fuel ((x, .raw) :: Γ) body σ rest
+where
+  popTyN : Nat → STy → List STy → Option (List STy)
+    | 0, _, σ => some σ
+    | k + 1, t, σ => match popTy t σ with
+      | some σ' => popTyN k t σ'
+      | none => none
+  checkLoopBody (sigs : SigTable) (fuel : Nat) (Γ : TyEnv)
+      (body : List Rt2) (σ : List STy) (rest : List Rt2) : TCResult :=
+    -- loop bodies: stack-neutral (loop invariant) or exit via kRet;
+    -- bindings made in the body persist after the loop (kSet is frame
+    -- state at runtime)
+    match checkSeq sigs fuel Γ body σ with
+    | r@(.reject ..) => r
+    | .exits => .exits
+    | .falls σ' Γ' =>
+        if σ' == σ then checkSeq sigs fuel Γ' rest σ
+        else .reject (body.head?.getD .kRet) "loop body is not stack-neutral" σ'
+
+/- A frame is well typed if every path exits via kRet (falling off the
+   end is the runtime's loud `fell`). -/
+def typecheckSeq (sigs : SigTable) (fuel : Nat) (Γ : TyEnv) (seq : List Rt2) : TCResult :=
+  checkSeq sigs fuel Γ seq []
+
+/- Check one AO: params get their declared types from the signature
+   table; arity must agree with the registry. Result: none = well
+   typed; some r = the first rejection (with reason and stack). -/
+def typecheckAO (sigs : SigTable) (fuel : Nat)
+    (name : «String») (params : List «String») (body : List Rt2) : Option TCResult :=
+  match sigFind sigs name with
+  | none =>
+      some (.reject (body.head?.getD .kRet)
+        (name ++ " has no entry in the signature table") [])
+  | some (paramTys, _) =>
+      if params.length != paramTys.length then
+        some (.reject (body.head?.getD .kRet)
+          (name ++ ": registry arity ≠ signature arity") [])
+      else match typecheckSeq sigs fuel (zipTy params paramTys) body with
+        | .exits => none
+        | r => some r
+
+/- First ill-typed AO in the registry, by name. none = all well typed. -/
+def typecheckReg (sigs : SigTable) (fuel : Nat) (reg : AOReg) : Option («String» × TCResult) :=
+  match reg with
+  | [] => none
+  | (name, (params, prog)) :: rest =>
+      match typecheckAO sigs fuel name params (compileSteps prog) with
+      | some r => some (name, r)
+      | none => typecheckReg sigs fuel rest
+
+def typecheckRegOk (sigs : SigTable) (fuel : Nat) (reg : AOReg) : Bool :=
+  (typecheckReg sigs fuel reg).isNone

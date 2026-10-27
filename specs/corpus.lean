@@ -268,6 +268,17 @@ def lookupDemoF : List FStep := [alg|
   2. Return m.
 ]
 
+/- Issue #1 regression: kRepeatTest must preserve `rest` across loop
+   iterations. The loop body binds "done" on its first (only) run, the
+   condition then goes false, and the machine must fall THROUGH to the
+   return of 42 — before the fix, rest was dropped at the first
+   iteration and the machine felled. -/
+def loopBody : List Rt2 := [.kEval (.const JSValue.undefined), .kSet "done"]
+def loopRest : List Rt2 :=
+  [.kEval (.const (JSValue.number 42)), .kPrim1 .pWrapC, .kRet]
+#eval fsteps theReg 100
+    (.frames [⟨.kRepeatWhile (E2.varNotPresent "done") loopBody :: loopRest, [], []⟩]
+      emptyHeap 0)
 /- GetMethod on a non-callable, non-undefined value: spec says
    step 4 throws a TypeError (compl true undefined). -/
 def getMethodDemoF : List FStep := [alg|
@@ -288,5 +299,57 @@ def demoHeap : Heap :=
         [("input", .obj 0), ("propertyKey", .str "x")], []⟩] demoHeap 1)
 #eval fsteps theReg
     1000 (.frames [⟨compileSteps (build getMethodDemoF),
-        [("input", .obj 0), ("propertyKey", .str "x")], []⟩] demoHeap 1)
+         [("input", .obj 0), ("propertyKey", .str "x")], []⟩] demoHeap 1)
+
+/- ===== static typing: signature table (payload types) =====
+   Delivery is always a completion; the table types the payload.
+   To be extracted from spec.html headers eventually (diff_spec-style). -/
+def corpusSigs : SigTable := [
+  ("IsCallable",          ([.raw], .raw)),
+  ("IsConstructor",       ([.raw], .raw)),
+  ("IsDataDescriptor",    ([.raw], .raw)),
+  ("IsAccessorDescriptor",([.raw], .raw)),
+  ("OrdinaryToPrimitive", ([.raw, .raw], .raw)),
+  ("ToPrimitive",         ([.raw, .raw], .raw)),
+  ("ToObject",            ([.raw], .raw)),
+  ("GetV",                ([.raw, .raw], .raw)),
+  ("GetMethod",           ([.raw, .raw], .raw)),
+  ("OrdinaryGet",         ([.raw, .raw, .raw], .raw)),
+  -- prim-named calls the machine handles natively on registry miss:
+  ("Get",                 ([.raw, .raw], .raw)),
+  ("Call",                ([.raw, .raw, .raw], .raw))  -- trailing argsList optional (7.1.1.1 elides it)
+]
+
+/- the issue-#1 regression loop typechecks too: body neutral, cond boolean -/
+#eval typecheckSeq corpusSigs 2000 []
+    (.kRepeatWhile (E2.varNotPresent "done") loopBody :: loopRest)
+
+-- every registry body typechecks against its declared signature
+-- (prints the first rejection with reason + stack, or none)
+#eval typecheckReg corpusSigs 2000 theReg
+#eval typecheckRegOk corpusSigs 2000 theReg
+-- the demos typecheck as frames (Γ = params, or empty for top-level)
+#eval typecheckSeq corpusSigs 2000 [("input", .raw), ("propertyKey", .raw)] (compileSteps (build lookupDemoF))
+#eval typecheckSeq corpusSigs 2000 [("input", .raw), ("propertyKey", .raw)] (compileSteps (build getMethodDemoF))
+
+/- negative tests: the two historical bugs must be REJECTED.
+   Bug 1 (missing rewrap): kUnwrap leaves raw, kRet demands compl. -/
+def bug1 : List Rt2 :=
+  [.kPrimQ (P2.getV (E2.nv "v") (E2.nv "p")), .kTest,
+   .kIte [.kRet] [.kUnwrap, .kRet]]
+#eval typecheckSeq corpusSigs 2000 [("v", .raw), ("p", .raw)] bug1
+/- Bug 2 (double self-test): kEval of a call yields the payload type
+   (raw), a stray kTest demands a completion. -/
+def bug2 : List Rt2 :=
+  [.kEval (E2.call "GetV" [E2.nv "v", E2.nv "p"]), .kTest,
+   .kIte [.kRet] [.kUnwrap, .kPrim1 .pWrapC, .kRet]]
+#eval typecheckSeq corpusSigs 2000 [("v", .raw), ("p", .raw)] bug2
+/- Signature-driven argument checking: IteratorClose-style param
+   (raw, compl). -/
+def closeSigs : SigTable := [("FakeClose", ([.raw, .compl], .raw))]
+def badArg : List Rt2 :=
+  [.kEval (E2.call "FakeClose" [E2.nv "r", E2.nv "c"]), .kPrim1 .pWrapC, .kRet]
+def goodArg : List Rt2 := badArg
+#eval typecheckSeq closeSigs 2000 [("r", .raw), ("c", .raw)] badArg
+#eval typecheckSeq closeSigs 2000 [("r", .raw), ("c", .compl)] goodArg
 
