@@ -242,15 +242,15 @@ def varName (x : TSyntax `var) : «String» :=
 def listOfStrings (s : «String») : JSValue :=
   .listV ((s.splitOn "\x1f").map JSValue.str)
 
-def listOfNvs (s : «String») : List E2 :=
-  ((s.splitOn "\x1f").map E2.nv)
+def listOfNvs (s : «String») : List Expr :=
+  ((s.splitOn "\x1f").map Expr.nv)
 
 open Lean in
 macro_rules
   | `([e| $f:aoName ( )]) =>
-      ``(E2.call $(quote (aoNameOf f)) [])
+      ``(Expr.call $(quote (aoNameOf f)) [])
   | `([e| $f:aoName ( $as:callArgs )]) =>
-      ``(E2.call $(quote (aoNameOf f)) [ca| $as])
+      ``(Expr.call $(quote (aoNameOf f)) [ca| $as])
   | `([e| $x:var]) =>
       /- A « … » token lexes as ONE bracketed identifier. Quoted
          elements (« "a", "b" ») become a spec-List literal; a single
@@ -276,7 +276,7 @@ macro_rules
       then
         let inner := strDF (strDL txt)
         let elems := (inner.splitOn ",").map (fun q => strDL (strDF (strTW q)))
-        ``(E2.const (listOfStrings $(quote («String».intercalate "\x1f" elems))))
+        ``(Expr.const (listOfStrings $(quote («String».intercalate "\x1f" elems))))
       else if txt.startsWith "«" && txt.endsWith "»"
       then
         /- `« a, b »` without quotes: a List of VARIABLES.
@@ -284,58 +284,58 @@ macro_rules
         let inner0 := strDF (strDL txt)
         let inner := «String».ofList ((inner0.toList.drop 1).dropLast)
         let elems := (String.splitOn inner ",").map strTW
-        ``(E2.listE (listOfNvs $(quote («String».intercalate "\x1f" elems))))
-      else ``(E2.nv $(quote (varName x)))
-  | `([e| undefined]) => ``(E2.const JSValue.undefined)
-  | `([e| true]) => ``(E2.const (JSValue.boolean Bool.true))
-  | `([e| false]) => ``(E2.const (JSValue.boolean Bool.false))
-  | `([e| $n:num]) => ``(E2.nat ($n : Nat))
-  | `([e| $n:scientific]) => ``(E2.nat $(quote (sciNat n)))
-  | `([e| $s:str]) => ``(E2.const (JSValue.str $s))
+        ``(Expr.listE (listOfNvs $(quote («String».intercalate "\x1f" elems))))
+      else ``(Expr.nv $(quote (varName x)))
+  | `([e| undefined]) => ``(Expr.const JSValue.undefined)
+  | `([e| true]) => ``(Expr.const (JSValue.boolean Bool.true))
+  | `([e| false]) => ``(Expr.const (JSValue.boolean Bool.false))
+  | `([e| $n:num]) => ``(Expr.nat ($n : Nat))
+  | `([e| $n:scientific]) => ``(Expr.nat $(quote (sciNat n)))
+  | `([e| $s:str]) => ``(Expr.const (JSValue.str $s))
   | `([e| $r:algExpr .[[ $m:aoName ] ] ( $as:callArgs )]) =>
-      ``(E2.imeth $(quote (aoNameOf m)) [e| $r] [ca| $as])
+      ``(Expr.imeth $(quote (aoNameOf m)) [e| $r] [ca| $as])
   | `([e| $r:algExpr .[[ $m:aoName ] ]]) =>
-      ``(E2.ifield $(quote (aoNameOf m)) [e| $r])
-  | `([e| ~ string ~]) => ``(E2.const (JSValue.str "string"))
-  | `([e| ~ number ~]) => ``(E2.const (JSValue.str "number"))
-  | `([e| ~ $v:ident ~]) => ``(E2.const (JSValue.str $(quote (toString v.getId))))
-  | `([e| $x:var is null]) => ``(E2.isNull (E2.nv $(quote (varName x))))
+      ``(Expr.ifield $(quote (aoNameOf m)) [e| $r])
+  | `([e| ~ string ~]) => ``(Expr.const (JSValue.str "string"))
+  | `([e| ~ number ~]) => ``(Expr.const (JSValue.str "number"))
+  | `([e| ~ $v:ident ~]) => ``(Expr.const (JSValue.str $(quote (toString v.getId))))
+  | `([e| $x:var is null]) => ``(Expr.isNull (Expr.nv $(quote (varName x))))
   | `([e| $e:algExpr is either undefined or null]) =>
-      ``(E2.isNullOrUnd [e| $e])
+      ``(Expr.isNullOrUnd [e| $e])
   | `([e| $e:algExpr is string]) =>
-      ``(E2.isStrVal "string" [e| $e])
+      ``(Expr.isStrVal "string" [e| $e])
   | `([e| $e:algExpr is number]) =>
-      ``(E2.isStrVal "number" [e| $e])
+      ``(Expr.isStrVal "number" [e| $e])
   | `([e| $e:algExpr is ~ string ~]) =>
-      ``(E2.isStrVal "string" [e| $e])
+      ``(Expr.isStrVal "string" [e| $e])
   | `([e| $e:algExpr is ~ number ~]) =>
-      ``(E2.isStrVal "number" [e| $e])
+      ``(Expr.isStrVal "number" [e| $e])
   | `([e| $e:algExpr is ~ $v:ident ~]) =>
-      ``(E2.isStrVal $(quote (toString v.getId)) [e| $e])
+      ``(Expr.isStrVal $(quote (toString v.getId)) [e| $e])
   | `([e| $e:algExpr has a [ [$m:aoName ] ] field]) =>
-      ``(E2.hasField $(quote (aoNameOf m)) [e| $e])
-  | `([e| $e:algExpr is an Object]) => ``(E2.isObject [e| $e])
-  | `([e| $e:algExpr is a Boolean]) => ``(E2.isType "Boolean" [e| $e])
-  | `([e| $e:algExpr is a Number]) => ``(E2.isType "Number" [e| $e])
-  | `([e| $e:algExpr is a String]) => ``(E2.isType "String" [e| $e])
-  | `([e| $e:algExpr is a Symbol]) => ``(E2.isType "Symbol" [e| $e])
-  | `([e| $e:algExpr is a BigInt]) => ``(E2.isType "BigInt" [e| $e])
-  | `([e| $e:algExpr is not an Object]) => ``(E2.isNotObject [e| $e])
-  | `([e| $e:algExpr is not undefined]) => ``(E2.isNotUndefined [e| $e])
-  | `([e| $e:algExpr has a [[Call]] internal method]) => ``(E2.hasCall [e| $e])
-  | `([e| $e:algExpr has a [[Construct]] internal method]) => ``(E2.hasCtor [e| $e])
-  | `([e| $e:algExpr is undefined]) => ``(E2.isU [e| $e])
-  | `([e| $e:algExpr is true]) => ``(E2.isBoolVal Bool.true [e| $e])
-  | `([e| $e:algExpr is false]) => ``(E2.isBoolVal Bool.false [e| $e])
+      ``(Expr.hasField $(quote (aoNameOf m)) [e| $e])
+  | `([e| $e:algExpr is an Object]) => ``(Expr.isObject [e| $e])
+  | `([e| $e:algExpr is a Boolean]) => ``(Expr.isType "Boolean" [e| $e])
+  | `([e| $e:algExpr is a Number]) => ``(Expr.isType "Number" [e| $e])
+  | `([e| $e:algExpr is a String]) => ``(Expr.isType "String" [e| $e])
+  | `([e| $e:algExpr is a Symbol]) => ``(Expr.isType "Symbol" [e| $e])
+  | `([e| $e:algExpr is a BigInt]) => ``(Expr.isType "BigInt" [e| $e])
+  | `([e| $e:algExpr is not an Object]) => ``(Expr.isNotObject [e| $e])
+  | `([e| $e:algExpr is not undefined]) => ``(Expr.isNotUndefined [e| $e])
+  | `([e| $e:algExpr has a [[Call]] internal method]) => ``(Expr.hasCall [e| $e])
+  | `([e| $e:algExpr has a [[Construct]] internal method]) => ``(Expr.hasCtor [e| $e])
+  | `([e| $e:algExpr is undefined]) => ``(Expr.isU [e| $e])
+  | `([e| $e:algExpr is true]) => ``(Expr.isBoolVal Bool.true [e| $e])
+  | `([e| $e:algExpr is false]) => ``(Expr.isBoolVal Bool.false [e| $e])
   | `([e| $e:algExpr is not present]) =>
       let name := match e.raw with
         | .ident _ s _ _ => s.toString
         | _ => "?"
-      ``(E2.varNotPresent $(quote name))
+      ``(Expr.varNotPresent $(quote name))
   | `([e| % $x:ident % ]) =>
-      ``(E2.const (JSValue.str $(quote ("%" ++ toString x.getId ++ "%"))))
-  | `([e| number]) => ``(E2.const (JSValue.str "number"))
-  | `([e| string]) => ``(E2.const (JSValue.str "string"))
+      ``(Expr.const (JSValue.str $(quote ("%" ++ toString x.getId ++ "%"))))
+  | `([e| number]) => ``(Expr.const (JSValue.str "number"))
+  | `([e| string]) => ``(Expr.const (JSValue.str "string"))
 
 open Lean in
 macro_rules
@@ -345,11 +345,11 @@ macro_rules
 open Lean in
 macro_rules
   | `([s| $__l:kwLet $x:var be $n:scientific]) =>
-      ``(FBody.letE $(quote (varName x)) (E2.nat $(quote (sciNat n))))
+      ``(FBody.letE $(quote (varName x)) (Expr.nat $(quote (sciNat n))))
   | `([s| $_r:kwReturn $n:scientific]) =>
-      ``(FBody.ret (E2.nat $(quote (sciNat n))))
+      ``(FBody.ret (Expr.nat $(quote (sciNat n))))
   | `([s| $_s:kwSet $x:var to $n:scientific]) =>
-      ``(FBody.setE $(quote (varName x)) (E2.nat $(quote (sciNat n))))
+      ``(FBody.setE $(quote (varName x)) (Expr.nat $(quote (sciNat n))))
   | `([s| $_l:kwLet $x:var be ? $e:algExpr .]) =>
       ``(FBody.letE $(quote (varName x)) [e| $e])
   | `([s| $_l:kwLet $x:var be $e:algExpr .]) =>
@@ -368,13 +368,13 @@ macro_rules
   | `([s| $_e:kwElse , $s:stmt]) =>
       ``(FBody.elseI [s| $s])
   | `([s| $_r:kwReturn $x:var .]) =>
-      ``(FBody.ret (E2.nv $(quote (varName x))))
+      ``(FBody.ret (Expr.nv $(quote (varName x))))
   | `([s| $_r:kwReturn undefined .]) =>
-      ``(FBody.ret (E2.const JSValue.undefined))
+      ``(FBody.ret (Expr.const JSValue.undefined))
   | `([s| $_r:kwReturn true .]) =>
-      ``(FBody.ret (E2.const (JSValue.boolean Bool.true)))
+      ``(FBody.ret (Expr.const (JSValue.boolean Bool.true)))
   | `([s| $_r:kwReturn false .]) =>
-      ``(FBody.ret (E2.const (JSValue.boolean Bool.false)))
+      ``(FBody.ret (Expr.const (JSValue.boolean Bool.false)))
   | `([s| $_r:kwReturn $e:algExpr .]) =>
       ``(FBody.ret [e| $e])
   | `([s| $_t:kwThrow .]) =>

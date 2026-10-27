@@ -60,7 +60,7 @@ def mopArity : «String» → Option Nat   -- MOP internal methods (receiver exc
   | _ => none
 
 mutual
-def typesOf (sigs : SigTable) (Γ : TyEnv) : List E2 → Option (List STy)
+def typesOf (sigs : SigTable) (Γ : TyEnv) : List Expr → Option (List STy)
   | [] => some []
   | x :: xs =>
       match typeOfE sigs Γ x, typesOf sigs Γ xs with
@@ -68,7 +68,7 @@ def typesOf (sigs : SigTable) (Γ : TyEnv) : List E2 → Option (List STy)
       | _, _ => none
 termination_by es => sizeOf es
 
-def typeOfE (sigs : SigTable) (Γ : TyEnv) : E2 → Option STy
+def typeOfE (sigs : SigTable) (Γ : TyEnv) : Expr → Option STy
   | .nv x => tyLookup Γ x
   | .nat _ => some .number
   | .const v => some (typeOfV v)
@@ -110,7 +110,7 @@ end
 inductive TCResult where
   | exits
   | falls (σ : List STy) (Γ : TyEnv)
-  | reject (site : Rt2) (why : «String») (σ : List STy)
+  | reject (site : Instr) (why : «String») (σ : List STy)
   deriving Repr
 
 /- Branch join for variable types: UNION of bindings (a binding from
@@ -145,7 +145,7 @@ def primSig (p : Prim) : STy × STy :=
 
 /- `checkSeq sigs fuel Γ is σ`: walk instruction list `is` with
    variable types Γ and abstract stack σ. -/
-def checkSeq : SigTable → Nat → TyEnv → List Rt2 → List STy → TCResult
+def checkSeq : SigTable → Nat → TyEnv → List Instr → List STy → TCResult
   | _, _, Γ, [], σ => .falls σ Γ
   | _, 0, _, i :: _, σ => .reject i "fuel exhausted" σ
   | sigs, fuel + 1, Γ, .kEval e :: rest, σ =>
@@ -244,7 +244,7 @@ where
       | some σ' => popTyN k t σ'
       | none => none
   checkLoopBody (sigs : SigTable) (fuel : Nat) (Γ : TyEnv)
-      (body : List Rt2) (σ : List STy) (rest : List Rt2) : TCResult :=
+      (body : List Instr) (σ : List STy) (rest : List Instr) : TCResult :=
     -- loop bodies: stack-neutral (loop invariant) or exit via kRet;
     -- bindings made in the body persist after the loop (kSet is frame
     -- state at runtime)
@@ -257,14 +257,14 @@ where
 
 /- A frame is well typed if every path exits via kRet (falling off the
    end is the runtime's loud `fell`). -/
-def typecheckSeq (sigs : SigTable) (fuel : Nat) (Γ : TyEnv) (seq : List Rt2) : TCResult :=
+def typecheckSeq (sigs : SigTable) (fuel : Nat) (Γ : TyEnv) (seq : List Instr) : TCResult :=
   checkSeq sigs fuel Γ seq []
 
 /- Check one AO: params get their declared types from the signature
    table; arity must agree with the registry. Result: none = well
    typed; some r = the first rejection (with reason and stack). -/
 def typecheckAO (sigs : SigTable) (fuel : Nat)
-    (name : «String») (params : List «String») (body : List Rt2) : Option TCResult :=
+    (name : «String») (params : List «String») (body : List Instr) : Option TCResult :=
   match sigFind sigs name with
   | none =>
       some (.reject (body.head?.getD .kRet)

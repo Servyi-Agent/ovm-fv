@@ -163,7 +163,7 @@ def applyPrim (h : Heap) : Prim → JSValue → JSValue
 
 
 mutual
-def evalListE (h : Heap) (env : Env) : List E2 → Option (List JSValue)
+def evalListE (h : Heap) (env : Env) : List Expr → Option (List JSValue)
   | [] => some []
   | e :: rest =>
       match evalE2 h env e, evalListE h env rest with
@@ -171,7 +171,7 @@ def evalListE (h : Heap) (env : Env) : List E2 → Option (List JSValue)
       | _, _ => none
 termination_by es => sizeOf es
 
-def evalE2 (h : Heap) (env : Env) : E2 → Option JSValue
+def evalE2 (h : Heap) (env : Env) : Expr → Option JSValue
   | .nv n => lookup env n
   | .listE es =>
       match evalListE h env es with
@@ -314,7 +314,7 @@ def sosStep : SState → SState
       match evalE2 emptyHeap env e with
       | some (.listV l) =>
           -- finite unroll: set the binder before each copy of the body
-          .srun (l.flatMap (fun v => .setE x (E2.const v) :: body) ++ rest) env
+          .srun (l.flatMap (fun v => .setE x (Expr.const v) :: body) ++ rest) env
       | _ => .sfell
   | .srun (.assertE e :: rest) env =>
       match evalE2 emptyHeap env e with
@@ -350,7 +350,7 @@ def sosSteps : Nat → SState → SState
 
 
 structure Fr where
-  stmts : List Rt2
+  stmts : List Instr
   env   : Env
   eval  : List JSValue
   deriving Repr
@@ -412,7 +412,7 @@ def fstep (reg : AOReg) : FM → FM
         done (⟨.kEval e :: .kPrim1 .pIsNull :: rest, f.env, f.eval⟩ :: fs)
     | .kEval (.imeth nm recv args) :: rest, _, _ =>
         -- MOP dispatch: receiver first, then args, then the dispatch op
-        done (⟨.kEval recv :: args.map Rt2.kEval
+        done (⟨.kEval recv :: args.map Instr.kEval
                     ++ [.kIMeth nm args.length, .kTest, .kIte [.kRet] [.kUnwrap]] ++ rest,
                     f.env, f.eval⟩ :: fs)
     | .kEval (.ifield nm e) :: rest, _, _ =>
@@ -422,11 +422,11 @@ def fstep (reg : AOReg) : FM → FM
     | .kEval (.call fname args) :: rest, env, eval =>
         -- bare and ? calls behave identically: test, propagate, extract.
         -- Completion(...) is the distinct no-test form (callC, to come).
-        done (⟨args.map Rt2.kEval
+        done (⟨args.map Instr.kEval
                     ++ [.kCall fname args.length, .kTest, .kIte [.kRet] [.kUnwrap]]
                     ++ rest, env, eval⟩ :: fs)
     | .kEval (.listE es) :: rest, env, eval =>
-        done (⟨es.map Rt2.kEval ++ [.kMkList es.length] ++ rest, env, eval⟩ :: fs)
+        done (⟨es.map Instr.kEval ++ [.kMkList es.length] ++ rest, env, eval⟩ :: fs)
     | .kPrim1 p :: rest, env, v :: eval =>
         done (⟨rest, env, applyPrim heap p v :: eval⟩ :: fs)
     | .kPrim1 _ :: _, _, [] => .fell (f :: fs) heap nl 0  -- stack underflow: loud

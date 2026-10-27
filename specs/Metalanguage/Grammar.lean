@@ -1,5 +1,5 @@
 /- # Grammar core: ASTs, label elaboration, numbering audit, and
-   compilation to Rt2 instruction lists. No surface syntax (that is
+   compilation to Instr instruction lists. No surface syntax (that is
    Syntax.lean), no evaluation. -/
 
 /- # ovm-fv metalanguage
@@ -47,40 +47,40 @@ inductive JSValue where
   deriving Repr, BEq
 end
 
-inductive E2 where
+inductive Expr where
   | nv (name : «String»)
   | nat (n : Nat)
   | const (v : JSValue)
-  | isObject (e : E2)
-  | isNotObject (e : E2)
-  | isNotUndefined (e : E2)
-  | hasCall (e : E2)
-  | hasCtor (e : E2)
-  | isU (e : E2)
-  | isBoolVal (b : Bool) (e : E2)
-  | isStrVal (s : «String») (e : E2)
-  | isNullOrUnd (e : E2)
-  | isNull (e : E2)
-  | isType (ty : «String») (e : E2)
-  | hasField (name : «String») (e : E2)
-  | imeth (name : «String») (recv : E2) (args : List E2)
-  | ifield (name : «String») (e : E2)
+  | isObject (e : Expr)
+  | isNotObject (e : Expr)
+  | isNotUndefined (e : Expr)
+  | hasCall (e : Expr)
+  | hasCtor (e : Expr)
+  | isU (e : Expr)
+  | isBoolVal (b : Bool) (e : Expr)
+  | isStrVal (s : «String») (e : Expr)
+  | isNullOrUnd (e : Expr)
+  | isNull (e : Expr)
+  | isType (ty : «String») (e : Expr)
+  | hasField (name : «String») (e : Expr)
+  | imeth (name : «String») (recv : Expr) (args : List Expr)
+  | ifield (name : «String») (e : Expr)
   | varNotPresent (name : «String»)
-  | call (name : «String») (args : List E2)
-  | listE (es : List E2)
+  | call (name : «String») (args : List Expr)
+  | listE (es : List Expr)
   deriving Repr
 
 /- Clean, label-free AST (what the interpreter consumes). -/
 inductive Step where
-  | ret (v : E2)
-  | retE (e : E2)
+  | ret (v : Expr)
+  | retE (e : Expr)
   | retNewSlot (slotName : «String») (valVar : «String»)
-  | assertE (e : E2)
-  | forEach (x : «String») (e : E2) (body : List Step)
+  | assertE (e : Expr)
+  | forEach (x : «String») (e : Expr) (body : List Step)
   | throw
-  | setE (name : «String») (e : E2)
-  | letE (name : «String») (e : E2)
-  | ifS (c : E2) (t : List Step) (e : List Step)
+  | setE (name : «String») (e : Expr)
+  | letE (name : «String») (e : Expr)
+  | ifS (c : Expr) (t : List Step) (e : List Step)
   | elseM (body : List Step)
   deriving Repr
 
@@ -89,15 +89,15 @@ abbrev Prog := List Step
 
 /- Label-carrying parallel AST (what the audit consumes). -/
 inductive LBody where
-  | ret (v : E2)
-  | retE (e : E2)
+  | ret (v : Expr)
+  | retE (e : Expr)
   | retNewSlot (slotName : «String») (valVar : «String»)
-  | assertE (e : E2)
-  | forEach (x : «String») (e : E2) (body : List («String» × LBody))
+  | assertE (e : Expr)
+  | forEach (x : «String») (e : Expr) (body : List («String» × LBody))
   | throw
-  | setE (name : «String») (e : E2)
-  | letE (name : «String») (e : E2)
-  | ifS (c : E2) (t : List («String» × LBody)) (e : List («String» × LBody))
+  | setE (name : «String») (e : Expr)
+  | letE (name : «String») (e : Expr)
+  | ifS (c : Expr) (t : List («String» × LBody)) (e : List («String» × LBody))
   | elseM (body : List («String» × LBody))
   deriving Repr
 
@@ -106,18 +106,18 @@ abbrev LStep := String × LBody
 /- Flat stream body: ifs and elses carry no branches here;
    `renest` fills them in from the depth markers. -/
 inductive FBody where
-  | ret (v : E2)
-  | retE (e : E2)
+  | ret (v : Expr)
+  | retE (e : Expr)
   | throw
-  | setE (name : «String») (e : E2)
-  | ifI (c : E2) (s : FBody)
+  | setE (name : «String») (e : Expr)
+  | ifI (c : Expr) (s : FBody)
   | elseI (s : FBody)
-  | elseG (c : E2)
-  | assertE (e : E2)
-  | forEach (x : «String») (e : E2)
+  | elseG (c : Expr)
+  | assertE (e : Expr)
+  | forEach (x : «String») (e : Expr)
   | retNewSlot (slotName : «String») (valVar : «String»)
-  | letE (name : «String») (e : E2)
-  | ifS (c : E2)
+  | letE (name : «String») (e : Expr)
+  | ifS (c : Expr)
   | elseM
   deriving Repr
 
@@ -255,13 +255,13 @@ def findAO : AOReg → «String» → Option (List «String» × Prog)
      kSet/kDrop/kBranch/kAssert: pop 1
    Invariant (lemma, not type): eval stack empty at statement boundaries. -/
 
-inductive Rt2 where
-  | kEval (e : E2)
+inductive Instr where
+  | kEval (e : Expr)
   | kPrim1 (p : Prim)
   | kCall (f : «String») (n : Nat)
   | kSet (x : «String»)
   | kPop
-  | kIte (t e : List Rt2)
+  | kIte (t e : List Instr)
   | kAssert
   | kRet
   | kTest
@@ -269,14 +269,14 @@ inductive Rt2 where
   | kIMeth (name : «String») (n : Nat)
   | kMkList (n : Nat)
   | kNewSlot (slotName : «String»)
-  | kRepeatWhile (c : E2) (body : List Rt2)
-  | kRepeatTest (c : E2) (body : List Rt2)
-  | kForStart (x : «String») (body : List Rt2)
-  | kForBody (x : «String») (elems : List JSValue) (body : List Rt2)
+  | kRepeatWhile (c : Expr) (body : List Instr)
+  | kRepeatTest (c : Expr) (body : List Instr)
+  | kForStart (x : «String») (body : List Instr)
+  | kForBody (x : «String») (elems : List JSValue) (body : List Instr)
   deriving Repr
 
 
-def compileSteps : List Step → List Rt2
+def compileSteps : List Step → List Instr
   | [] => []
   | .ret v :: rest => .kEval v :: .kPrim1 .pWrapC :: .kRet :: compileSteps rest
   | .retE e :: rest =>
@@ -288,7 +288,7 @@ def compileSteps : List Step → List Rt2
             [.kEval e, .kPrim1 .pWrapC, .kRet]
         | _ =>
             [.kEval e, .kTest, .kIte [.kRet] [.kUnwrap, .kPrim1 .pWrapC, .kRet]])
-        : List Rt2)
+        : List Instr)
         ++ compileSteps rest
   | .retNewSlot sn vv :: rest =>
       .kEval (.nv vv) :: .kNewSlot sn :: .kPrim1 .pWrapC :: .kRet
