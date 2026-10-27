@@ -68,7 +68,7 @@ def selfTestHead : List Instr → Bool
 
 def inflight (sigs : SigTable) (above : Option «String») : List STy :=
   match above with
-  | some n => [STy.complOf (sigRetTy sigs n)]
+  | some n => [STy.complN (sigRetTy sigs n)]
   | none => []
 
 def absStack (sigs : SigTable) (above : Option «String») (f : Fr) : List STy :=
@@ -162,13 +162,17 @@ theorem tmoves_trans (t₂ : STy) :
     ∀ t₁ t₃, tmoves t₁ t₂ = Bool.true → tmoves t₂ t₃ = Bool.true →
       tmoves t₁ t₃ = Bool.true := by
   induction t₂ with
-  | complOf b ih =>
+  | complN b ih =>
       intro t₁ t₃ h₁ h₂
-      cases t₁ <;> cases t₃ <;> simp_all [tmoves, reduceBEq]
-      all_goals exact ih _ _ h₁ h₂
+      cases t₁ with
+      | complN a =>
+          cases t₃ with
+          | complN c => simp only [tmoves] at h₁ h₂ ⊢; exact ih a c h₁ h₂
+          | _ => simp_all [tmoves, reduceBEq, reduceCtorEq, reduceCtorIdx]
+      | _ => cases t₃ <;> simp_all [tmoves, reduceBEq, reduceCtorEq, reduceCtorIdx]
   | _ =>
       intro t₁ t₃ h₁ h₂
-      cases t₁ <;> cases t₃ <;> simp_all [tmoves, reduceBEq]
+      cases t₁ <;> cases t₃ <;> simp_all [tmoves, reduceBEq, reduceCtorEq, reduceCtorIdx]
 
 theorem popTy_sub {t σ₁ σ₂'} (hsub : stackSub σ₁ σ₂ = Bool.true)
     (h : popTy t σ₂ = some σ₂') :

@@ -14,13 +14,15 @@ import Metalanguage.Grammar
    (kIte/kAssert/kRepeatTest pop .boolean; kTest's verdict). -/
 inductive STy where
   | any | number | boolean | str | obj | list | descV
-  | complOf (t : STy)   -- a completion wrapping a t-typed payload
+  | objOrNull            -- [[GetPrototypeOf]] result shape
+  | complN (t : STy)   -- a NORMAL completion wrapping a t-typed payload
+  | complT             -- a THROW (abrupt); payload exempt from r
   | unit
   deriving Repr, BEq, DecidableEq
 
-/-- Subtyping: covariant under complOf, `any` absorbs. -/
+/-- Subtyping: covariant under complN, `any` absorbs. -/
 def tmoves : STy → STy → Bool
-  | .complOf a, .complOf b => tmoves a b
+  | .complN a, .complN b => tmoves a b
   | _, .any => Bool.true
   | t, t' => t == t'
 
@@ -32,8 +34,10 @@ def leList : List STy → List STy → Bool
 def typeOfV : JSValue → STy
   | .boolean _ => .boolean
   | .obj _ => .obj
+  | .null => .objOrNull
   | .listV _ => .list
-  | .compl _ v => .complOf (typeOfV v)
+  | .compl Bool.false v => .complN (typeOfV v)
+  | .compl Bool.true _ => .complT
   | _ => .any
 
 abbrev SigTable := List («String» × (List STy × STy))
@@ -59,6 +63,10 @@ def mopArity : «String» → Option Nat   -- MOP internal methods (receiver exc
   | "GetPrototypeOf" => some 0
   | _ => none
 
+def mopResult : «String» → STy         -- MOP result payload types
+  | "GetPrototypeOf" => .objOrNull
+  | _ => .any
+
 mutual
 def typesOf (sigs : SigTable) (Γ : TyEnv) : List Expr → Option (List STy)
   | [] => some []
@@ -82,7 +90,7 @@ def typeOfE (sigs : SigTable) (Γ : TyEnv) : Expr → Option STy
           | some ts =>
               -- args/arity checked; the RESULT is the callee's
               -- declared retTy: justified because the callee body is
-              -- certified ⊢_retTy (every exit returns complOf retTy)
+              -- certified ⊢_retTy (every exit returns complN retTy or throws)
               if leList ts ps
                  || (as.length == ps.length - 1
                      && leList ts (ps.dropLast))
@@ -90,19 +98,22 @@ def typeOfE (sigs : SigTable) (Γ : TyEnv) : Expr → Option STy
           | none => none
       | none => none
   | .imeth nm recv args =>
-      -- MOP: receiver/args dynamically tested at runtime; payload any
+      -- MOP: the receiver must be obj-typed (machine demands it);
+      -- payload typed per-method
       match mopArity nm with
       | some k =>
-          if args.length == k && (typeOfE sigs Γ recv).isSome
+          if args.length == k && typeOfE sigs Γ recv == some .obj
              && (typesOf sigs Γ args).isSome
-          then some .any else none
+          then some (mopResult nm) else none
       | none => none
   | .listE es =>
       if (typesOf sigs Γ es).isSome then some .list else none
-  | .ifield _ x =>
+  | .ifield nm x =>
       -- field reads yield a VALUE (or undefined on non-descriptors):
-      -- pDescField is a dynamic guard, so the result is `any`
-      if (typeOfE sigs Γ x).isSome then some STy.any else none
+      -- pDescField is a dynamic guard, so the result is `any` —
+      -- EXCEPT the zero-arg-MOP deviation: `o.[[GetPrototypeOf]]` is
+      -- syntactically a field read but semantically the call
+      if (typeOfE sigs Γ x).isSome then some (mopResult nm) else none
   | .isObject x | .isNotObject x | .isNotUndefined x | .hasCall x | .hasCtor x
   | .isU x | .isBoolVal _ x | .isStrVal _ x | .isNullOrUnd x | .isNull x
   | .isType _ x | .hasField _ x =>
@@ -144,16 +155,16 @@ def popTy (t : STy) (σ : List STy) : Option (List STy) :=
   | [] => none
 
 /-- Input/output types of the one-input prims. pWrapC is
-   input-dependent (`t ↦ complOf t`) and handled inline in checkSeq. -/
+   input-dependent () and handled inline in checkSeq. -/
 def primTys (p : Prim) : Option (STy × STy) :=
   match p with
-  | .pThrowC => some (.any, .complOf .any)
+  | .pThrowC => some (.any, .complT)
   -- bedrock predicates: any -> boolean (runtime tests are dynamic)
   | .pIsObj | .pIsNotObj | .pIsNotU | .pHasCall | .pHasCtor | .pIsU
   | .pIsTrue | .pIsFalse | .pNullOrUnd | .pIsNull
   | .pIsType _ | .pHasField _ | .pIsStr _ => some (.any, .boolean)
   | .pDescField _ => some (.any, .any)  -- dynamic desc guard
-  | .pWrapC => none                     -- t ↦ complOf t, inline
+  | .pWrapC => none                     -- t ↦ complN t, inline
 
 def popTyN : Nat → STy → List STy → Option (List STy)
   | 0, _, σ => some σ
@@ -216,7 +227,7 @@ def popArgs (ps σ : List STy) : Bool :=
 
 /- `checkSeq sigs r Γ is σ`: walk instruction list `is` with ambient
    return type r (the frame's destiny), variable types Γ, abstract
-   stack σ. kRet demands `complOf r` — exit uniformity, typed. -/
+   stack σ. kRet demands  (or a throw) — exit uniformity, typed. -/
 
 
 def checkSeq : SigTable → STy → TyEnv → List Instr → List STy → TCResult
@@ -227,7 +238,7 @@ def checkSeq : SigTable → STy → TyEnv → List Instr → List STy → TCResu
       | none => .reject (.kEval e) "ill-typed expression (unbound variable, unknown operation, or argument type mismatch)" σ
   | sigs, r, Γ, .kPrim1 .pWrapC :: rest, σ =>
       match σ with
-      | t :: σ' => checkSeq sigs r Γ rest (.complOf t :: σ')
+      | t :: σ' => checkSeq sigs r Γ rest (.complN t :: σ')
       | [] => .reject (.kPrim1 .pWrapC) "pWrapC on empty stack" σ
   | sigs, r, Γ, .kPrim1 p :: rest, σ =>
       match primTys p with
@@ -243,7 +254,7 @@ def checkSeq : SigTable → STy → TyEnv → List Instr → List STy → TCResu
             -- args are checked against the signature HERE (pointwise
             -- subtyping), so the callee receives a certified env
             if popArgs ps σ then
-              checkSeq sigs r Γ rest (.complOf ret :: σ.drop n)
+              checkSeq sigs r Γ rest (.complN ret :: σ.drop n)
             else .reject (.kCall f n) "call: argument types do not match signature" σ
           else .reject (.kCall f n) "call arity does not match signature" σ
       | none => .reject (.kCall f n) "no signature for callee" σ
@@ -272,28 +283,56 @@ def checkSeq : SigTable → STy → TyEnv → List Instr → List STy → TCResu
                       | .flows fr => .flows { exits := fj.exits || fr.exits, falls := fr.falls }
                       | res => res
                   | none => .flows { exits := fj.exits, falls := none }
+  | sigs, r, Γ, .kNarrowNotNull x :: rest, σ =>
+      -- else-path of `If x is null, <exit>`: x is not null here;
+      -- the only leaf that improves is objOrNull -> obj
+      checkSeq sigs r
+        ((x, match tyLookup Γ x with
+             | some .objOrNull => .obj
+             | some t => t
+             | none => .any) :: Γ) rest σ
+  | sigs, r, Γ, .kAssertObj x :: rest, σ =>
+      -- successful `Assert: x is an Object.` narrows x to obj
+      match popTy .boolean σ with
+      | some σ' => checkSeq sigs r ((x, .obj) :: Γ) rest σ'
+      | none => .reject (.kAssertObj x) "kAssertObj: top is not boolean" σ
   | sigs, r, Γ, .kAssert :: rest, σ =>
       match popTy .boolean σ with
       | some σ' => checkSeq sigs r Γ rest σ'
       | none => .reject .kAssert "kAssert: top is not boolean" σ
-  | _, r, _, .kRet :: _, .complOf t' :: _ =>
+  | _, r, _, .kRet :: _, .complN t' :: _ =>
       if tmoves t' r then .flows { exits := Bool.true, falls := none }
-      else .reject .kRet "kRet: returned payload does not match the frame's destiny r" (.complOf t' :: [])
-  | _, _, _, .kRet :: _, σ =>
-      .reject .kRet "kRet: top of stack is not complOf r" σ
-  | sigs, r, Γ, .kTest :: rest, .complOf t :: σ' =>
-      checkSeq sigs r Γ rest (.boolean :: .complOf t :: σ')
+      else .reject .kRet "kRet: returned payload does not match the frame's destiny r" (.complN t' :: [])
+  | _, _, _, .kRet :: _, .complT :: _ =>
+      -- a throw: exempt from r (the caller's unwrap never runs on it)
+      .flows { exits := Bool.true, falls := none }
+  | _, r, _, .kRet :: _, σ =>
+      .reject .kRet "kRet: top of stack is not a normal complN-r or a throw" σ
+  | sigs, r, Γ, .kTest :: rest, .complN t :: σ' =>
+      checkSeq sigs r Γ rest (.boolean :: .complN t :: σ')
+  | sigs, r, Γ, .kTest :: rest, .complT :: σ' =>
+      checkSeq sigs r Γ rest (.boolean :: .complT :: σ')
   | _, _, _, .kTest :: _, σ =>
       .reject .kTest "kTest: top of stack is not a completion" σ
-  | sigs, r, Γ, .kUnwrap :: rest, .complOf t :: σ' =>
+  | sigs, r, Γ, .kUnwrap :: rest, .complN t :: σ' =>
       checkSeq sigs r Γ rest (t :: σ')
+  | sigs, r, Γ, .kUnwrap :: rest, .complT :: σ' =>
+      -- never runs at runtime (the self-test propagates throws); the
+      -- widened `any` is the static price of checking dead paths
+      checkSeq sigs r Γ rest (STy.any :: σ')
   | _, _, _, .kUnwrap :: _, σ =>
       .reject .kUnwrap "kUnwrap: top of stack is not a completion" σ
   | sigs, r, Γ, .kIMeth nm n :: rest, σ =>
+      -- the receiver must be an object: the machine demands it
+      -- unconditionally (this is the dynamic guard the type system
+      -- must own for progress)
       if mopArity nm == some n then
-        match popTyN (n + 1) .any σ with
-        | some σ' => checkSeq sigs r Γ rest (.complOf .any :: σ')
-        | none => .reject (.kIMeth nm n) "MOP dispatch: receiver/args stack mismatch" σ
+        match popTyN n .any σ with
+        | some σ' =>
+            match popTy .obj σ' with
+            | some σ'' => checkSeq sigs r Γ rest (.complN (mopResult nm) :: σ'')
+            | none => .reject (.kIMeth nm n) "MOP receiver is not an object" σ
+        | none => .reject (.kIMeth nm n) "MOP dispatch: argument stack mismatch" σ
       else .reject (.kIMeth nm n) "unknown MOP method or wrong arity" σ
   | sigs, r, Γ, .kMkList n :: rest, σ =>
       match popTyN n .any σ with
@@ -301,7 +340,10 @@ def checkSeq : SigTable → STy → TyEnv → List Instr → List STy → TCResu
       | none => .reject (.kMkList n) "kMkList: element stack mismatch" σ
   | sigs, r, Γ, .kNewSlot sn :: rest, σ =>
       match popTy .any σ with
-      | some σ' => checkSeq sigs r Γ rest (.obj :: σ')
+      | some σ' =>
+          if (slotOfName sn).isSome then
+            checkSeq sigs r Γ rest (.obj :: σ')
+          else .reject (.kNewSlot sn) "unknown internal slot name" σ
       | none => .reject (.kNewSlot sn) "kNewSlot on empty stack" σ
   | sigs, r, Γ, .kRepeatWhile c body :: rest, σ =>
       if typeOfE sigs Γ c != some .boolean
@@ -315,8 +357,9 @@ def checkSeq : SigTable → STy → TyEnv → List Instr → List STy → TCResu
       | some σ' => checkLoopBody (checkSeq sigs r Γ body σ') (.kRepeatTest c body) σ'
         (fun Γ' σ'' => checkSeq sigs r Γ' rest σ'')
   | sigs, r, Γ, .kForStart x body :: rest, σ =>
-      match popTy .any σ with
-      | none => .reject (.kForStart x body) "for-each over empty stack" σ
+      -- the machine iterates only over Lists
+      match popTy .list σ with
+      | none => .reject (.kForStart x body) "for-each over a non-list" σ
       | some σ' => checkLoopBody (checkSeq sigs r ((x, .any) :: Γ) body σ')
         (.kForStart x body) σ'
         (fun Γ' σ'' => checkSeq sigs r Γ' rest σ'')

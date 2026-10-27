@@ -140,7 +140,7 @@ def corpusSigs : SigTable := [
   ("ToObject",            ([.any], .obj)),
   ("GetV",                ([.any, .any], .any)),
   ("GetMethod",           ([.any, .any], .any)),
-  ("OrdinaryGet",         ([.any, .any, .any], .any)),
+  ("OrdinaryGet",         ([.obj, .any, .any], .any)),
   -- prim-named calls the machine handles natively on registry miss:
   ("Get",                 ([.any, .any], .any)),
   ("Call",                ([.any, .any, .any], .any))  -- trailing argsList optional (7.1.1.1 elides it)
@@ -171,7 +171,7 @@ def regMinusToPrimitive : AOReg :=
 def bug1 : List Instr :=
   [.kEval (Expr.nv "x"), .kTest,
    .kIte [.kRet] [.kUnwrap, .kRet]]
-#eval typecheckSeq corpusSigs .any [("x", .complOf .any)] bug1
+#eval typecheckSeq corpusSigs .any [("x", .complN .any)] bug1
 /- Bug 2 (double self-test): kEval of a call yields the payload type
    (raw), a stray kTest demands a completion. -/
 def bug2 : List Instr :=
@@ -180,12 +180,12 @@ def bug2 : List Instr :=
 #eval typecheckSeq corpusSigs .any [("v", .any), ("p", .any)] bug2
 /- Signature-driven argument checking: IteratorClose-style param
    (raw, compl). -/
-def closeSigs : SigTable := [("FakeClose", ([.any, .complOf .any], .any))]
+def closeSigs : SigTable := [("FakeClose", ([.any, .complT], .any))]
 def badArg : List Instr :=
   [.kEval (Expr.call "FakeClose" [Expr.nv "r", Expr.nv "c"]), .kPrim1 .pWrapC, .kRet]
 def goodArg : List Instr := badArg
 #eval typecheckSeq closeSigs .any [("r", .any), ("c", .any)] badArg
-#eval typecheckSeq closeSigs .any [("r", .any), ("c", .complOf .any)] goodArg
+#eval typecheckSeq closeSigs .any [("r", .any), ("c", .complT)] goodArg
 /- Stricter typing: a number where kIte demands a boolean. This is the
    class of bug runtime smoke tests miss on dead paths. -/
 def bug3 : List Instr :=

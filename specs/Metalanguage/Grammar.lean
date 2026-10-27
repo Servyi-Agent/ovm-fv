@@ -223,6 +223,31 @@ inductive Prim where              -- bedrock predicates (the axiom stratum)
 
 
 
+/-- Calls the machine answers natively when the registry misses. -/
+def nativeOps : List «String» :=
+  ["GetV", "Get", "Call", "GetMethod", "OrdinaryToPrimitive"]
+
+/- Internal-slot universe: closed by construction (ES declares the set). -/
+inductive Slot where
+  | call | construct | strData | dateValue
+  | boolData | numData | symData | bigData
+  deriving Repr, BEq
+
+def slotOrd : Slot → Nat
+  | .call => 0 | .construct => 1 | .strData => 2 | .dateValue => 3
+  | .boolData => 4 | .numData => 5 | .symData => 6 | .bigData => 7
+
+def slotOfName : «String» → Option Nat
+  | "Call" => some (slotOrd .call)
+  | "Construct" => some (slotOrd .construct)
+  | "StringData" => some (slotOrd .strData)
+  | "DateValue" => some (slotOrd .dateValue)
+  | "BooleanData" => some (slotOrd .boolData)
+  | "NumberData" => some (slotOrd .numData)
+  | "SymbolData" => some (slotOrd .symData)
+  | "BigIntData" => some (slotOrd .bigData)
+  | _ => none
+
 /- The transcribed-operation registry (the corpus). -/
 abbrev AOReg := List («String» × (List «String» × Prog))
 
@@ -263,6 +288,8 @@ inductive Instr where
   | kPop
   | kIte (t e : List Instr)
   | kAssert
+  | kAssertObj (x : «String»)   -- Assert: x is an Object - refining
+  | kNarrowNotNull (x : «String») -- else-path of If x is null, <exit>
   | kRet
   | kTest
   | kUnwrap
@@ -298,9 +325,18 @@ def compileSteps : List Step → List Instr
         :: compileSteps rest
   | .setE n e :: rest => .kEval e :: .kSet n :: compileSteps rest
   | .letE n e :: rest => .kEval e :: .kSet n :: compileSteps rest
+  | .assertE (.isObject (.nv x)) :: rest =>
+      -- a refining assert: after it, x : obj (justifies e.g. ToObject's
+      -- final `Return argument.` under a declared obj return)
+      .kEval (.isObject (.nv x)) :: .kAssertObj x :: compileSteps rest
   | .assertE e :: rest => .kEval e :: .kAssert :: compileSteps rest
   | .forEach x e body :: rest =>
       .kEval e :: .kForStart x (compileSteps body) :: compileSteps rest
+  | .ifS (.isNull (.nv x)) t [] :: rest =>
+      -- `If x is null, <then>` with no else: the fall-through path
+      -- knows x is not null — inject the narrowing
+      .kEval (.isNull (.nv x))
+        :: .kIte (compileSteps t) [.kNarrowNotNull x] :: compileSteps rest
   | .ifS c t e :: rest =>
       .kEval c :: .kIte (compileSteps t) (compileSteps e) :: compileSteps rest
   | .elseM _ :: rest => compileSteps rest   -- unreachable post-fuseL

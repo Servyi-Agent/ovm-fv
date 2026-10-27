@@ -2,26 +2,6 @@ import Metalanguage.Grammar
 /- # Semantics: big-step interpreter, SOS reference semantics, FM
    frame machine (heap, completions-as-values). -/
 
-/- Internal-slot universe: closed by construction (ES declares the set). -/
-inductive Slot where
-  | call | construct | strData | dateValue
-  | boolData | numData | symData | bigData
-  deriving Repr, BEq
-
-def slotOrd : Slot → Nat
-  | .call => 0 | .construct => 1 | .strData => 2 | .dateValue => 3
-  | .boolData => 4 | .numData => 5 | .symData => 6 | .bigData => 7
-
-def slotOfName : «String» → Option Nat
-  | "Call" => some (slotOrd .call)
-  | "Construct" => some (slotOrd .construct)
-  | "StringData" => some (slotOrd .strData)
-  | "DateValue" => some (slotOrd .dateValue)
-  | "BooleanData" => some (slotOrd .boolData)
-  | "NumberData" => some (slotOrd .numData)
-  | "SymbolData" => some (slotOrd .symData)
-  | "BigIntData" => some (slotOrd .bigData)
-  | _ => none
 
 /- Property keys: String or Symbol (symbolic here). -/
 inductive PKey where
@@ -447,7 +427,7 @@ def fstep (reg : AOReg) : FM → FM
           | none =>
               -- registry miss: prim-named calls (GetV/Get/Call/…)
               -- evaluate natively (stub: undefined), all others loud
-              if ["GetV", "Get", "Call", "GetMethod", "OrdinaryToPrimitive"].contains fname
+              if nativeOps.contains fname
               then done (⟨rest, env, .compl Bool.false JSValue.undefined :: older, f.ret⟩ :: fs)
               else .fell (f :: fs) heap nl 0
     | .kSet x :: rest, env, v :: eval => done (⟨rest, (x, v) :: env, eval, f.ret⟩ :: fs)
@@ -459,6 +439,12 @@ def fstep (reg : AOReg) : FM → FM
     | .kIte _ _ :: _, _, _ => .fell (f :: fs) heap nl 0  -- non-bool condition: loud
     | .kAssert :: rest, env, .boolean Bool.true :: eval => done (⟨rest, env, eval, f.ret⟩ :: fs)
     | .kAssert :: _, _, _ => .fell (f :: fs) heap nl 0   -- failed assert: loud
+    | .kAssertObj _ :: rest, env, .boolean Bool.true :: eval =>
+        done (⟨rest, env, eval, f.ret⟩ :: fs)
+    | .kNarrowNotNull _ :: rest, env, eval =>
+        -- static-only refinement; runtime no-op
+        done (⟨rest, env, eval, f.ret⟩ :: fs)
+    | .kAssertObj _ :: _, _, _ => .fell (f :: fs) heap nl 0
     | .kRet :: _, _, v :: _ =>
         match fs with
         | caller :: fs' => done (⟨caller.stmts, caller.env, v :: caller.eval, caller.ret⟩ :: fs')
