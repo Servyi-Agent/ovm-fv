@@ -53,33 +53,48 @@ theorem envTyOf_cons (n : «String») (v : JSValue) (env : Env) :
    After kCall / kIMeth-"Get" fire, the caller's instructions are
    `kTest :: kIte [kRet] [kUnwrap] :: rest` and the completion it will
    test does not exist yet: it is inside the callee frame above. The
-   judgment anticipates exactly one delivery. -/
+   judgment anticipates exactly one delivery — TYPED by the callee's
+   destiny: the frame above knows its AO name, hence its declared
+   return type. -/
+
+def sigRetTy (sigs : SigTable) (name : «String») : STy :=
+  match sigFind sigs name with
+  | some (_, ret) => ret
+  | none => STy.any
 
 def selfTestHead : List Instr → Bool
   | .kTest :: .kIte [.kRet] [.kUnwrap] :: _ => Bool.true
   | _ => Bool.false
 
-def inflight (calleeAbove : Bool) (f : Fr) : List STy :=
-  if calleeAbove && selfTestHead f.stmts then [STy.compl] else []
+def inflight (sigs : SigTable) (above : Option «String») (f : Fr) : List STy :=
+  match above with
+  | some n =>
+      if selfTestHead f.stmts then [STy.complOf (sigRetTy sigs n)] else []
+  | none => []
 
-def absStack (calleeAbove : Bool) (f : Fr) : List STy :=
-  inflight calleeAbove f ++ stackTyOf f.eval
+def absStack (sigs : SigTable) (above : Option «String») (f : Fr) : List STy :=
+  inflight sigs above f ++ stackTyOf f.eval
 
 /- ## Frame and state typing -/
 
-def frameOk (sigs : SigTable) (calleeAbove : Bool) (f : Fr) : Prop :=
-  isOk (checkSeq sigs (envTyOf f.env) f.stmts (absStack calleeAbove f)) = Bool.true
+def frameOk (sigs : SigTable) (above : Option «String») (f : Fr) : Prop :=
+  isOk (checkSeq sigs (sigRetTy sigs f.ret) (envTyOf f.env) f.stmts
+          (absStack sigs above f)) = Bool.true
 
 def isComplV : JSValue → Bool
   | .compl _ _ => Bool.true
   | _ => Bool.false
 
-/-- Non-top frames anticipate a delivery; the top frame does not. -/
-def framesOk : SigTable → List Fr → Prop
-  | _, [] => True
-  | sigs, [f] => frameOk sigs Bool.false f
-  | sigs, f :: fs@(_ :: _) =>
-      frameOk sigs Bool.true f ∧ framesOk sigs fs
+/-- Each frame is checked at its own destiny (its AO's declared
+   return type), anticipating a delivery TYPED by the frame directly
+   above. -/
+def framesOkFrom : SigTable → Option «String» → List Fr → Prop
+  | _, _, [] => True
+  | sigs, above, f :: fs =>
+      frameOk sigs above f ∧ framesOkFrom sigs f.ret fs
+
+def framesOk (sigs : SigTable) (fs : List Fr) : Prop :=
+  framesOkFrom sigs none fs
 
 def stateOk (sigs : SigTable) (m : FM) : Prop :=
   match m with
@@ -103,27 +118,28 @@ def sigParams (sigs : SigTable) (name : «String») : List STy :=
 def registryCertified (sigs : SigTable) (reg : AOReg) : Prop :=
   ∀ name ps prog, (name, (ps, prog)) ∈ reg →
     ∀ ts, leList ts (sigParams sigs name) →
-      isOk (checkSeq sigs (zipTy ps ts) (compileSteps prog) []) = Bool.true
+      isOk (checkSeq sigs (sigRetTy sigs name) (zipTy ps ts)
+              (compileSteps prog) []) = Bool.true
 
 /- ## Unfolding equalities: one machine step of each value instruction
    is exactly one step of the checker. -/
 
 theorem checkSeq_kEval_const (sigs : SigTable) (Γ : TyEnv)
     (v : JSValue) (rest : List Instr) (σ : List STy) :
-    checkSeq sigs Γ (.kEval (.const v) :: rest) σ
-      = checkSeq sigs Γ rest (typeOfV v :: σ) := by
+    checkSeq sigs r Γ (.kEval (.const v) :: rest) σ
+      = checkSeq sigs r Γ rest (typeOfV v :: σ) := by
   simp [checkSeq, typeOfE]
 
 theorem checkSeq_kEval_nat (sigs : SigTable) (Γ : TyEnv)
     (n : Nat) (rest : List Instr) (σ : List STy) :
-    checkSeq sigs Γ (.kEval (.nat n) :: rest) σ
-      = checkSeq sigs Γ rest (STy.any :: σ) := by
+    checkSeq sigs r Γ (.kEval (.nat n) :: rest) σ
+      = checkSeq sigs r Γ rest (STy.any :: σ) := by
   simp [checkSeq, typeOfE]
 
 theorem checkSeq_kEval_nv {sigs : SigTable} {env : Env} {x : «String»}
     (h : lookup env x = some v) (rest : List Instr) (σ : List STy) :
-    checkSeq sigs (envTyOf env) (.kEval (.nv x) :: rest) σ
-      = checkSeq sigs (envTyOf env) rest (typeOfV v :: σ) := by
+    checkSeq sigs r (envTyOf env) (.kEval (.nv x) :: rest) σ
+      = checkSeq sigs r (envTyOf env) rest (typeOfV v :: σ) := by
   simp only [checkSeq, typeOfE]
   rw [← envTyOf_lookup, h]
   rfl

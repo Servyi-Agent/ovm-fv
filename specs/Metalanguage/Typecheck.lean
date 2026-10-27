@@ -14,7 +14,8 @@ import Metalanguage.Grammar
    (kIte/kAssert/kRepeatTest pop .boolean; kTest's verdict). -/
 inductive STy where
   | any | number | boolean | str | obj | list | descV
-  | compl | unit
+  | complOf (t : STy)   -- a completion wrapping a t-typed payload
+  | unit
   deriving Repr, BEq, DecidableEq
 
 /-- `t ≤ t'` in the value lattice: `any` absorbs. Defined via
@@ -31,7 +32,7 @@ def typeOfV : JSValue → STy
   | .boolean _ => .boolean
   | .obj _ => .obj
   | .listV _ => .list
-  | .compl _ _ => .compl
+  | .compl _ v => .complOf (typeOfV v)
   | _ => .any
 
 abbrev SigTable := List («String» × (List STy × STy))
@@ -78,13 +79,13 @@ def typeOfE (sigs : SigTable) (Γ : TyEnv) : Expr → Option STy
           -- Call(F, V) elides the arguments List)
           match typesOf sigs Γ as with
           | some ts =>
-              -- args/arity checked; the RESULT is typed `any`: the
-              -- machine's self-test decomposition nets any, and a
-              -- refined result would not be preserved by steps
+              -- args/arity checked; the RESULT is the callee's
+              -- declared retTy: justified because the callee body is
+              -- certified ⊢_retTy (every exit returns complOf retTy)
               if leList ts ps
                  || (as.length == ps.length - 1
                      && leList ts (ps.dropLast))
-              then some STy.any else none
+              then some ret else none
           | none => none
       | none => none
   | .imeth nm recv args =>
@@ -137,14 +138,17 @@ def popTy (t : STy) (σ : List STy) : Option (List STy) :=
   | t' :: σ' => if tmoves t' t then some σ' else none
   | [] => none
 
-def primSig (p : Prim) : STy × STy :=
+/-- Input/output types of the one-input prims. pWrapC is
+   input-dependent (`t ↦ complOf t`) and handled inline in checkSeq. -/
+def primTys (p : Prim) : Option (STy × STy) :=
   match p with
-  | .pWrapC | .pThrowC => (.any, .compl)
+  | .pThrowC => some (.any, .complOf .any)
   -- bedrock predicates: any -> boolean (runtime tests are dynamic)
   | .pIsObj | .pIsNotObj | .pIsNotU | .pHasCall | .pHasCtor | .pIsU
   | .pIsTrue | .pIsFalse | .pNullOrUnd | .pIsNull
-  | .pIsType _ | .pHasField _ | .pIsStr _ => (.any, .boolean)
-  | .pDescField _ => (.any, .any)   -- dynamic desc guard, else undefined
+  | .pIsType _ | .pHasField _ | .pIsStr _ => some (.any, .boolean)
+  | .pDescField _ => some (.any, .any)  -- dynamic desc guard
+  | .pWrapC => none                     -- t ↦ complOf t, inline
 
 def popTyN : Nat → STy → List STy → Option (List STy)
   | 0, _, σ => some σ
@@ -171,39 +175,46 @@ def checkNeutral (rbody : TCResult) (site : Instr)
 def popArgs (ps σ : List STy) : Bool :=
   σ.length ≥ ps.length && leList ps.reverse (σ.take ps.length).reverse
 
-/- `checkSeq sigs Γ is σ`: walk instruction list `is` with
-   variable types Γ and abstract stack σ. -/
-def checkSeq : SigTable → TyEnv → List Instr → List STy → TCResult
-  | _, Γ, [], σ => .falls σ Γ
-  | sigs, Γ, .kEval e :: rest, σ =>
+/- `checkSeq sigs r Γ is σ`: walk instruction list `is` with ambient
+   return type r (the frame's destiny), variable types Γ, abstract
+   stack σ. kRet demands `complOf r` — exit uniformity, typed. -/
+def checkSeq : SigTable → STy → TyEnv → List Instr → List STy → TCResult
+  | _, _, Γ, [], σ => .falls σ Γ
+  | sigs, r, Γ, .kEval e :: rest, σ =>
       match typeOfE sigs Γ e with
-      | some t => checkSeq sigs Γ rest (t :: σ)
+      | some t => checkSeq sigs r Γ rest (t :: σ)
       | none => .reject (.kEval e) "ill-typed expression (unbound variable, unknown operation, or argument type mismatch)" σ
-  | sigs, Γ, .kPrim1 p :: rest, σ =>
-      let (tin, tout) := primSig p
-      match popTy tin σ with
-      | some σ' => checkSeq sigs Γ rest (tout :: σ')
-      | none => .reject (.kPrim1 p) "prim expects a different top-of-stack type" σ
-  | sigs, Γ, .kCall f n :: rest, σ =>
+  | sigs, r, Γ, .kPrim1 .pWrapC :: rest, σ =>
+      match σ with
+      | t :: σ' => checkSeq sigs r Γ rest (.complOf t :: σ')
+      | [] => .reject (.kPrim1 .pWrapC) "pWrapC on empty stack" σ
+  | sigs, r, Γ, .kPrim1 p :: rest, σ =>
+      match primTys p with
+      | some (tin, tout) =>
+          match popTy tin σ with
+          | some σ' => checkSeq sigs r Γ rest (tout :: σ')
+          | none => .reject (.kPrim1 p) "prim expects a different top-of-stack type" σ
+      | none => .reject (.kPrim1 p) "unreachable (pWrapC above)" σ
+  | sigs, r, Γ, .kCall f n :: rest, σ =>
       match sigFind sigs f with
-      | some (ps, _) =>
+      | some (ps, ret) =>
           if ps.length == n then
             -- args are checked against the signature HERE (pointwise
             -- subtyping), so the callee receives a certified env
             if popArgs ps σ then
-              checkSeq sigs Γ rest (.compl :: σ.drop n)
+              checkSeq sigs r Γ rest (.complOf ret :: σ.drop n)
             else .reject (.kCall f n) "call: argument types do not match signature" σ
           else .reject (.kCall f n) "call arity does not match signature" σ
       | none => .reject (.kCall f n) "no signature for callee" σ
-  | sigs, Γ, .kSet x :: rest, σ =>
+  | sigs, r, Γ, .kSet x :: rest, σ =>
       match σ with
-      | t :: σ' => checkSeq sigs ((x, t) :: Γ) rest σ'
+      | t :: σ' => checkSeq sigs r ((x, t) :: Γ) rest σ'
       | [] => .reject (.kSet x) "kSet on empty stack" σ
-  | sigs, Γ, .kPop :: rest, σ =>
+  | sigs, r, Γ, .kPop :: rest, σ =>
       match σ with
-      | _ :: σ' => checkSeq sigs Γ rest σ'
+      | _ :: σ' => checkSeq sigs r Γ rest σ'
       | [] => .reject .kPop "kPop on empty stack" σ
-  | sigs, Γ, .kIte t e :: rest, σ =>
+  | sigs, r, Γ, .kIte t e :: rest, σ =>
       match popTy .boolean σ with
       | none => .reject (.kIte t e) "kIte: condition is not boolean" σ
       | some σ' =>
@@ -215,67 +226,65 @@ def checkSeq : SigTable → TyEnv → List Instr → List STy → TCResult
             | .falls σ₁ Γ₁, .falls σ₂ Γ₂ =>
                 if σ₁ == σ₂ then .falls σ₁ (ΓUnion Γ₁ Γ₂)
                 else .reject (.kIte t e) "branches join with different stacks" σ'
-          match join (checkSeq sigs Γ t σ') (checkSeq sigs Γ e σ') with
+          match join (checkSeq sigs r Γ t σ') (checkSeq sigs r Γ e σ') with
           | .exits => .exits
-          | .falls σⱼ Γⱼ => checkSeq sigs Γⱼ rest σⱼ
+          | .falls σⱼ Γⱼ => checkSeq sigs r Γⱼ rest σⱼ
           | r => r
-  | sigs, Γ, .kAssert :: rest, σ =>
+  | sigs, r, Γ, .kAssert :: rest, σ =>
       match popTy .boolean σ with
-      | some σ' => checkSeq sigs Γ rest σ'
+      | some σ' => checkSeq sigs r Γ rest σ'
       | none => .reject .kAssert "kAssert: top is not boolean" σ
-  | _, _, .kRet :: _, σ =>
-      match σ with
-      | .compl :: _ => .exits        -- value return: wire format is compl
-      | _ => .reject .kRet "kRet: top of stack is not a completion (or empty/unit return)" σ
-  | sigs, Γ, .kTest :: rest, σ =>
-      match popTy .compl σ with
-      | some σ' => checkSeq sigs Γ rest (.boolean :: .compl :: σ')
-      | none => .reject .kTest "kTest: top of stack is not a completion" σ
-  | sigs, Γ, .kUnwrap :: rest, σ =>
-      -- payload type is not tracked through compl: arrives as any
-      match popTy .compl σ with
-      | some σ' => checkSeq sigs Γ rest (.any :: σ')
-      | none => .reject .kUnwrap "kUnwrap: top of stack is not a completion" σ
-  | sigs, Γ, .kIMeth nm n :: rest, σ =>
+  | _, r, _, .kRet :: _, .complOf _ :: _ => .exits
+  | _, r, _, .kRet :: _, σ =>
+      .reject .kRet "kRet: top of stack is not complOf r" σ
+  | sigs, r, Γ, .kTest :: rest, .complOf t :: σ' =>
+      checkSeq sigs r Γ rest (.boolean :: .complOf t :: σ')
+  | sigs, r, Γ, .kTest :: rest, σ =>
+      .reject .kTest "kTest: top of stack is not a completion" σ
+  | sigs, r, Γ, .kUnwrap :: rest, .complOf t :: σ' =>
+      checkSeq sigs r Γ rest (t :: σ')
+  | sigs, r, Γ, .kUnwrap :: rest, σ =>
+      .reject .kUnwrap "kUnwrap: top of stack is not a completion" σ
+  | sigs, r, Γ, .kIMeth nm n :: rest, σ =>
       if mopArity nm == some n then
         match popTyN (n + 1) .any σ with
-        | some σ' => checkSeq sigs Γ rest (.compl :: σ')
+        | some σ' => checkSeq sigs r Γ rest (.complOf .any :: σ')
         | none => .reject (.kIMeth nm n) "MOP dispatch: receiver/args stack mismatch" σ
       else .reject (.kIMeth nm n) "unknown MOP method or wrong arity" σ
-  | sigs, Γ, .kMkList n :: rest, σ =>
+  | sigs, r, Γ, .kMkList n :: rest, σ =>
       match popTyN n .any σ with
-      | some σ' => checkSeq sigs Γ rest (.list :: σ')
+      | some σ' => checkSeq sigs r Γ rest (.list :: σ')
       | none => .reject (.kMkList n) "kMkList: element stack mismatch" σ
-  | sigs, Γ, .kNewSlot sn :: rest, σ =>
+  | sigs, r, Γ, .kNewSlot sn :: rest, σ =>
       match popTy .any σ with
-      | some σ' => checkSeq sigs Γ rest (.obj :: σ')
+      | some σ' => checkSeq sigs r Γ rest (.obj :: σ')
       | none => .reject (.kNewSlot sn) "kNewSlot on empty stack" σ
-  | sigs, Γ, .kRepeatWhile c body :: rest, σ =>
+  | sigs, r, Γ, .kRepeatWhile c body :: rest, σ =>
       if typeOfE sigs Γ c != some .boolean
       then .reject (.kRepeatWhile c body) "loop condition is not boolean" σ
-      else checkNeutral (checkSeq sigs Γ body σ) (.kRepeatWhile c body) rest σ
-        (fun Γ' σ' => checkSeq sigs Γ' rest σ')
-  | sigs, Γ, .kRepeatTest c body :: rest, σ =>
+      else checkNeutral (checkSeq sigs r Γ body σ) (.kRepeatWhile c body) rest σ
+        (fun Γ' σ' => checkSeq sigs r Γ' rest σ')
+  | sigs, r, Γ, .kRepeatTest c body :: rest, σ =>
       -- pops the boolean verdict: loop (body neutral) or fall through
       match popTy .boolean σ with
       | none => .reject (.kRepeatTest c body) "loop verdict is not boolean" σ
-      | some σ' => checkNeutral (checkSeq sigs Γ body σ') (.kRepeatTest c body) rest σ'
-        (fun Γ' σ'' => checkSeq sigs Γ' rest σ'')
-  | sigs, Γ, .kForStart x body :: rest, σ =>
+      | some σ' => checkNeutral (checkSeq sigs r Γ body σ') (.kRepeatTest c body) rest σ'
+        (fun Γ' σ'' => checkSeq sigs r Γ' rest σ'')
+  | sigs, r, Γ, .kForStart x body :: rest, σ =>
       match popTy .any σ with
       | none => .reject (.kForStart x body) "for-each over empty stack" σ
-      | some σ' => checkNeutral (checkSeq sigs ((x, .any) :: Γ) body σ')
+      | some σ' => checkNeutral (checkSeq sigs r ((x, .any) :: Γ) body σ')
         (.kForStart x body) rest σ'
-        (fun Γ' σ'' => checkSeq sigs Γ' rest σ'')
-  | sigs, Γ, .kForBody x _ body :: rest, σ =>
-      checkNeutral (checkSeq sigs ((x, .any) :: Γ) body σ)
+        (fun Γ' σ'' => checkSeq sigs r Γ' rest σ'')
+  | sigs, r, Γ, .kForBody x _ body :: rest, σ =>
+      checkNeutral (checkSeq sigs r ((x, .any) :: Γ) body σ)
         (.kForBody x [] body) rest σ
-        (fun Γ' σ'' => checkSeq sigs Γ' rest σ'')
+        (fun Γ' σ'' => checkSeq sigs r Γ' rest σ'')
 
 /- A frame is well typed if every path exits via kRet (falling off the
    end is the runtime's loud `fell`). -/
-def typecheckSeq (sigs : SigTable) (Γ : TyEnv) (seq : List Instr) : TCResult :=
-  checkSeq sigs Γ seq []
+def typecheckSeq (sigs : SigTable) (r : STy) (Γ : TyEnv) (seq : List Instr) : TCResult :=
+  checkSeq sigs r Γ seq []
 
 /- Check one AO: params get their declared types from the signature
    table; arity must agree with the registry. Result: none = well
@@ -286,11 +295,11 @@ def typecheckAO (sigs : SigTable)
   | none =>
       some (.reject (body.head?.getD .kRet)
         (name ++ " has no entry in the signature table") [])
-  | some (paramTys, _) =>
+  | some (paramTys, ret2) =>
       if params.length != paramTys.length then
         some (.reject (body.head?.getD .kRet)
           (name ++ ": registry arity ≠ signature arity") [])
-      else match typecheckSeq sigs (zipTy params paramTys) body with
+      else match typecheckSeq sigs ret2 (zipTy params paramTys) body with
         | .exits => none
         | r => some r
 

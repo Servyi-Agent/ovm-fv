@@ -350,9 +350,14 @@ def sosSteps : Nat → SState → SState
 
 
 structure Fr where
-  stmts : List Instr
-  env   : Env
-  eval  : List JSValue
+  stmts  : List Instr
+  env    : Env
+  eval   : List JSValue
+  /- Which AO's body this frame is running ("«top»" = the top-level
+     program). This is the frame's DESTINY: the static return type of
+     the name, and — from below — the type of the completion a caller
+     anticipates while this frame runs. -/
+  ret    : «String»
   deriving Repr
 
 inductive FM where
@@ -368,7 +373,7 @@ inductive FM where
 /- Statement compilation (expressions stay as data; only statements
    become instruction sequences). -/
 
-def fmOf (p : Prog) : FM := .frames [⟨compileSteps p, [], []⟩] emptyHeap 0
+def fmOf (p : Prog) : FM := .frames [⟨compileSteps p, [], [], "«top»"⟩] emptyHeap 0
 
 def fstep (reg : AOReg) : FM → FM
   | .fdone v fs heap nl n => .fdone v fs heap nl (n + 1)
@@ -378,57 +383,57 @@ def fstep (reg : AOReg) : FM → FM
     let done : List Fr → FM := fun fs' => .frames fs' heap nl
     match f.stmts, f.env, f.eval with
     | [], _, _ => .fell (f :: fs) heap nl 0    -- fell through without kRet
-    | .kEval (.const v) :: rest, env, eval => done (⟨rest, env, v :: eval⟩ :: fs)
+    | .kEval (.const v) :: rest, env, eval => done (⟨rest, env, v :: eval, f.ret⟩ :: fs)
     | .kEval (.nat n) :: rest, env, eval =>
-        done (⟨rest, env, .number n.toFloat :: eval⟩ :: fs)
+        done (⟨rest, env, .number n.toFloat :: eval, f.ret⟩ :: fs)
     | .kEval (.nv x) :: rest, env, eval =>
         match lookup env x with
-        | some v => done (⟨rest, env, v :: eval⟩ :: fs)
+        | some v => done (⟨rest, env, v :: eval, f.ret⟩ :: fs)
         | none => .fell (f :: fs) heap nl 0     -- unbound: stuck, loudly
     | .kEval (.varNotPresent x) :: rest, env, eval =>
-        done (⟨rest, env, .boolean (lookup env x).isNone :: eval⟩ :: fs)
+        done (⟨rest, env, .boolean (lookup env x).isNone :: eval, f.ret⟩ :: fs)
     | .kEval (.isObject e) :: _rest, _, _ =>
-        done (⟨.kEval e :: .kPrim1 .pIsObj :: f.stmts.tail!, f.env, f.eval⟩ :: fs)
+        done (⟨.kEval e :: .kPrim1 .pIsObj :: f.stmts.tail!, f.env, f.eval, f.ret⟩ :: fs)
     | .kEval (.isNotObject e) :: _rest, _, _ =>
-        done (⟨.kEval e :: .kPrim1 .pIsNotObj :: f.stmts.tail!, f.env, f.eval⟩ :: fs)
+        done (⟨.kEval e :: .kPrim1 .pIsNotObj :: f.stmts.tail!, f.env, f.eval, f.ret⟩ :: fs)
     | .kEval (.isNotUndefined e) :: _rest, _, _ =>
-        done (⟨.kEval e :: .kPrim1 .pIsNotU :: f.stmts.tail!, f.env, f.eval⟩ :: fs)
+        done (⟨.kEval e :: .kPrim1 .pIsNotU :: f.stmts.tail!, f.env, f.eval, f.ret⟩ :: fs)
     | .kEval (.isU e) :: _rest, _, _ =>
-        done (⟨.kEval e :: .kPrim1 .pIsU :: f.stmts.tail!, f.env, f.eval⟩ :: fs)
+        done (⟨.kEval e :: .kPrim1 .pIsU :: f.stmts.tail!, f.env, f.eval, f.ret⟩ :: fs)
     | .kEval (.hasCall e) :: _rest, _, _ =>
-        done (⟨.kEval e :: .kPrim1 .pHasCall :: f.stmts.tail!, f.env, f.eval⟩ :: fs)
+        done (⟨.kEval e :: .kPrim1 .pHasCall :: f.stmts.tail!, f.env, f.eval, f.ret⟩ :: fs)
     | .kEval (.hasCtor e) :: _rest, _, _ =>
-        done (⟨.kEval e :: .kPrim1 .pHasCtor :: f.stmts.tail!, f.env, f.eval⟩ :: fs)
+        done (⟨.kEval e :: .kPrim1 .pHasCtor :: f.stmts.tail!, f.env, f.eval, f.ret⟩ :: fs)
     | .kEval (.isBoolVal b e) :: _rest, _, _ =>
         done (⟨.kEval e :: .kPrim1 (if b then .pIsTrue else .pIsFalse)
-                    :: f.stmts.tail!, f.env, f.eval⟩ :: fs)
+                    :: f.stmts.tail!, f.env, f.eval, f.ret⟩ :: fs)
     | .kEval (.isStrVal s e) :: _rest, _, _ =>
-        done (⟨.kEval e :: .kPrim1 (.pIsStr s) :: f.stmts.tail!, f.env, f.eval⟩ :: fs)
+        done (⟨.kEval e :: .kPrim1 (.pIsStr s) :: f.stmts.tail!, f.env, f.eval, f.ret⟩ :: fs)
     | .kEval (.hasField nm e) :: rest, _, _ =>
-        done (⟨.kEval e :: .kPrim1 (.pHasField nm) :: rest, f.env, f.eval⟩ :: fs)
+        done (⟨.kEval e :: .kPrim1 (.pHasField nm) :: rest, f.env, f.eval, f.ret⟩ :: fs)
     | .kEval (.isType ty e) :: rest, _, _ =>
-        done (⟨.kEval e :: .kPrim1 (.pIsType ty) :: rest, f.env, f.eval⟩ :: fs)
+        done (⟨.kEval e :: .kPrim1 (.pIsType ty) :: rest, f.env, f.eval, f.ret⟩ :: fs)
     | .kEval (.isNull e) :: rest, _, _ =>
-        done (⟨.kEval e :: .kPrim1 .pIsNull :: rest, f.env, f.eval⟩ :: fs)
+        done (⟨.kEval e :: .kPrim1 .pIsNull :: rest, f.env, f.eval, f.ret⟩ :: fs)
     | .kEval (.imeth nm recv args) :: rest, _, _ =>
         -- MOP dispatch: receiver first, then args, then the dispatch op
         done (⟨.kEval recv :: args.map Instr.kEval
                     ++ [.kIMeth nm args.length, .kTest, .kIte [.kRet] [.kUnwrap]] ++ rest,
-                    f.env, f.eval⟩ :: fs)
+                    f.env, f.eval, f.ret⟩ :: fs)
     | .kEval (.ifield nm e) :: rest, _, _ =>
-        done (⟨.kEval e :: .kPrim1 (.pDescField nm) :: rest, f.env, f.eval⟩ :: fs)
+        done (⟨.kEval e :: .kPrim1 (.pDescField nm) :: rest, f.env, f.eval, f.ret⟩ :: fs)
     | .kEval (.isNullOrUnd e) :: _rest, _, _ =>
-        done (⟨.kEval e :: .kPrim1 .pNullOrUnd :: f.stmts.tail!, f.env, f.eval⟩ :: fs)
+        done (⟨.kEval e :: .kPrim1 .pNullOrUnd :: f.stmts.tail!, f.env, f.eval, f.ret⟩ :: fs)
     | .kEval (.call fname args) :: rest, env, eval =>
         -- bare and ? calls behave identically: test, propagate, extract.
         -- Completion(...) is the distinct no-test form (callC, to come).
         done (⟨args.map Instr.kEval
                     ++ [.kCall fname args.length, .kTest, .kIte [.kRet] [.kUnwrap]]
-                    ++ rest, env, eval⟩ :: fs)
+                    ++ rest, env, eval, f.ret⟩ :: fs)
     | .kEval (.listE es) :: rest, env, eval =>
-        done (⟨es.map Instr.kEval ++ [.kMkList es.length] ++ rest, env, eval⟩ :: fs)
+        done (⟨es.map Instr.kEval ++ [.kMkList es.length] ++ rest, env, eval, f.ret⟩ :: fs)
     | .kPrim1 p :: rest, env, v :: eval =>
-        done (⟨rest, env, applyPrim heap p v :: eval⟩ :: fs)
+        done (⟨rest, env, applyPrim heap p v :: eval, f.ret⟩ :: fs)
     | .kPrim1 _ :: _, _, [] => .fell (f :: fs) heap nl 0  -- stack underflow: loud
     | .kCall fname n :: rest, env, eval =>
         if eval.length < n then .fell (f :: fs) heap nl 0
@@ -437,31 +442,31 @@ def fstep (reg : AOReg) : FM → FM
           let older := eval.drop n
           match findAO reg fname with
           | some (ps, body) =>
-              done (⟨compileSteps body, ps.zip popped.reverse, []⟩
-                       :: ⟨rest, env, older⟩ :: fs)
+              done (⟨compileSteps body, ps.zip popped.reverse, [], fname⟩
+                       :: ⟨rest, env, older, f.ret⟩ :: fs)
           | none =>
               -- registry miss: prim-named calls (GetV/Get/Call/…)
               -- evaluate natively (stub: undefined), all others loud
               if ["GetV", "Get", "Call", "GetMethod", "OrdinaryToPrimitive"].contains fname
-              then done (⟨rest, env, .compl Bool.false JSValue.undefined :: older⟩ :: fs)
+              then done (⟨rest, env, .compl Bool.false JSValue.undefined :: older, f.ret⟩ :: fs)
               else .fell (f :: fs) heap nl 0
-    | .kSet x :: rest, env, v :: eval => done (⟨rest, (x, v) :: env, eval⟩ :: fs)
+    | .kSet x :: rest, env, v :: eval => done (⟨rest, (x, v) :: env, eval, f.ret⟩ :: fs)
     | .kSet _ :: _, _, [] => .fell (f :: fs) heap nl 0
-    | .kPop :: rest, env, _ :: eval => done (⟨rest, env, eval⟩ :: fs)
+    | .kPop :: rest, env, _ :: eval => done (⟨rest, env, eval, f.ret⟩ :: fs)
     | .kPop :: _, _, [] => .fell (f :: fs) heap nl 0
     | .kIte t e :: rest, env, .boolean b :: eval =>
-        done (⟨(if b then t else e) ++ rest, env, eval⟩ :: fs)
+        done (⟨(if b then t else e) ++ rest, env, eval, f.ret⟩ :: fs)
     | .kIte _ _ :: _, _, _ => .fell (f :: fs) heap nl 0  -- non-bool condition: loud
-    | .kAssert :: rest, env, .boolean Bool.true :: eval => done (⟨rest, env, eval⟩ :: fs)
+    | .kAssert :: rest, env, .boolean Bool.true :: eval => done (⟨rest, env, eval, f.ret⟩ :: fs)
     | .kAssert :: _, _, _ => .fell (f :: fs) heap nl 0   -- failed assert: loud
     | .kRet :: _, _, v :: _ =>
         match fs with
-        | caller :: fs' => done (⟨caller.stmts, caller.env, v :: caller.eval⟩ :: fs')
+        | caller :: fs' => done (⟨caller.stmts, caller.env, v :: caller.eval, caller.ret⟩ :: fs')
         | [] => .fdone v [] heap nl 0
     | .kRet :: _, _, [] =>
         /- return with nothing on the eval stack: allowed, no push -/
         match fs with
-        | caller :: fs' => done (⟨caller.stmts, caller.env, caller.eval⟩ :: fs')
+        | caller :: fs' => done (⟨caller.stmts, caller.env, caller.eval, caller.ret⟩ :: fs')
         | [] => .fell (f :: fs) heap nl 0
     | .kIMeth nm n :: rest, env, eval =>
         -- stack: [argn..arg1, recv, ...older] (receiver pushed FIRST,
@@ -475,20 +480,21 @@ def fstep (reg : AOReg) : FM → FM
           | "Get", [p, rcv], .obj _loc =>
               match findAO reg "OrdinaryGet" with
               | some (ps, body) =>
-                  done (⟨compileSteps body, ps.zip [recvv, p, rcv], []⟩ :: ⟨rest, env, older⟩ :: fs)
+                  done (⟨compileSteps body, ps.zip [recvv, p, rcv], [], "OrdinaryGet"⟩
+                          :: ⟨rest, env, older, f.ret⟩ :: fs)
               | none => .fell (f :: fs) heap nl 0
           | "GetOwnProperty", [p], .obj loc =>
               match heap loc with
               | some o =>
                   let k := match p with | .str s => PKey.str s | _ => PKey.str "?"
                   let d := (o.props.find? (fun (pk, _) => pk == k)).map (·.2)
-                  done (⟨rest, env, .compl Bool.false (d.map JSValue.descV |>.getD JSValue.undefined) :: older⟩ :: fs)
+                  done (⟨rest, env, .compl Bool.false (d.map JSValue.descV |>.getD JSValue.undefined) :: older, f.ret⟩ :: fs)
               | none => .fell (f :: fs) heap nl 0
           | "GetPrototypeOf", [], .obj loc =>
               match heap loc with
               | some o =>
                   let pv := match o.proto with | some l => .obj l | none => JSValue.null
-                  done (⟨rest, env, .compl Bool.false pv :: older⟩ :: fs)
+                  done (⟨rest, env, .compl Bool.false pv :: older, f.ret⟩ :: fs)
               | none => .fell (f :: fs) heap nl 0
           | _, _, _ => .fell (f :: fs) heap nl 0              -- unknown method / non-object receiver: loud
     | .kNewSlot _ :: _, _, [] => .fell (f :: fs) heap nl 0
@@ -497,7 +503,7 @@ def fstep (reg : AOReg) : FM → FM
         | some ord =>
             let obj := { (objWith .ordinary none) with
                           slots := [(ord, v)] }
-            done (⟨rest, env, .obj nl :: eval⟩ :: fs)
+            done (⟨rest, env, .obj nl :: eval, f.ret⟩ :: fs)
             |> fun m => match m with
               | .frames fs' heap _nl' =>
                   .frames fs' (heapSet heap nl obj) (nl + 1)
@@ -505,31 +511,31 @@ def fstep (reg : AOReg) : FM → FM
         | none => .fell (f :: fs) heap nl 0
     | .kMkList n :: rest, env, eval =>
         if eval.length < n then .fell (f :: fs) heap nl 0
-        else done (⟨rest, env, .listV (eval.take n).reverse :: eval.drop n⟩ :: fs)
+        else done (⟨rest, env, .listV (eval.take n).reverse :: eval.drop n, f.ret⟩ :: fs)
     | .kTest :: rest, env, .compl abrupt v :: eval =>
         -- peek: the completion STAYS under the pushed boolean
-        done (⟨rest, env, .boolean abrupt :: .compl abrupt v :: eval⟩ :: fs)
+        done (⟨rest, env, .boolean abrupt :: .compl abrupt v :: eval, f.ret⟩ :: fs)
     | .kTest :: _, _, _ => .fell (f :: fs) heap nl 0          -- top not a completion: loud
     | .kUnwrap :: rest, env, .compl _ v :: eval =>
-        done (⟨rest, env, v :: eval⟩ :: fs)
+        done (⟨rest, env, v :: eval, f.ret⟩ :: fs)
     | .kUnwrap :: _, _, _ => .fell (f :: fs) heap nl 0        -- top not a completion: loud
     | .kRepeatWhile c body :: rest, env, eval =>
-        done (⟨.kEval c :: .kRepeatTest c body :: rest, env, eval⟩ :: fs)
+        done (⟨.kEval c :: .kRepeatTest c body :: rest, env, eval, f.ret⟩ :: fs)
     | .kRepeatTest c body :: rest, env, .boolean b :: eval =>
         -- loop continuation must PRESERVE rest (issue #1): the
         -- re-armed kRepeatWhile re-enters with the same tail.
-        done (⟨(if b then body ++ [.kRepeatWhile c body] ++ rest else rest), env, eval⟩ :: fs)
+        done (⟨(if b then body ++ [.kRepeatWhile c body] ++ rest else rest), env, eval, f.ret⟩ :: fs)
     | .kRepeatTest _ _ :: _, _, _ => .fell (f :: fs) heap nl 0
     | .kForStart _x _body :: rest, env, .listV [] :: eval =>
-        done (⟨rest, env, eval⟩ :: fs)
+        done (⟨rest, env, eval, f.ret⟩ :: fs)
     | .kForStart x body :: rest, env, .listV (v :: vs) :: eval =>
         done (⟨.kEval (.const v) :: .kSet x :: body
-                    ++ [.kForBody x vs body] ++ rest, env, eval⟩ :: fs)
+                    ++ [.kForBody x vs body] ++ rest, env, eval, f.ret⟩ :: fs)
     | .kForStart _ _ :: _, _, _ => .fell (f :: fs) heap nl 0           -- For each over non-List: loud
     | .kForBody x (v :: vs) body :: rest, env, eval =>
         done (⟨.kEval (.const v) :: .kSet x :: body
-                    ++ [.kForBody x vs body] ++ rest, env, eval⟩ :: fs)
-    | .kForBody _ [] _ :: rest, env, eval => done (⟨rest, env, eval⟩ :: fs)
+                    ++ [.kForBody x vs body] ++ rest, env, eval, f.ret⟩ :: fs)
+    | .kForBody _ [] _ :: rest, env, eval => done (⟨rest, env, eval, f.ret⟩ :: fs)
 
 def fsteps (reg : AOReg) : Nat → FM → FM
   | 0, m => m

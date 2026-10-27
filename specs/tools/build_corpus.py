@@ -102,7 +102,7 @@ def loopBody : List Instr := [.kEval (.const JSValue.undefined), .kSet "done"]
 def loopRest : List Instr :=
   [.kEval (.const (JSValue.number 42)), .kPrim1 .pWrapC, .kRet]
 #eval fsteps theReg 100
-    (.frames [⟨.kRepeatWhile (Expr.varNotPresent "done") loopBody :: loopRest, [], []⟩]
+    (.frames [⟨.kRepeatWhile (Expr.varNotPresent "done") loopBody :: loopRest, [], [], "«top»"⟩]
       emptyHeap 0)
 /- GetMethod on a non-callable, non-undefined value: spec says
    step 4 throws a TypeError (compl true undefined). -/
@@ -121,10 +121,10 @@ def demoHeap : Heap :=
 #eval checkRun (renest lookupDemoF)
 #eval fsteps theReg
     1000 (.frames [⟨compileSteps (build lookupDemoF),
-        [("input", .obj 0), ("propertyKey", .str "x")], []⟩] demoHeap 1)
+        [("input", .obj 0), ("propertyKey", .str "x")], [], "«top»"⟩] demoHeap 1)
 #eval fsteps theReg
     1000 (.frames [⟨compileSteps (build getMethodDemoF),
-         [("input", .obj 0), ("propertyKey", .str "x")], []⟩] demoHeap 1)
+         [("input", .obj 0), ("propertyKey", .str "x")], [], "«top»"⟩] demoHeap 1)
 
 /- ===== static typing: signature table (payload types) =====
    Delivery is always a completion; the table types the payload.
@@ -147,7 +147,7 @@ def corpusSigs : SigTable := [
 ]
 
 /- the issue-#1 regression loop typechecks too: body neutral, cond boolean -/
-#eval typecheckSeq corpusSigs []
+#eval typecheckSeq corpusSigs .any []
     (.kRepeatWhile (Expr.varNotPresent "done") loopBody :: loopRest)
 
 -- every registry body typechecks against its declared signature
@@ -155,8 +155,8 @@ def corpusSigs : SigTable := [
 #eval typecheckReg corpusSigs theReg
 #eval typecheckRegOk corpusSigs theReg
 -- the demos typecheck as frames (Γ = params, or empty for top-level)
-#eval typecheckSeq corpusSigs [("input", .any), ("propertyKey", .any)] (compileSteps (build lookupDemoF))
-#eval typecheckSeq corpusSigs [("input", .any), ("propertyKey", .any)] (compileSteps (build getMethodDemoF))
+#eval typecheckSeq corpusSigs .any [("input", .any), ("propertyKey", .any)] (compileSteps (build lookupDemoF))
+#eval typecheckSeq corpusSigs .any [("input", .any), ("propertyKey", .any)] (compileSteps (build getMethodDemoF))
 
 /- negative tests: the two historical bugs must be REJECTED.
    Bug 1 (missing rewrap): the Return-?-of-a-completion-variable shape:
@@ -164,26 +164,26 @@ def corpusSigs : SigTable := [
 def bug1 : List Instr :=
   [.kEval (Expr.nv "x"), .kTest,
    .kIte [.kRet] [.kUnwrap, .kRet]]
-#eval typecheckSeq corpusSigs [("x", .compl)] bug1
+#eval typecheckSeq corpusSigs .any [("x", .complOf .any)] bug1
 /- Bug 2 (double self-test): kEval of a call yields the payload type
    (raw), a stray kTest demands a completion. -/
 def bug2 : List Instr :=
   [.kEval (Expr.call "GetV" [Expr.nv "v", Expr.nv "p"]), .kTest,
    .kIte [.kRet] [.kUnwrap, .kPrim1 .pWrapC, .kRet]]
-#eval typecheckSeq corpusSigs [("v", .any), ("p", .any)] bug2
+#eval typecheckSeq corpusSigs .any [("v", .any), ("p", .any)] bug2
 /- Signature-driven argument checking: IteratorClose-style param
    (raw, compl). -/
-def closeSigs : SigTable := [("FakeClose", ([.any, .compl], .any))]
+def closeSigs : SigTable := [("FakeClose", ([.any, .complOf .any], .any))]
 def badArg : List Instr :=
   [.kEval (Expr.call "FakeClose" [Expr.nv "r", Expr.nv "c"]), .kPrim1 .pWrapC, .kRet]
 def goodArg : List Instr := badArg
-#eval typecheckSeq closeSigs [("r", .any), ("c", .any)] badArg
-#eval typecheckSeq closeSigs [("r", .any), ("c", .compl)] goodArg
+#eval typecheckSeq closeSigs .any [("r", .any), ("c", .any)] badArg
+#eval typecheckSeq closeSigs .any [("r", .any), ("c", .complOf .any)] goodArg
 /- Stricter typing: a number where kIte demands a boolean. This is the
    class of bug runtime smoke tests miss on dead paths. -/
 def bug3 : List Instr :=
   [.kEval (.const (JSValue.number 5)), .kIte [] []]
-#eval typecheckSeq corpusSigs [] bug3
+#eval typecheckSeq corpusSigs .any [] bug3
 '''
 
 out = ["import metalanguage", ""]
