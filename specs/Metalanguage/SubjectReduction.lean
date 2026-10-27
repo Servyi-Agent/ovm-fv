@@ -66,13 +66,13 @@ def selfTestHead : List Instr → Bool
   | .kTest :: .kIte [.kRet] [.kUnwrap] :: _ => Bool.true
   | _ => Bool.false
 
-def inflight (_sigs : SigTable) (above : Option «String») (_f : Fr) : List STy :=
+def inflight (sigs : SigTable) (above : Option «String») : List STy :=
   match above with
   | some n => [STy.complOf (sigRetTy sigs n)]
   | none => []
 
 def absStack (sigs : SigTable) (above : Option «String») (f : Fr) : List STy :=
-  inflight sigs above f ++ stackTyOf f.eval
+  inflight sigs above ++ stackTyOf f.eval
 
 /- ## Frame and state typing -/
 
