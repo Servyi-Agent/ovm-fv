@@ -43,14 +43,6 @@ inductive JSValue where
   deriving Repr, BEq
 end
 
-def IsAccessorDescriptor (d : Descriptor) : Bool :=
-  match d with
-  | .mk _ _ getter setter _ _ => getter.isSome || setter.isSome
-
-def IsDataDescriptor (d : Descriptor) : Bool :=
-  match d with
-  | .mk value writable _ _ _ _ => value.isSome || writable.isSome
-
 inductive E2 where
   | nv (name : «String»)
   | nat (n : Nat)
@@ -141,15 +133,6 @@ structure JsObj where
   props      : List (PKey × Descriptor)   -- ordered own properties
   deriving Repr
 
-def slotGet (o : JsObj) (s : Slot) : Option JSValue :=
-  o.slots.lookup (slotOrd s)   -- List.lookup returns the VALUE directly
-
-def slotSet (o : JsObj) (s : Slot) (v : JSValue) : JsObj where
-  kind := o.kind
-  proto := o.proto
-  extensible := o.extensible
-  slots := (slotOrd s, v) :: o.slots.filter (fun (k, _) => k != slotOrd s)
-  props := o.props
 
 def objWith (kind : Kind) (proto : Option Nat) : JsObj where
   kind := kind
@@ -235,7 +218,7 @@ def fuseL : List LStep → List LStep
 mutual
 def strip : List LStep → Prog
   | [] => []
-  | (l, b) :: rest => stripBody b :: strip rest
+  | (_l, b) :: rest => stripBody b :: strip rest
 def stripBody : LBody → Step
   | .ret v => .ret v
   | .retNewSlot sn vv => .retNewSlot sn vv
@@ -252,7 +235,6 @@ def stripBody : LBody → Step
 end
 
 /- Fuse else-steps, then strip labels. -/
-def toProg (l : List LStep) : Prog := strip (fuseL l)
 
 /- Consecutiveness audit: label ordinals per scheme (1→1, a→1, i→1). -/
 def romanOrd : «String» → Option Nat
@@ -659,50 +641,50 @@ macro_rules
 
 open Lean in
 macro_rules
-  | `([s| $l:kwLet $x:var be $n:scientific]) =>
+  | `([s| $__l:kwLet $x:var be $n:scientific]) =>
       ``(FBody.letE $(quote (varName x)) (E2.nat $(quote (sciNat n))))
-  | `([s| $r:kwReturn $n:scientific]) =>
+  | `([s| $_r:kwReturn $n:scientific]) =>
       ``(FBody.ret (E2.nat $(quote (sciNat n))))
-  | `([s| $s:kwSet $x:var to $n:scientific]) =>
+  | `([s| $_s:kwSet $x:var to $n:scientific]) =>
       ``(FBody.setE $(quote (varName x)) (E2.nat $(quote (sciNat n))))
-  | `([s| $l:kwLet $x:var be ? $e:algExpr .]) =>
+  | `([s| $_l:kwLet $x:var be ? $e:algExpr .]) =>
       ``(FBody.letE $(quote (varName x)) [e| $e])
-  | `([s| $l:kwLet $x:var be $e:algExpr .]) =>
+  | `([s| $_l:kwLet $x:var be $e:algExpr .]) =>
       ``(FBody.letE $(quote (varName x)) [e| $e])
-  | `([s| $r:kwReturn ? $e:algExpr .]) =>
+  | `([s| $_r:kwReturn ? $e:algExpr .]) =>
       ``(FBody.retE [e| $e])
-  | `([s| $r:kwReturn a new $t:typeName object whose [ [ $s:aoName ] ]
+  | `([s| $_r:kwReturn a new $_t:typeName object whose [ [ $s:aoName ] ]
       internal slot is set to $x:var .]) =>
       ``(FBody.retNewSlot $(quote (aoNameOf s)) $(quote (varName x)))
-  | `([s| $t:kwThrow a TypeError exception .]) =>
+  | `([s| $_t:kwThrow a TypeError exception .]) =>
       ``(FBody.throw)
-  | `([s| $s:kwSet $x:var to $e:algExpr .]) =>
+  | `([s| $_s:kwSet $x:var to $e:algExpr .]) =>
       ``(FBody.setE $(quote (varName x)) [e| $e])
-  | `([s| $k:kwIf $c:algExpr , $s:stmt]) =>
+  | `([s| $_k:kwIf $c:algExpr , $s:stmt]) =>
       ``(FBody.ifI [e| $c] [s| $s])
-  | `([s| $e:kwElse , $s:stmt]) =>
+  | `([s| $_e:kwElse , $s:stmt]) =>
       ``(FBody.elseI [s| $s])
-  | `([s| $r:kwReturn $x:var .]) =>
+  | `([s| $_r:kwReturn $x:var .]) =>
       ``(FBody.ret (E2.nv $(quote (varName x))))
-  | `([s| $r:kwReturn undefined .]) =>
+  | `([s| $_r:kwReturn undefined .]) =>
       ``(FBody.ret (E2.const JSValue.undefined))
-  | `([s| $r:kwReturn true .]) =>
+  | `([s| $_r:kwReturn true .]) =>
       ``(FBody.ret (E2.const (JSValue.boolean Bool.true)))
-  | `([s| $r:kwReturn false .]) =>
+  | `([s| $_r:kwReturn false .]) =>
       ``(FBody.ret (E2.const (JSValue.boolean Bool.false)))
-  | `([s| $r:kwReturn $e:algExpr .]) =>
+  | `([s| $_r:kwReturn $e:algExpr .]) =>
       ``(FBody.ret [e| $e])
-  | `([s| $t:kwThrow .]) =>
+  | `([s| $_t:kwThrow .]) =>
       ``(FBody.throw)
-  | `([s| $k:kwIf $c:algExpr , $t:kwThen]) =>
+  | `([s| $_k:kwIf $c:algExpr , $_t:kwThen]) =>
       ``(FBody.ifS [e| $c])
-  | `([s| $e:kwElse ,]) =>
+  | `([s| $_e:kwElse ,]) =>
       ``(FBody.elseM)
-  | `([s| $e:kwElse if $c:algExpr , then]) =>
+  | `([s| $_e:kwElse if $c:algExpr , then]) =>
       ``(FBody.elseG [e| $c])
   | `([s| Assert : $e:algExpr .]) =>
       ``(FBody.assertE [e| $e])
-  | `([s| $f:kwFor each element $x:var of $e:algExpr , do]) =>
+  | `([s| $_f:kwFor each element $x:var of $e:algExpr , do]) =>
       ``(FBody.forEach $(quote (varName x)) [e| $e])
 
 /- Layout recovery: the flat stream (depth, label, body) is re-nested
@@ -750,28 +732,28 @@ def renestGo : Nat → List FStep → List LStep
   | f + 1, (d, l, .elseM) :: rest =>
       (l, LBody.elseM (renestGo f (takeBody d rest).1)) ::
         renestGo f (takeBody d rest).2
-  | f + 1, (d, l, .ret v) :: rest => (l, LBody.ret v) :: renestGo f rest
-  | f + 1, (d, l, .throw) :: rest => (l, LBody.throw) :: renestGo f rest
-  | f + 1, (d, l, .retQ op) :: rest => (l, LBody.retQ op) :: renestGo f rest
-  | f + 1, (d, l, .retE e) :: rest => (l, LBody.retE e) :: renestGo f rest
-  | f + 1, (d, l, .retNewSlot sn vv) :: rest =>
+  | f + 1, (_d, l, .ret v) :: rest => (l, LBody.ret v) :: renestGo f rest
+  | f + 1, (_d, l, .throw) :: rest => (l, LBody.throw) :: renestGo f rest
+  | f + 1, (_d, l, .retQ op) :: rest => (l, LBody.retQ op) :: renestGo f rest
+  | f + 1, (_d, l, .retE e) :: rest => (l, LBody.retE e) :: renestGo f rest
+  | f + 1, (_d, l, .retNewSlot sn vv) :: rest =>
       (l, LBody.retNewSlot sn vv) :: renestGo f rest
-  | f + 1, (d, l, .setE n e) :: rest => (l, LBody.setE n e) :: renestGo f rest
-  | f + 1, (d, l, .ifI c s) :: rest =>
+  | f + 1, (_d, l, .setE n e) :: rest => (l, LBody.setE n e) :: renestGo f rest
+  | f + 1, (_d, l, .ifI c s) :: rest =>
       (l, LBody.ifS c [("a", inlineBody s)] []) :: renestGo f rest
-  | f + 1, (d, l, .elseI s) :: rest =>
+  | f + 1, (_d, l, .elseI s) :: rest =>
       (l, LBody.elseM [("a", inlineBody s)]) :: renestGo f rest
   | f + 1, (d, l, .elseG c) :: rest =>
       let (t, rest2) := takeBody d rest
       (l, LBody.elseM [("a", LBody.ifS c (renestGo f t) [])]) :: renestGo f rest2
-  | f + 1, (d, l, .assertE e) :: rest =>
+  | f + 1, (_d, l, .assertE e) :: rest =>
       (l, LBody.assertE e) :: renestGo f rest
   | f + 1, (d, l, .forEach x e) :: rest =>
       let (t, rest2) := takeBody d rest
       (l, LBody.forEach x e (renestGo f t)) :: renestGo f rest2
-  | f + 1, (d, l, .letQ n op) :: rest =>
+  | f + 1, (_d, l, .letQ n op) :: rest =>
       (l, LBody.letQ n op) :: renestGo f rest
-  | f + 1, (d, l, .letE n e) :: rest =>
+  | f + 1, (_d, l, .letE n e) :: rest =>
       (l, LBody.letE n e) :: renestGo f rest
 termination_by f _ => f
 
@@ -900,7 +882,7 @@ def hasCallV (h : Heap) : JSValue → Bool
     | none => Bool.false
   | _ => Bool.false
 
-def hasCtorV (h : Heap) : JSValue → Bool := fun _ => Bool.false
+def hasCtorV (_h : Heap) : JSValue → Bool := fun _ => Bool.false
 def isNullV : JSValue → Bool
   | .null => Bool.true
   | _ => Bool.false
@@ -1180,7 +1162,7 @@ def kstep (reg : AOReg) : KM → KM
       | some v =>
           match slotOfName sn with
           | some ord =>
-              let obj := { (objWith .ordinary none) with slots := [(ord, v)] }
+              let _obj := { (objWith .ordinary none) with slots := [(ord, v)] }
               .krun (.kEvalS (.ev (.obj 0)) [] [] .kRet :: st)
                 env stack -- heap not threaded through KM: object at loc 0
           | none => .kfell
@@ -1262,7 +1244,7 @@ def kstep (reg : AOReg) : KM → KM
       | _ => .kfell     -- For each over a non-List: stuck, loudly
   | .krun (.kLoopS x (v :: rest') body _ :: st) env stack =>
       .krun (body ++ [.kLoopS x rest' body st] ++ st) ((x, v) :: env) stack
-  | .krun (.kLoopS x [] _ cont :: st) env stack => .krun cont env stack
+  | .krun (.kLoopS _x [] _ cont :: _st) env stack => .krun cont env stack
   | .krun (.kEvalNextS [] rs (.kBind n) :: st) env stack =>
       match rs with
       | v :: _ => .krun st ((n, v) :: env) stack
@@ -1332,12 +1314,12 @@ def sosStep : SState → SState
       match evalE2 emptyHeap env e with
       | some (.boolean Bool.true) => .srun rest env
       | _ => .sfell
-  | .srun (.retNewSlot _ _ :: _) env => .sfell   -- heap-allocating: machine-level
+  | .srun (.retNewSlot _ _ :: _) _env => .sfell   -- heap-allocating: machine-level
   | .srun (.retE e :: _) env =>
       match evalE2 emptyHeap env e with
       | some v => .sret v
       | none => .sfell
-  | .srun (.retQ op :: _) env =>
+  | .srun (.retQ op :: _) _env =>
       match evalP2 op with
       | some v => .sret v
       | none => .sfell
@@ -1481,22 +1463,22 @@ def fstep (reg : AOReg) : FM → FM
         | none => .fell (f :: fs) heap nl 0     -- unbound: stuck, loudly
     | .kEval (.varNotPresent x) :: rest, env, eval =>
         done (⟨rest, env, .boolean (lookup env x).isNone :: eval⟩ :: fs)
-    | .kEval (.isObject e) :: rest, _, _ =>
+    | .kEval (.isObject e) :: _rest, _, _ =>
         done (⟨.kEval e :: .kPrim1 .pIsObj :: f.stmts.tail!, f.env, f.eval⟩ :: fs)
-    | .kEval (.isNotObject e) :: rest, _, _ =>
+    | .kEval (.isNotObject e) :: _rest, _, _ =>
         done (⟨.kEval e :: .kPrim1 .pIsNotObj :: f.stmts.tail!, f.env, f.eval⟩ :: fs)
-    | .kEval (.isNotUndefined e) :: rest, _, _ =>
+    | .kEval (.isNotUndefined e) :: _rest, _, _ =>
         done (⟨.kEval e :: .kPrim1 .pIsNotU :: f.stmts.tail!, f.env, f.eval⟩ :: fs)
-    | .kEval (.isU e) :: rest, _, _ =>
+    | .kEval (.isU e) :: _rest, _, _ =>
         done (⟨.kEval e :: .kPrim1 .pIsU :: f.stmts.tail!, f.env, f.eval⟩ :: fs)
-    | .kEval (.hasCall e) :: rest, _, _ =>
+    | .kEval (.hasCall e) :: _rest, _, _ =>
         done (⟨.kEval e :: .kPrim1 .pHasCall :: f.stmts.tail!, f.env, f.eval⟩ :: fs)
-    | .kEval (.hasCtor e) :: rest, _, _ =>
+    | .kEval (.hasCtor e) :: _rest, _, _ =>
         done (⟨.kEval e :: .kPrim1 .pHasCtor :: f.stmts.tail!, f.env, f.eval⟩ :: fs)
-    | .kEval (.isBoolVal b e) :: rest, _, _ =>
+    | .kEval (.isBoolVal b e) :: _rest, _, _ =>
         done (⟨.kEval e :: .kPrim1 (if b then .pIsTrue else .pIsFalse)
                     :: f.stmts.tail!, f.env, f.eval⟩ :: fs)
-    | .kEval (.isStrVal s e) :: rest, _, _ =>
+    | .kEval (.isStrVal s e) :: _rest, _, _ =>
         done (⟨.kEval e :: .kPrim1 (.pIsStr s) :: f.stmts.tail!, f.env, f.eval⟩ :: fs)
     | .kEval (.hasField nm e) :: rest, _, _ =>
         done (⟨.kEval e :: .kPrim1 (.pHasField nm) :: rest, f.env, f.eval⟩ :: fs)
@@ -1511,7 +1493,7 @@ def fstep (reg : AOReg) : FM → FM
                     f.env, f.eval⟩ :: fs)
     | .kEval (.ifield nm e) :: rest, _, _ =>
         done (⟨.kEval e :: .kPrim1 (.pDescField nm) :: rest, f.env, f.eval⟩ :: fs)
-    | .kEval (.isNullOrUnd e) :: rest, _, _ =>
+    | .kEval (.isNullOrUnd e) :: _rest, _, _ =>
         done (⟨.kEval e :: .kPrim1 .pNullOrUnd :: f.stmts.tail!, f.env, f.eval⟩ :: fs)
     | .kEval (.call fname args) :: rest, env, eval =>
         -- bare and ? calls behave identically: test, propagate, extract.
@@ -1570,7 +1552,7 @@ def fstep (reg : AOReg) : FM → FM
           let recvv := eval.getD n JSValue.undefined
           let older := eval.drop (n + 1)
           match nm, argsw.reverse, recvv with
-          | "Get", [p, rcv], .obj loc =>
+          | "Get", [p, rcv], .obj _loc =>
               match findAO reg "OrdinaryGet" with
               | some (ps, body) =>
                   done (⟨compileSteps body, ps.zip [recvv, p, rcv], []⟩ :: ⟨rest, env, older⟩ :: fs)
@@ -1597,7 +1579,7 @@ def fstep (reg : AOReg) : FM → FM
                           slots := [(ord, v)] }
             done (⟨rest, env, .obj nl :: eval⟩ :: fs)
             |> fun m => match m with
-              | .frames fs' heap nl' =>
+              | .frames fs' heap _nl' =>
                   .frames fs' (heapSet heap nl obj) (nl + 1)
               | m => m
         | none => .fell (f :: fs) heap nl 0
@@ -1618,7 +1600,7 @@ def fstep (reg : AOReg) : FM → FM
         -- re-armed kRepeatWhile re-enters with the same tail.
         done (⟨(if b then body ++ [.kRepeatWhile c body] ++ rest else rest), env, eval⟩ :: fs)
     | .kRepeatTest _ _ :: _, _, _ => .fell (f :: fs) heap nl 0
-    | .kForStart x body :: rest, env, .listV [] :: eval =>
+    | .kForStart _x _body :: rest, env, .listV [] :: eval =>
         done (⟨rest, env, eval⟩ :: fs)
     | .kForStart x body :: rest, env, .listV (v :: vs) :: eval =>
         done (⟨.kEval (.const v) :: .kSet x :: body

@@ -2,3 +2,4 @@
 *.olean
 *.ilean
 *.hash
+specs/corpus.lean
