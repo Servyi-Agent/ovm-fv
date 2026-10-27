@@ -312,11 +312,11 @@ def checkSeq : SigTable → STy → TyEnv → List Instr → List STy → TCResu
       .reject .kRet "kRet: top of stack is not complOf r" σ
   | sigs, r, Γ, .kTest :: rest, .complOf t :: σ' =>
       checkSeq sigs r Γ rest (.boolean :: .complOf t :: σ')
-  | _, _, _, .kTest :: rest, σ =>
+  | _, _, _, .kTest :: _, σ =>
       .reject .kTest "kTest: top of stack is not a completion" σ
   | sigs, r, Γ, .kUnwrap :: rest, .complOf t :: σ' =>
       checkSeq sigs r Γ rest (t :: σ')
-  | _, _, _, .kUnwrap :: rest, σ =>
+  | _, _, _, .kUnwrap :: _, σ =>
       .reject .kUnwrap "kUnwrap: top of stack is not a completion" σ
   | sigs, r, Γ, .kIMeth nm n :: rest, σ =>
       if mopArity nm == some n then
@@ -324,7 +324,7 @@ def checkSeq : SigTable → STy → TyEnv → List Instr → List STy → TCResu
         | some σ' => checkSeq sigs r Γ rest (.complOf .any :: σ')
         | none => .reject (.kIMeth nm n) "MOP dispatch: receiver/args stack mismatch" σ
       else .reject (.kIMeth nm n) "unknown MOP method or wrong arity" σ
-  | sigs, r, Γ, .kBreak :: _, σ =>
+  | _, _, Γ, .kBreak :: _, σ =>
       -- break out of the enclosing loop: neutral control transfer;
       -- the loop join consumes it (a break at frame top rejects in
       -- the terminal demand)
