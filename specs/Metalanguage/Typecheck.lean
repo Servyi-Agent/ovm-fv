@@ -283,7 +283,7 @@ def checkSeq : SigTable → STy → TyEnv → List Instr → List STy → TCResu
                       | .flows fr => .flows { exits := fj.exits || fr.exits, falls := fr.falls }
                       | res => res
                   | none => .flows { exits := fj.exits, falls := none }
-  | sigs, _, Γ, .kNarrowNotNull x :: rest, σ =>
+  | sigs, r, Γ, .kNarrowNotNull x :: rest, σ =>
       -- else-path of `If x is null, <exit>`: x is not null here;
       -- the only leaf that improves is objOrNull -> obj
       checkSeq sigs r
@@ -306,7 +306,7 @@ def checkSeq : SigTable → STy → TyEnv → List Instr → List STy → TCResu
   | _, _, _, .kRet :: _, .complT :: _ =>
       -- a throw: exempt from r (the caller's unwrap never runs on it)
       .flows { exits := Bool.true, falls := none }
-  | _, r, _, .kRet :: _, σ =>
+  | _, _, _, .kRet :: _, σ =>
       .reject .kRet "kRet: top of stack is not a normal complN-r or a throw" σ
   | sigs, r, Γ, .kTest :: rest, .complN t :: σ' =>
       checkSeq sigs r Γ rest (.boolean :: .complN t :: σ')
