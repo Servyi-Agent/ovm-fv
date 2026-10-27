@@ -15,11 +15,12 @@ import Metalanguage.Grammar
 inductive STy where
   | any | number | boolean | str | obj | list | descV
   | compl | unit
-  deriving Repr, BEq
+  deriving Repr, BEq, DecidableEq
 
-/-- `t ≤ t'` in the value lattice: `any` absorbs. -/
+/-- `t ≤ t'` in the value lattice: `any` absorbs. Defined via
+   DecidableEq so that simp/omega can reason under it. -/
 def tmoves (t t' : STy) : Bool :=
-  t == t' || t' == STy.any
+  decide (t = t' ∨ t' = STy.any)
 
 def leList : List STy → List STy → Bool
   | [], [] => Bool.true
@@ -27,12 +28,9 @@ def leList : List STy → List STy → Bool
   | _, _ => Bool.false
 
 def typeOfV : JSValue → STy
-  | .number _ => .number
   | .boolean _ => .boolean
-  | .str _ => .str
   | .obj _ => .obj
   | .listV _ => .list
-  | .descV _ => .descV
   | .compl _ _ => .compl
   | _ => .any
 
@@ -70,7 +68,7 @@ termination_by es => sizeOf es
 
 def typeOfE (sigs : SigTable) (Γ : TyEnv) : Expr → Option STy
   | .nv x => tyLookup Γ x
-  | .nat _ => some .number
+  | .nat _ => some STy.any
   | .const v => some (typeOfV v)
   | .varNotPresent _ => some .boolean
   | .call f as =>
@@ -99,9 +97,13 @@ def typeOfE (sigs : SigTable) (Γ : TyEnv) : Expr → Option STy
       | none => none
   | .listE es =>
       if (typesOf sigs Γ es).isSome then some .list else none
+  | .ifield _ x =>
+      -- field reads yield a VALUE (or undefined on non-descriptors):
+      -- pDescField is a dynamic guard, so the result is `any`
+      if (typeOfE sigs Γ x).isSome then some STy.any else none
   | .isObject x | .isNotObject x | .isNotUndefined x | .hasCall x | .hasCtor x
   | .isU x | .isBoolVal _ x | .isStrVal _ x | .isNullOrUnd x | .isNull x
-  | .isType _ x | .hasField _ x | .ifield _ x =>
+  | .isType _ x | .hasField _ x =>
       -- predicate forms are Boolean; the prim inputs are dynamic (any)
       if (typeOfE sigs Γ x).isSome then some .boolean else none
 termination_by e => sizeOf e
@@ -116,21 +118,19 @@ inductive TCResult where
   | reject (site : Instr) (why : «String») (σ : List STy)
   deriving Repr
 
-/- Branch join for variable types: UNION of bindings (a binding from
-   either branch survives; unbound-on-some-path stays a loud runtime
-   concern, not a protocol violation). A name bound in both branches
-   joins at the LUB: equal types keep their refinement, differing
-   types widen to `any` — which still only passes `any` demands, so
-   one-sided refinements (or one-sided compl bindings) remain
-   conservative downstream. -/
+/- Branch join for variable types: names bound on ALL falling paths
+   survive (intersection); a name bound in both joins at the LUB.
+   One-sided bindings are dropped — the machine takes one branch, so
+   the other's bindings do not exist at runtime, and the continuation
+   must not rely on them. -/
 def lub (t t' : STy) : STy := if t == t' then t else .any
 
 def ΓUnion : TyEnv → TyEnv → TyEnv
-  | [], Γ₂ => Γ₂
+  | [], _ => []
   | (n, t) :: r, Γ₂ =>
       match tyLookup Γ₂ n with
       | some t' => (n, lub t t') :: ΓUnion r Γ₂
-      | none => (n, t) :: ΓUnion r Γ₂
+      | none => ΓUnion r Γ₂
 
 def popTy (t : STy) (σ : List STy) : Option (List STy) :=
   match σ with
@@ -166,6 +166,11 @@ def checkNeutral (rbody : TCResult) (site : Instr)
       if σ' == σ then k Γ' σ
       else .reject site "loop body is not stack-neutral" σ
 
+/-- Do the top `ps.length` entries satisfy `ps`? The head of the
+   stack is the LAST argument, so compare against reversed ps. -/
+def popArgs (ps σ : List STy) : Bool :=
+  σ.length ≥ ps.length && leList ps.reverse (σ.take ps.length).reverse
+
 /- `checkSeq sigs Γ is σ`: walk instruction list `is` with
    variable types Γ and abstract stack σ. -/
 def checkSeq : SigTable → TyEnv → List Instr → List STy → TCResult
@@ -183,9 +188,11 @@ def checkSeq : SigTable → TyEnv → List Instr → List STy → TCResult
       match sigFind sigs f with
       | some (ps, _) =>
           if ps.length == n then
-            match popTyN n .any σ with
-            | some σ' => checkSeq sigs Γ rest (.compl :: σ')
-            | none => .reject (.kCall f n) "call: argument stack mismatch" σ
+            -- args are checked against the signature HERE (pointwise
+            -- subtyping), so the callee receives a certified env
+            if popArgs ps σ then
+              checkSeq sigs Γ rest (.compl :: σ.drop n)
+            else .reject (.kCall f n) "call: argument types do not match signature" σ
           else .reject (.kCall f n) "call arity does not match signature" σ
       | none => .reject (.kCall f n) "no signature for callee" σ
   | sigs, Γ, .kSet x :: rest, σ =>
@@ -219,8 +226,7 @@ def checkSeq : SigTable → TyEnv → List Instr → List STy → TCResult
   | _, _, .kRet :: _, σ =>
       match σ with
       | .compl :: _ => .exits        -- value return: wire format is compl
-      | [] => .exits                  -- unit return (no value)
-      | _ => .reject .kRet "kRet: top of stack is not a completion" σ
+      | _ => .reject .kRet "kRet: top of stack is not a completion (or empty/unit return)" σ
   | sigs, Γ, .kTest :: rest, σ =>
       match popTy .compl σ with
       | some σ' => checkSeq sigs Γ rest (.boolean :: .compl :: σ')
