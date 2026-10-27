@@ -283,7 +283,7 @@ def checkSeq : SigTable → STy → TyEnv → List Instr → List STy → TCResu
                       | .flows fr => .flows { exits := fj.exits || fr.exits, falls := fr.falls }
                       | res => res
                   | none => .flows { exits := fj.exits, falls := none }
-  | sigs, r, Γ, .kNarrowNotNull x :: rest, σ =>
+  | sigs, _, Γ, .kNarrowNotNull x :: rest, σ =>
       -- else-path of `If x is null, <exit>`: x is not null here;
       -- the only leaf that improves is objOrNull -> obj
       checkSeq sigs r
