@@ -159,11 +159,12 @@ def corpusSigs : SigTable := [
 #eval typecheckSeq corpusSigs 2000 [("input", .any), ("propertyKey", .any)] (compileSteps (build getMethodDemoF))
 
 /- negative tests: the two historical bugs must be REJECTED.
-   Bug 1 (missing rewrap): kUnwrap leaves raw, kRet demands compl. -/
+   Bug 1 (missing rewrap): the Return-?-of-a-completion-variable shape:
+   kUnwrap leaves raw, kRet demands compl. -/
 def bug1 : List Rt2 :=
-  [.kPrimQ (P2.getV (E2.nv "v") (E2.nv "p")), .kTest,
+  [.kEval (E2.nv "x"), .kTest,
    .kIte [.kRet] [.kUnwrap, .kRet]]
-#eval typecheckSeq corpusSigs 2000 [("v", .any), ("p", .any)] bug1
+#eval typecheckSeq corpusSigs 2000 [("x", .compl)] bug1
 /- Bug 2 (double self-test): kEval of a call yields the payload type
    (raw), a stray kTest demands a completion. -/
 def bug2 : List Rt2 :=

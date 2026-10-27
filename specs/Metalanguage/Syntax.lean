@@ -13,7 +13,6 @@ declare_syntax_cat algExpr
 declare_syntax_cat var
 syntax ident : var
 syntax "method" : var
-declare_syntax_cat algPrim
 declare_syntax_cat kwIf
 declare_syntax_cat kwElse
 declare_syntax_cat kwLet
@@ -99,16 +98,8 @@ syntax "number" : algExpr
 syntax "string" : algExpr
 
 
-syntax "GetMethod" "(" algExpr "," ident ")" : algPrim
-syntax "GetMethod" "(" algExpr "," "%" ident "%" ")" : algPrim
-syntax "GetV" "(" algExpr "," algExpr ")" : algPrim
-syntax "Get" "(" algExpr "," algExpr ")" : algPrim
-syntax "Call" "(" algExpr "," algExpr ")" : algPrim
-syntax "GetMethod" "(" algExpr "," "@" "@" ident ")" : algPrim
-syntax "OrdinaryToPrimitive" "(" algExpr "," algExpr ")" : algPrim
 /- Deviation: the spec's « argList » — Lean lexes « » as identifier
    delimiters, so the list brackets are dropped (single arg for now). -/
-syntax "Call" "(" algExpr "," algExpr "," algExpr ")" : algPrim
 
 syntax "If" : kwIf
 syntax "if" : kwIf
@@ -198,7 +189,6 @@ syntax "[alg|" fsteps "]" : term
 syntax "[f|" fstep "]" : term
 syntax "[e|" algExpr "]" : term
 syntax "[ca|" callArgs "]" : term
-syntax "[p|" algPrim "]" : term
 syntax "[s|" stmt "]" : term
 
 /- The numeral lexer glues a trailing dot into one scientific token
@@ -354,25 +344,6 @@ macro_rules
 
 open Lean in
 macro_rules
-  | `([p| GetMethod ( $o:algExpr , $x:ident )]) =>
-      ``(P2.getMethod [e| $o] $(quote (toString x.getId)))
-  | `([p| GetMethod ( $o:algExpr , % $x:ident % )]) =>
-      ``(P2.getMethod [e| $o] $(quote ("%" ++ toString x.getId ++ "%")))
-  | `([p| GetMethod ( $o:algExpr , @ @ $x:ident )]) =>
-      ``(P2.getMethod [e| $o] $(quote ("@@" ++ toString x.getId)))
-  | `([p| Get ( $o:algExpr , $p:algExpr )]) =>
-      ``(P2.getV [e| $o] [e| $p])
-  | `([p| Call ( $f:algExpr , $t:algExpr )]) =>
-      ``(P2.call [e| $f] [e| $t] (E2.const JSValue.undefined))
-  | `([p| GetV ( $v:algExpr , $p:algExpr )]) =>
-      ``(P2.getV [e| $v] [e| $p])
-  | `([p| OrdinaryToPrimitive ( $o:algExpr , $h:algExpr )]) =>
-      ``(P2.ordinaryToPrimitive [e| $o] [e| $h])
-  | `([p| Call ( $f:algExpr , $t:algExpr , $x:algExpr )]) =>
-      ``(P2.call [e| $f] [e| $t] [e| $x])
-
-open Lean in
-macro_rules
   | `([s| $__l:kwLet $x:var be $n:scientific]) =>
       ``(FBody.letE $(quote (varName x)) (E2.nat $(quote (sciNat n))))
   | `([s| $_r:kwReturn $n:scientific]) =>
@@ -427,7 +398,6 @@ macro_rules
    would have carried as a sub-step, keeping the audit meaningful. -/
 def inlineBody : FBody → LBody
   | .ret v => .ret v
-  | .retQ op => .retQ op
   | .retE e => .retE e
   | .retNewSlot sn vv => .retNewSlot sn vv
   | .throw => .throw
@@ -441,7 +411,6 @@ def inlineBody : FBody → LBody
   | .elseM => .throw
   | .elseG _ => .throw
   | .forEach _ _ => .throw
-  | .letQ n op => .letQ n op
   | .letE n e => .letE n e
 
 def takeBody : Nat → List FStep → List FStep × List FStep
@@ -466,7 +435,6 @@ def renestGo : Nat → List FStep → List LStep
         renestGo f (takeBody d rest).2
   | f + 1, (_d, l, .ret v) :: rest => (l, LBody.ret v) :: renestGo f rest
   | f + 1, (_d, l, .throw) :: rest => (l, LBody.throw) :: renestGo f rest
-  | f + 1, (_d, l, .retQ op) :: rest => (l, LBody.retQ op) :: renestGo f rest
   | f + 1, (_d, l, .retE e) :: rest => (l, LBody.retE e) :: renestGo f rest
   | f + 1, (_d, l, .retNewSlot sn vv) :: rest =>
       (l, LBody.retNewSlot sn vv) :: renestGo f rest
@@ -483,8 +451,6 @@ def renestGo : Nat → List FStep → List LStep
   | f + 1, (d, l, .forEach x e) :: rest =>
       let (t, rest2) := takeBody d rest
       (l, LBody.forEach x e (renestGo f t)) :: renestGo f rest2
-  | f + 1, (_d, l, .letQ n op) :: rest =>
-      (l, LBody.letQ n op) :: renestGo f rest
   | f + 1, (_d, l, .letE n e) :: rest =>
       (l, LBody.letE n e) :: renestGo f rest
 termination_by f _ => f

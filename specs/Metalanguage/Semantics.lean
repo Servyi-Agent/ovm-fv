@@ -235,10 +235,6 @@ def evalE2 (h : Heap) (env : Env) : E2 → Option JSValue
 termination_by e => sizeOf e
 end
 
-def evalP2 : P2 → Option JSValue
-  | .call _ _ _ => some .undefined      -- stub until Call/heap
-  | _ => some .undefined
-
 inductive Outcome where
   | ret (v : JSValue)
   | thrown
@@ -265,16 +261,8 @@ def run : Env → List Step → Outcome × Env
       match evalE2 emptyHeap env e with
       | some v => (.ret v, env)
       | none => (.fall, env)
-  | env, .retQ op :: _ =>
-      match evalP2 op with
-      | some v => (.ret v, env)
-      | none => (.fall, env)
   | env, .setE n e :: rest =>
       match evalE2 emptyHeap env e with
-      | some v => run ((n, v) :: env) rest
-      | none => (.fall, env)
-  | env, .letQ n op :: rest =>
-      match evalP2 op with
       | some v => run ((n, v) :: env) rest
       | none => (.fall, env)
   | env, .letE n e :: rest =>
@@ -337,20 +325,12 @@ def sosStep : SState → SState
       match evalE2 emptyHeap env e with
       | some v => .sret v
       | none => .sfell
-  | .srun (.retQ op :: _) _env =>
-      match evalP2 op with
-      | some v => .sret v
-      | none => .sfell
   | .srun ((.setE n e) :: rest) env =>
       match evalE2 emptyHeap env e with
       | some v => .srun rest ((n, v) :: env)
       | none => .sfell
   | .srun ((.letE n e) :: rest) env =>
       match evalE2 emptyHeap env e with
-      | some v => .srun rest ((n, v) :: env)
-      | none => .sfell
-  | .srun ((.letQ n op) :: rest) env =>
-      match evalP2 op with
       | some v => .srun rest ((n, v) :: env)
       | none => .sfell
   | .srun ((.ifS c t e) :: rest) env =>
@@ -450,10 +430,6 @@ def fstep (reg : AOReg) : FM → FM
     | .kPrim1 p :: rest, env, v :: eval =>
         done (⟨rest, env, applyPrim heap p v :: eval⟩ :: fs)
     | .kPrim1 _ :: _, _, [] => .fell (f :: fs) heap nl 0  -- stack underflow: loud
-    | .kPrimQ op :: rest, env, eval =>
-        match evalP2 op with
-        | some v => done (⟨rest, env, .compl Bool.false v :: eval⟩ :: fs)
-        | none => .fell (f :: fs) heap nl 0
     | .kCall fname n :: rest, env, eval =>
         if eval.length < n then .fell (f :: fs) heap nl 0
         else

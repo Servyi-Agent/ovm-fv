@@ -157,17 +157,6 @@ def checkSeq : SigTable → Nat → TyEnv → List Rt2 → List STy → TCResult
       match popTy tin σ with
       | some σ' => checkSeq sigs fuel Γ rest (tout :: σ')
       | none => .reject (.kPrim1 p) "prim expects a different top-of-stack type" σ
-  | sigs, fuel + 1, Γ, .kPrimQ op :: rest, σ =>
-      let subok : Bool := match op with
-        | .getMethod o _ => (typeOfE sigs Γ o).isSome
-        | .getV v p =>
-            (typeOfE sigs Γ v).isSome && (typeOfE sigs Γ p).isSome
-        | .call fn t x =>
-            [fn, t, x].all (fun e => (typeOfE sigs Γ e).isSome)
-        | .ordinaryToPrimitive o h =>
-            (typeOfE sigs Γ o).isSome && (typeOfE sigs Γ h).isSome
-      if subok then checkSeq sigs fuel Γ rest (.compl :: σ)
-      else .reject (.kPrimQ op) "P2 operand ill-typed" σ
   | sigs, fuel + 1, Γ, .kCall f n :: rest, σ =>
       match sigFind sigs f with
       | some (ps, _) =>

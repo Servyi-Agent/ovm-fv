@@ -70,24 +70,15 @@ inductive E2 where
   | listE (es : List E2)
   deriving Repr
 
-inductive P2 where
-  | getMethod (o : E2) (sym : «String»)
-  | getV (v : E2) (p : E2)
-  | call (f : E2) (thisArg : E2) (arg : E2)
-  | ordinaryToPrimitive (o : E2) (hint : E2)
-  deriving Repr
-
 /- Clean, label-free AST (what the interpreter consumes). -/
 inductive Step where
   | ret (v : E2)
-  | retQ (op : P2)
   | retE (e : E2)
   | retNewSlot (slotName : «String») (valVar : «String»)
   | assertE (e : E2)
   | forEach (x : «String») (e : E2) (body : List Step)
   | throw
   | setE (name : «String») (e : E2)
-  | letQ (name : «String») (op : P2)
   | letE (name : «String») (e : E2)
   | ifS (c : E2) (t : List Step) (e : List Step)
   | elseM (body : List Step)
@@ -99,14 +90,12 @@ abbrev Prog := List Step
 /- Label-carrying parallel AST (what the audit consumes). -/
 inductive LBody where
   | ret (v : E2)
-  | retQ (op : P2)
   | retE (e : E2)
   | retNewSlot (slotName : «String») (valVar : «String»)
   | assertE (e : E2)
   | forEach (x : «String») (e : E2) (body : List («String» × LBody))
   | throw
   | setE (name : «String») (e : E2)
-  | letQ (name : «String») (op : P2)
   | letE (name : «String») (e : E2)
   | ifS (c : E2) (t : List («String» × LBody)) (e : List («String» × LBody))
   | elseM (body : List («String» × LBody))
@@ -118,7 +107,6 @@ abbrev LStep := String × LBody
    `renest` fills them in from the depth markers. -/
 inductive FBody where
   | ret (v : E2)
-  | retQ (op : P2)
   | retE (e : E2)
   | throw
   | setE (name : «String») (e : E2)
@@ -128,7 +116,6 @@ inductive FBody where
   | assertE (e : E2)
   | forEach (x : «String») (e : E2)
   | retNewSlot (slotName : «String») (valVar : «String»)
-  | letQ (name : «String») (op : P2)
   | letE (name : «String») (e : E2)
   | ifS (c : E2)
   | elseM
@@ -165,10 +152,8 @@ def stripBody : LBody → Step
   | .throw => .throw
   | .assertE e => .assertE e
   | .forEach x e b => .forEach x e (strip b)
-  | .retQ op => .retQ op
   | .retE e => .retE e
   | .setE n e => .setE n e
-  | .letQ n op => .letQ n op
   | .letE n e => .letE n e
   | .ifS c t e => .ifS c (strip t) (strip e)
   | .elseM b => .elseM (strip b)
@@ -273,7 +258,6 @@ def findAO : AOReg → «String» → Option (List «String» × Prog)
 inductive Rt2 where
   | kEval (e : E2)
   | kPrim1 (p : Prim)
-  | kPrimQ (op : P2)
   | kCall (f : «String») (n : Nat)
   | kSet (x : «String»)
   | kPop
@@ -295,7 +279,6 @@ inductive Rt2 where
 def compileSteps : List Step → List Rt2
   | [] => []
   | .ret v :: rest => .kEval v :: .kPrim1 .pWrapC :: .kRet :: compileSteps rest
-  | .retQ op :: rest => .kPrimQ op :: .kRet :: compileSteps rest
   | .retE e :: rest =>
       -- `Return ? e`: if e is a call/imeth its kEval decomposition already
       -- self-tests (propagating abrupt / unwrapping normal), so the value
@@ -314,8 +297,6 @@ def compileSteps : List Step → List Rt2
       .kEval (.const JSValue.undefined) :: .kPrim1 .pThrowC :: .kRet
         :: compileSteps rest
   | .setE n e :: rest => .kEval e :: .kSet n :: compileSteps rest
-  | .letQ n op :: rest =>
-      .kPrimQ op :: .kTest :: .kIte [.kRet] [.kUnwrap] :: .kSet n :: compileSteps rest
   | .letE n e :: rest => .kEval e :: .kSet n :: compileSteps rest
   | .assertE e :: rest => .kEval e :: .kAssert :: compileSteps rest
   | .forEach x e body :: rest =>
