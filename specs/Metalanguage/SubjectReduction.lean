@@ -168,8 +168,8 @@ theorem tmoves_trans (t₂ : STy) :
       | complN a =>
           cases t₃ with
           | complN c => simp only [tmoves] at h₁ h₂ ⊢; exact ih a c h₁ h₂
-          | _ => simp_all [tmoves, reduceCtorEq, reduceCtorIdx]
-      | _ => cases t₃ <;> simp_all [tmoves, reduceCtorEq, reduceCtorIdx]
+          | _ => simp_all [tmoves, reduceBEq, reduceCtorEq, reduceCtorIdx]
+      | _ => cases t₃ <;> simp_all [tmoves, reduceBEq, reduceCtorEq, reduceCtorIdx]
   | _ =>
       intro t₁ t₃ h₁ h₂
       cases t₁ <;> cases t₃ <;> simp_all [tmoves, reduceBEq, reduceCtorEq, reduceCtorIdx]
