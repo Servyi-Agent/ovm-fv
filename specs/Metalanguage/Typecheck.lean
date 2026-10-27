@@ -111,28 +111,36 @@ def typeOfE (sigs : SigTable) (Γ : TyEnv) : Expr → Option STy
 termination_by e => sizeOf e
 end
 
-/- Result of checking a path: exited via kRet, fell through with the
-   given abstract stack, or rejected AT an instruction with a reason
-   and the abstract stack at that point. -/
+/-- Summary of the terminating behaviors of a path set:
+   - exits: some path returns (kRet — the frame delivers to its caller)
+   - breaks: some path breaks out of the ENCLOSING loop, with the
+     stack/env at the break point (neutrality forces these to equal
+     the loop-entry stack)
+   - falls: some path runs off the end of the list, with stack/env.
+   Divergence is silent: an infinite loop contributes no outcome. -/
+structure Flows where
+  exits  : Bool
+  breaks : Option (List STy × TyEnv)
+  falls  : Option (List STy × TyEnv)
+  deriving Repr, BEq
+
+/- Result of checking an instruction list: the flow summary, or a
+   rejection AT an instruction with a reason and abstract stack. -/
 inductive TCResult where
-  | exits
-  | falls (σ : List STy) (Γ : TyEnv)
+  | flows (f : Flows)
   | reject (site : Instr) (why : «String») (σ : List STy)
   deriving Repr
 
-/- Branch join for variable types: names bound on ALL falling paths
-   survive (intersection); a name bound in both joins at the LUB.
-   One-sided bindings are dropped — the machine takes one branch, so
-   the other's bindings do not exist at runtime, and the continuation
-   must not rely on them. -/
-def lub (t t' : STy) : STy := if t == t' then t else .any
+/-- Frame-level demand: every path returns, nothing falls through,
+   no unconsumed break (a break at frame top has no loop to join). -/
+def terminal (f : Flows) : Bool :=
+  f.exits && f.breaks.isNone && f.falls.isNone
 
-def ΓUnion : TyEnv → TyEnv → TyEnv
-  | [], _ => []
-  | (n, t) :: r, Γ₂ =>
-      match tyLookup Γ₂ n with
-      | some t' => (n, lub t t') :: ΓUnion r Γ₂
-      | none => ΓUnion r Γ₂
+def isOk (r : TCResult) : Bool :=
+  match r with
+  | .reject _ _ _ => Bool.false
+  | _ => Bool.true
+
 
 def popTy (t : STy) (σ : List STy) : Option (List STy) :=
   match σ with
@@ -158,18 +166,75 @@ def popTyN : Nat → STy → List STy → Option (List STy)
       | some σ' => popTyN k t σ'
       | none => none
 
-/- Loop bodies: stack-neutral (loop invariant) or exit via kRet;
-   bindings made in the body persist after the loop (kSet is frame
-   state at runtime). Inlined into the four loop arms so that every
-   recursive call of checkSeq is on a structural subterm. -/
-def checkNeutral (rbody : TCResult) (site : Instr)
-    (rest : List Instr) (σ : List STy) (k : TyEnv → List STy → TCResult) : TCResult :=
+
+/- Branch join for variable types: names bound on ALL falling paths
+   survive (intersection); a name bound in both joins at the LUB. -/
+def lub (t t' : STy) : STy := if t == t' then t else .any
+
+def ΓUnion : TyEnv → TyEnv → TyEnv
+  | [], _ => []
+  | (n, t) :: r, Γ₂ =>
+      match tyLookup Γ₂ n with
+      | some t' => (n, lub t t') :: ΓUnion r Γ₂
+      | none => ΓUnion r Γ₂
+
+/- After a continuation is checked from the join point, the breaks it
+   reports target loops OUTSIDE the construct; combine with the
+   construct's own pending breaks (stacks agree by neutrality). -/
+def orBreaks (b₁ b₂ : Option (List STy × TyEnv)) : Option (List STy × TyEnv) :=
+  match b₁, b₂ with
+  | some (σ₁, Γ₁), some (σ₂, Γ₂) =>
+      if σ₁ == σ₂ then some (σ₁, ΓUnion Γ₁ Γ₂) else none
+  | some b, none | none, some b => some b
+  | none, none => none
+
+/- Branch join: exits are absorbed (a returning path contributes
+   nothing to the continuation); stacks must agree; envs join at the
+   intersection-with-lub (a name bound on one path only does not
+   survive). -/
+def joinFlows (f₁ f₂ : Flows) : Option Flows :=
+  let join (b₁ b₂ : Option (List STy × TyEnv)) :
+      Option (Option (List STy × TyEnv)) :=
+    match b₁, b₂ with
+    | some (σ₁, Γ₁), some (σ₂, Γ₂) =>
+        if σ₁ == σ₂ then some (some (σ₁, ΓUnion Γ₁ Γ₂)) else none
+    | some b, none | none, some b => some (some b)
+    | none, none => some none
+  match join f₁.breaks f₂.breaks, join f₁.falls f₂.falls with
+  | none, _ | _, none => none
+  | some breaks, some falls =>
+      some { exits := f₁.exits || f₂.exits, breaks := breaks, falls := falls }
+
+/- Loop join: the body's iteration-completion (falls) and breaks must
+   be neutral — equal to the loop-entry stack — since both land at the
+   continuation (exhaustion and break respectively) with that stack.
+   Exits pass through; breaks are CONSUMED by this loop; the
+   continuation's own breaks (to an outer loop) survive. -/
+def checkLoopBody (rbody : TCResult) (site : Instr)
+    (σ : List STy) (k : TyEnv → List STy → TCResult) : TCResult :=
   match rbody with
   | .reject site' why s => .reject site' why s
-  | .exits => .exits
-  | .falls σ' Γ' =>
-      if σ' == σ then k Γ' σ
-      else .reject site "loop body is not stack-neutral" σ
+  | .flows fb =>
+      let fallOk := fb.falls.isNone || (fb.falls.isEqSome (σ, fb.falls.get!.2))
+      let brkOk := fb.breaks.isNone || (fb.breaks.get!.1 == σ)
+      if fallOk && brkOk then
+        -- continuation entered from the loop-entry stack, with the
+        -- bindings of the fall/break paths (they agree on the stack;
+        -- envs are unioned if both present)
+        let Γnext := match fb.falls, fb.breaks with
+          | some (_, Γ₁), some (_, Γ₂) => ΓUnion Γ₁ Γ₂
+          | some (_, Γ₁), none => Γ₁
+          | none, some (_, Γ₁) => Γ₁
+          | none, none => none
+        match Γnext, k with
+        | _, _ => -- dispatch manually below
+            match Γnext with
+            | none => .flows { exits := fb.exits, breaks := none, falls := none }
+            | some Γ' =>
+                match k Γ' σ with
+                | .flows fr => .flows { exits := fb.exits || fr.exits, breaks := fr.breaks, falls := fr.falls }
+                | res => res
+      else .reject site "loop body not neutral at falls/breaks" σ
 
 /-- Do the top `ps.length` entries satisfy `ps`? The head of the
    stack is the LAST argument, so compare against reversed ps. -/
@@ -179,8 +244,10 @@ def popArgs (ps σ : List STy) : Bool :=
 /- `checkSeq sigs r Γ is σ`: walk instruction list `is` with ambient
    return type r (the frame's destiny), variable types Γ, abstract
    stack σ. kRet demands `complOf r` — exit uniformity, typed. -/
+
+
 def checkSeq : SigTable → STy → TyEnv → List Instr → List STy → TCResult
-  | _, _, Γ, [], σ => .falls σ Γ
+  | _, _, Γ, [], σ => .flows { exits := Bool.false, breaks := none, falls := some (σ, Γ) }
   | sigs, r, Γ, .kEval e :: rest, σ =>
       match typeOfE sigs Γ e with
       | some t => checkSeq sigs r Γ rest (t :: σ)
@@ -219,34 +286,37 @@ def checkSeq : SigTable → STy → TyEnv → List Instr → List STy → TCResu
       match popTy .boolean σ with
       | none => .reject (.kIte t e) "kIte: condition is not boolean" σ
       | some σ' =>
-          let join (r₁ r₂ : TCResult) : TCResult :=
-            match r₁, r₂ with
-            | .reject site why s, _ => .reject site why s
-            | _, .reject site why s => .reject site why s
-            | .exits, r | r, .exits => r
-            | .falls σ₁ Γ₁, .falls σ₂ Γ₂ =>
-                if σ₁ == σ₂ then .falls σ₁ (ΓUnion Γ₁ Γ₂)
-                else .reject (.kIte t e) "branches join with different stacks" σ'
-          match join (checkSeq sigs r Γ t σ') (checkSeq sigs r Γ e σ') with
-          | .exits => .exits
-          | .falls σⱼ Γⱼ => checkSeq sigs r Γⱼ rest σⱼ
-          | r => r
+          match checkSeq sigs r Γ t σ', checkSeq sigs r Γ e σ' with
+          | .reject site why s, _ => .reject site why s
+          | _, .reject site why s => .reject site why s
+          | .flows f₁, .flows f₂ =>
+              match joinFlows f₁ f₂ with
+              | none => .reject (.kIte t e) "branches diverge (stacks differ at falls/breaks)" σ'
+              | some fj =>
+                  match fj.falls with
+                  | some (σⱼ, Γⱼ) =>
+                      match checkSeq sigs r Γⱼ rest σⱼ with
+                      | .flows fr => .flows { fr with breaks := orBreaks fj.breaks fr.breaks, exits := fj.exits || fr.exits }
+                      | res => res
+                  | none =>
+                      -- no path falls through: remaining flows are exits ∪ breaks
+                      .flows { exits := fj.exits, breaks := fj.breaks, falls := none }
   | sigs, r, Γ, .kAssert :: rest, σ =>
       match popTy .boolean σ with
       | some σ' => checkSeq sigs r Γ rest σ'
       | none => .reject .kAssert "kAssert: top is not boolean" σ
   | _, r, _, .kRet :: _, .complOf t' :: _ =>
-      if tmoves t' r then .exits
+      if tmoves t' r then .flows { exits := Bool.true, breaks := none, falls := none }
       else .reject .kRet "kRet: returned payload does not match the frame's destiny r" (.complOf t' :: [])
-  | _, r, _, .kRet :: _, σ =>
+  | _, _, _, .kRet :: _, σ =>
       .reject .kRet "kRet: top of stack is not complOf r" σ
   | sigs, r, Γ, .kTest :: rest, .complOf t :: σ' =>
       checkSeq sigs r Γ rest (.boolean :: .complOf t :: σ')
-  | sigs, r, Γ, .kTest :: rest, σ =>
+  | _, _, _, .kTest :: rest, σ =>
       .reject .kTest "kTest: top of stack is not a completion" σ
   | sigs, r, Γ, .kUnwrap :: rest, .complOf t :: σ' =>
       checkSeq sigs r Γ rest (t :: σ')
-  | sigs, r, Γ, .kUnwrap :: rest, σ =>
+  | _, _, _, .kUnwrap :: rest, σ =>
       .reject .kUnwrap "kUnwrap: top of stack is not a completion" σ
   | sigs, r, Γ, .kIMeth nm n :: rest, σ =>
       if mopArity nm == some n then
@@ -254,6 +324,11 @@ def checkSeq : SigTable → STy → TyEnv → List Instr → List STy → TCResu
         | some σ' => checkSeq sigs r Γ rest (.complOf .any :: σ')
         | none => .reject (.kIMeth nm n) "MOP dispatch: receiver/args stack mismatch" σ
       else .reject (.kIMeth nm n) "unknown MOP method or wrong arity" σ
+  | sigs, r, Γ, .kBreak :: _, σ =>
+      -- break out of the enclosing loop: neutral control transfer;
+      -- the loop join consumes it (a break at frame top rejects in
+      -- the terminal demand)
+      .flows { exits := Bool.false, breaks := some (σ, Γ), falls := none }
   | sigs, r, Γ, .kMkList n :: rest, σ =>
       match popTyN n .any σ with
       | some σ' => checkSeq sigs r Γ rest (.list :: σ')
@@ -265,23 +340,23 @@ def checkSeq : SigTable → STy → TyEnv → List Instr → List STy → TCResu
   | sigs, r, Γ, .kRepeatWhile c body :: rest, σ =>
       if typeOfE sigs Γ c != some .boolean
       then .reject (.kRepeatWhile c body) "loop condition is not boolean" σ
-      else checkNeutral (checkSeq sigs r Γ body σ) (.kRepeatWhile c body) rest σ
+      else checkLoopBody (checkSeq sigs r Γ body σ) (.kRepeatWhile c body) σ
         (fun Γ' σ' => checkSeq sigs r Γ' rest σ')
   | sigs, r, Γ, .kRepeatTest c body :: rest, σ =>
       -- pops the boolean verdict: loop (body neutral) or fall through
       match popTy .boolean σ with
       | none => .reject (.kRepeatTest c body) "loop verdict is not boolean" σ
-      | some σ' => checkNeutral (checkSeq sigs r Γ body σ') (.kRepeatTest c body) rest σ'
+      | some σ' => checkLoopBody (checkSeq sigs r Γ body σ') (.kRepeatTest c body) σ'
         (fun Γ' σ'' => checkSeq sigs r Γ' rest σ'')
   | sigs, r, Γ, .kForStart x body :: rest, σ =>
       match popTy .any σ with
       | none => .reject (.kForStart x body) "for-each over empty stack" σ
-      | some σ' => checkNeutral (checkSeq sigs r ((x, .any) :: Γ) body σ')
-        (.kForStart x body) rest σ'
+      | some σ' => checkLoopBody (checkSeq sigs r ((x, .any) :: Γ) body σ')
+        (.kForStart x body) σ'
         (fun Γ' σ'' => checkSeq sigs r Γ' rest σ'')
   | sigs, r, Γ, .kForBody x _ body :: rest, σ =>
-      checkNeutral (checkSeq sigs r ((x, .any) :: Γ) body σ)
-        (.kForBody x [] body) rest σ
+      checkLoopBody (checkSeq sigs r ((x, .any) :: Γ) body σ)
+        (.kForBody x [] body) σ
         (fun Γ' σ'' => checkSeq sigs r Γ' rest σ'')
 
 /- A frame is well typed if every path exits via kRet (falling off the
@@ -303,7 +378,7 @@ def typecheckAO (sigs : SigTable)
         some (.reject (body.head?.getD .kRet)
           (name ++ ": registry arity ≠ signature arity") [])
       else match typecheckSeq sigs ret2 (zipTy params paramTys) body with
-        | .exits => none
+        | .flows f => if terminal f then none else some (.flows f)
         | r => some r
 
 /- First ill-typed AO in the registry, by name. none = all well typed. -/
@@ -318,8 +393,3 @@ def typecheckReg (sigs : SigTable) (reg : AOReg) : Option («String» × TCResul
 def typecheckRegOk (sigs : SigTable) (reg : AOReg) : Bool :=
   (typecheckReg sigs reg).isNone
 
-/-- Non-rejection as a Bool (for the subject-reduction development). -/
-def isOk (r : TCResult) : Bool :=
-  match r with
-  | .reject _ _ _ => Bool.false
-  | _ => Bool.true

@@ -80,8 +80,11 @@ def frameOk (sigs : SigTable) (above : Option «String») (f : Fr) : Prop :=
   -- a frame under a callee MUST be waiting at the self-test idiom:
   -- the delivery assumption of kRet
   (above.isNone ∨ selfTestHead f.stmts = Bool.true)
-    ∧ isOk (checkSeq sigs (sigRetTy sigs f.ret) (envTyOf f.env) f.stmts
-              (absStack sigs above f)) = Bool.true
+    ∧ (match checkSeq sigs (sigRetTy sigs f.ret) (envTyOf f.env) f.stmts
+                (absStack sigs above f) with
+       | .flows fb => terminal fb = Bool.true   -- every path returns;
+                                                 -- no fall-through, no stray break
+       | _ => False)
 
 def isComplV : JSValue → Bool
   | .compl _ _ => Bool.true
@@ -120,8 +123,10 @@ def sigParams (sigs : SigTable) (name : «String») : List STy :=
 def registryCertified (sigs : SigTable) (reg : AOReg) : Prop :=
   ∀ name ps prog, (name, (ps, prog)) ∈ reg →
     ∀ ts, leList ts (sigParams sigs name) →
-      isOk (checkSeq sigs (sigRetTy sigs name) (zipTy ps ts)
-              (compileSteps prog) []) = Bool.true
+      (match checkSeq sigs (sigRetTy sigs name) (zipTy ps ts)
+              (compileSteps prog) [] with
+       | .flows fb => terminal fb = Bool.true
+       | _ => False)
 
 /- ## Unfolding equalities: one machine step of each value instruction
    is exactly one step of the checker. -/

@@ -509,6 +509,19 @@ def fstep (reg : AOReg) : FM → FM
                   .frames fs' (heapSet heap nl obj) (nl + 1)
               | m => m
         | none => .fell (f :: fs) heap nl 0
+    | .kBreak :: rest, env, eval =>
+        /- break the innermost loop: skip past the first re-arm marker
+           (kRepeatWhile / kForBody) in the remaining statements; the
+           marker's tail IS the loop's continuation. Loud fall if
+           there is no enclosing loop. -/
+        let rec skipRearm : List Instr → Option (List Instr)
+          | [] => none
+          | .kRepeatWhile _ _ :: tail => some tail
+          | .kForBody _ _ _ :: tail => some tail
+          | _ :: tail => skipRearm tail
+        match skipRearm rest with
+        | some tail => done (⟨tail, env, eval, f.ret⟩ :: fs)
+        | none => .fell (f :: fs) heap nl 0
     | .kMkList n :: rest, env, eval =>
         if eval.length < n then .fell (f :: fs) heap nl 0
         else done (⟨rest, env, .listV (eval.take n).reverse :: eval.drop n, f.ret⟩ :: fs)

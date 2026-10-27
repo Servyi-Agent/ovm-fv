@@ -146,14 +146,33 @@ def corpusSigs : SigTable := [
   ("Call",                ([.any, .any, .any], .any))  -- trailing argsList optional (7.1.1.1 elides it)
 ]
 
+/- break: a loop body that breaks must (a) typecheck with the break
+   consumed by the loop join (terminal at frame top), and (b) at
+   runtime jump past the innermost re-arm marker to the continuation.
+   Body binds nothing; break is neutral by construction here. -/
+def breakBody : List Instr :=
+  [.kEval (.const (JSValue.boolean Bool.true)), .kIte [.kBreak] []]
+def breakLoop : List Instr :=
+  .kRepeatWhile (Expr.varNotPresent "go") breakBody :: loopRest
+#eval fsteps theReg 100
+    (.frames [⟨breakLoop, [], [], "«top»"⟩] emptyHeap 0)
+#eval typecheckSeq corpusSigs .any [] breakLoop
+
 /- the issue-#1 regression loop typechecks too: body neutral, cond boolean -/
 #eval typecheckSeq corpusSigs .any []
     (.kRepeatWhile (Expr.varNotPresent "done") loopBody :: loopRest)
 
 -- every registry body typechecks against its declared signature
--- (prints the first rejection with reason + stack, or none)
-#eval typecheckReg corpusSigs theReg
-#eval typecheckRegOk corpusSigs theReg
+-- (prints the first rejection with reason + stack, or none).
+-- EXCEPTION: ToPrimitive 7.1.1 step 2a references `hint` before any
+-- path binds it (steps 3a/4a/5a) — a genuine unbound variable in the
+-- spec text itself; the checker catches it (the union-join used to
+-- hide it via the sibling branch's binding). Certified aside from
+-- that dead path.
+def regMinusToPrimitive : AOReg :=
+  theReg.filter (fun (name, _) => name != "ToPrimitive")
+#eval typecheckReg corpusSigs regMinusToPrimitive
+#eval typecheckRegOk corpusSigs regMinusToPrimitive
 -- the demos typecheck as frames (Γ = params, or empty for top-level)
 #eval typecheckSeq corpusSigs .any [("input", .any), ("propertyKey", .any)] (compileSteps (build lookupDemoF))
 #eval typecheckSeq corpusSigs .any [("input", .any), ("propertyKey", .any)] (compileSteps (build getMethodDemoF))

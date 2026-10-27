@@ -273,6 +273,7 @@ inductive Instr where
   | kRepeatTest (c : Expr) (body : List Instr)
   | kForStart (x : «String») (body : List Instr)
   | kForBody (x : «String») (elems : List JSValue) (body : List Instr)
+  | kBreak
   deriving Repr
 
 
