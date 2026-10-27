@@ -147,16 +147,16 @@ def corpusSigs : SigTable := [
 ]
 
 /- the issue-#1 regression loop typechecks too: body neutral, cond boolean -/
-#eval typecheckSeq corpusSigs 2000 []
+#eval typecheckSeq corpusSigs []
     (.kRepeatWhile (Expr.varNotPresent "done") loopBody :: loopRest)
 
 -- every registry body typechecks against its declared signature
 -- (prints the first rejection with reason + stack, or none)
-#eval typecheckReg corpusSigs 2000 theReg
-#eval typecheckRegOk corpusSigs 2000 theReg
+#eval typecheckReg corpusSigs theReg
+#eval typecheckRegOk corpusSigs theReg
 -- the demos typecheck as frames (Γ = params, or empty for top-level)
-#eval typecheckSeq corpusSigs 2000 [("input", .any), ("propertyKey", .any)] (compileSteps (build lookupDemoF))
-#eval typecheckSeq corpusSigs 2000 [("input", .any), ("propertyKey", .any)] (compileSteps (build getMethodDemoF))
+#eval typecheckSeq corpusSigs [("input", .any), ("propertyKey", .any)] (compileSteps (build lookupDemoF))
+#eval typecheckSeq corpusSigs [("input", .any), ("propertyKey", .any)] (compileSteps (build getMethodDemoF))
 
 /- negative tests: the two historical bugs must be REJECTED.
    Bug 1 (missing rewrap): the Return-?-of-a-completion-variable shape:
@@ -164,26 +164,26 @@ def corpusSigs : SigTable := [
 def bug1 : List Instr :=
   [.kEval (Expr.nv "x"), .kTest,
    .kIte [.kRet] [.kUnwrap, .kRet]]
-#eval typecheckSeq corpusSigs 2000 [("x", .compl)] bug1
+#eval typecheckSeq corpusSigs [("x", .compl)] bug1
 /- Bug 2 (double self-test): kEval of a call yields the payload type
    (raw), a stray kTest demands a completion. -/
 def bug2 : List Instr :=
   [.kEval (Expr.call "GetV" [Expr.nv "v", Expr.nv "p"]), .kTest,
    .kIte [.kRet] [.kUnwrap, .kPrim1 .pWrapC, .kRet]]
-#eval typecheckSeq corpusSigs 2000 [("v", .any), ("p", .any)] bug2
+#eval typecheckSeq corpusSigs [("v", .any), ("p", .any)] bug2
 /- Signature-driven argument checking: IteratorClose-style param
    (raw, compl). -/
 def closeSigs : SigTable := [("FakeClose", ([.any, .compl], .any))]
 def badArg : List Instr :=
   [.kEval (Expr.call "FakeClose" [Expr.nv "r", Expr.nv "c"]), .kPrim1 .pWrapC, .kRet]
 def goodArg : List Instr := badArg
-#eval typecheckSeq closeSigs 2000 [("r", .any), ("c", .any)] badArg
-#eval typecheckSeq closeSigs 2000 [("r", .any), ("c", .compl)] goodArg
+#eval typecheckSeq closeSigs [("r", .any), ("c", .any)] badArg
+#eval typecheckSeq closeSigs [("r", .any), ("c", .compl)] goodArg
 /- Stricter typing: a number where kIte demands a boolean. This is the
    class of bug runtime smoke tests miss on dead paths. -/
 def bug3 : List Instr :=
   [.kEval (.const (JSValue.number 5)), .kIte [] []]
-#eval typecheckSeq corpusSigs 2000 [] bug3
+#eval typecheckSeq corpusSigs [] bug3
 '''
 
 out = ["import metalanguage", ""]

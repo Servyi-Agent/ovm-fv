@@ -80,10 +80,13 @@ def typeOfE (sigs : SigTable) (Γ : TyEnv) : Expr → Option STy
           -- Call(F, V) elides the arguments List)
           match typesOf sigs Γ as with
           | some ts =>
+              -- args/arity checked; the RESULT is typed `any`: the
+              -- machine's self-test decomposition nets any, and a
+              -- refined result would not be preserved by steps
               if leList ts ps
                  || (as.length == ps.length - 1
                      && leList ts (ps.dropLast))
-              then some ret else none
+              then some STy.any else none
           | none => none
       | none => none
   | .imeth nm recv args =>
@@ -143,38 +146,57 @@ def primSig (p : Prim) : STy × STy :=
   | .pIsType _ | .pHasField _ | .pIsStr _ => (.any, .boolean)
   | .pDescField _ => (.any, .any)   -- dynamic desc guard, else undefined
 
-/- `checkSeq sigs fuel Γ is σ`: walk instruction list `is` with
+def popTyN : Nat → STy → List STy → Option (List STy)
+  | 0, _, σ => some σ
+  | k + 1, t, σ =>
+      match popTy t σ with
+      | some σ' => popTyN k t σ'
+      | none => none
+
+/- Loop bodies: stack-neutral (loop invariant) or exit via kRet;
+   bindings made in the body persist after the loop (kSet is frame
+   state at runtime). Inlined into the four loop arms so that every
+   recursive call of checkSeq is on a structural subterm. -/
+def checkNeutral (rbody : TCResult) (site : Instr)
+    (rest : List Instr) (σ : List STy) (k : TyEnv → List STy → TCResult) : TCResult :=
+  match rbody with
+  | .reject site' why s => .reject site' why s
+  | .exits => .exits
+  | .falls σ' Γ' =>
+      if σ' == σ then k Γ' σ
+      else .reject site "loop body is not stack-neutral" σ
+
+/- `checkSeq sigs Γ is σ`: walk instruction list `is` with
    variable types Γ and abstract stack σ. -/
-def checkSeq : SigTable → Nat → TyEnv → List Instr → List STy → TCResult
-  | _, _, Γ, [], σ => .falls σ Γ
-  | _, 0, _, i :: _, σ => .reject i "fuel exhausted" σ
-  | sigs, fuel + 1, Γ, .kEval e :: rest, σ =>
+def checkSeq : SigTable → TyEnv → List Instr → List STy → TCResult
+  | _, Γ, [], σ => .falls σ Γ
+  | sigs, Γ, .kEval e :: rest, σ =>
       match typeOfE sigs Γ e with
-      | some t => checkSeq sigs fuel Γ rest (t :: σ)
+      | some t => checkSeq sigs Γ rest (t :: σ)
       | none => .reject (.kEval e) "ill-typed expression (unbound variable, unknown operation, or argument type mismatch)" σ
-  | sigs, fuel + 1, Γ, .kPrim1 p :: rest, σ =>
+  | sigs, Γ, .kPrim1 p :: rest, σ =>
       let (tin, tout) := primSig p
       match popTy tin σ with
-      | some σ' => checkSeq sigs fuel Γ rest (tout :: σ')
+      | some σ' => checkSeq sigs Γ rest (tout :: σ')
       | none => .reject (.kPrim1 p) "prim expects a different top-of-stack type" σ
-  | sigs, fuel + 1, Γ, .kCall f n :: rest, σ =>
+  | sigs, Γ, .kCall f n :: rest, σ =>
       match sigFind sigs f with
       | some (ps, _) =>
           if ps.length == n then
             match popTyN n .any σ with
-            | some σ' => checkSeq sigs fuel Γ rest (.compl :: σ')
+            | some σ' => checkSeq sigs Γ rest (.compl :: σ')
             | none => .reject (.kCall f n) "call: argument stack mismatch" σ
           else .reject (.kCall f n) "call arity does not match signature" σ
       | none => .reject (.kCall f n) "no signature for callee" σ
-  | sigs, fuel + 1, Γ, .kSet x :: rest, σ =>
+  | sigs, Γ, .kSet x :: rest, σ =>
       match σ with
-      | t :: σ' => checkSeq sigs fuel ((x, t) :: Γ) rest σ'
+      | t :: σ' => checkSeq sigs ((x, t) :: Γ) rest σ'
       | [] => .reject (.kSet x) "kSet on empty stack" σ
-  | sigs, fuel + 1, Γ, .kPop :: rest, σ =>
+  | sigs, Γ, .kPop :: rest, σ =>
       match σ with
-      | _ :: σ' => checkSeq sigs fuel Γ rest σ'
+      | _ :: σ' => checkSeq sigs Γ rest σ'
       | [] => .reject .kPop "kPop on empty stack" σ
-  | sigs, fuel + 1, Γ, .kIte t e :: rest, σ =>
+  | sigs, Γ, .kIte t e :: rest, σ =>
       match popTy .boolean σ with
       | none => .reject (.kIte t e) "kIte: condition is not boolean" σ
       | some σ' =>
@@ -186,84 +208,73 @@ def checkSeq : SigTable → Nat → TyEnv → List Instr → List STy → TCResu
             | .falls σ₁ Γ₁, .falls σ₂ Γ₂ =>
                 if σ₁ == σ₂ then .falls σ₁ (ΓUnion Γ₁ Γ₂)
                 else .reject (.kIte t e) "branches join with different stacks" σ'
-          match join (checkSeq sigs fuel Γ t σ') (checkSeq sigs fuel Γ e σ') with
+          match join (checkSeq sigs Γ t σ') (checkSeq sigs Γ e σ') with
           | .exits => .exits
-          | .falls σⱼ Γⱼ => checkSeq sigs fuel Γⱼ rest σⱼ
+          | .falls σⱼ Γⱼ => checkSeq sigs Γⱼ rest σⱼ
           | r => r
-  | sigs, fuel + 1, Γ, .kAssert :: rest, σ =>
+  | sigs, Γ, .kAssert :: rest, σ =>
       match popTy .boolean σ with
-      | some σ' => checkSeq sigs fuel Γ rest σ'
+      | some σ' => checkSeq sigs Γ rest σ'
       | none => .reject .kAssert "kAssert: top is not boolean" σ
-  | _, _, _, .kRet :: _, σ =>
+  | _, _, .kRet :: _, σ =>
       match σ with
       | .compl :: _ => .exits        -- value return: wire format is compl
       | [] => .exits                  -- unit return (no value)
       | _ => .reject .kRet "kRet: top of stack is not a completion" σ
-  | sigs, fuel + 1, Γ, .kTest :: rest, σ =>
+  | sigs, Γ, .kTest :: rest, σ =>
       match popTy .compl σ with
-      | some σ' => checkSeq sigs fuel Γ rest (.boolean :: .compl :: σ')
+      | some σ' => checkSeq sigs Γ rest (.boolean :: .compl :: σ')
       | none => .reject .kTest "kTest: top of stack is not a completion" σ
-  | sigs, fuel + 1, Γ, .kUnwrap :: rest, σ =>
+  | sigs, Γ, .kUnwrap :: rest, σ =>
       -- payload type is not tracked through compl: arrives as any
       match popTy .compl σ with
-      | some σ' => checkSeq sigs fuel Γ rest (.any :: σ')
+      | some σ' => checkSeq sigs Γ rest (.any :: σ')
       | none => .reject .kUnwrap "kUnwrap: top of stack is not a completion" σ
-  | sigs, fuel + 1, Γ, .kIMeth nm n :: rest, σ =>
+  | sigs, Γ, .kIMeth nm n :: rest, σ =>
       if mopArity nm == some n then
         match popTyN (n + 1) .any σ with
-        | some σ' => checkSeq sigs fuel Γ rest (.compl :: σ')
+        | some σ' => checkSeq sigs Γ rest (.compl :: σ')
         | none => .reject (.kIMeth nm n) "MOP dispatch: receiver/args stack mismatch" σ
       else .reject (.kIMeth nm n) "unknown MOP method or wrong arity" σ
-  | sigs, fuel + 1, Γ, .kMkList n :: rest, σ =>
+  | sigs, Γ, .kMkList n :: rest, σ =>
       match popTyN n .any σ with
-      | some σ' => checkSeq sigs fuel Γ rest (.list :: σ')
+      | some σ' => checkSeq sigs Γ rest (.list :: σ')
       | none => .reject (.kMkList n) "kMkList: element stack mismatch" σ
-  | sigs, fuel + 1, Γ, .kNewSlot sn :: rest, σ =>
+  | sigs, Γ, .kNewSlot sn :: rest, σ =>
       match popTy .any σ with
-      | some σ' => checkSeq sigs fuel Γ rest (.obj :: σ')
+      | some σ' => checkSeq sigs Γ rest (.obj :: σ')
       | none => .reject (.kNewSlot sn) "kNewSlot on empty stack" σ
-  | sigs, fuel + 1, Γ, .kRepeatWhile c body :: rest, σ =>
+  | sigs, Γ, .kRepeatWhile c body :: rest, σ =>
       if typeOfE sigs Γ c != some .boolean
       then .reject (.kRepeatWhile c body) "loop condition is not boolean" σ
-      else checkLoopBody sigs fuel Γ body σ rest
-  | sigs, fuel + 1, Γ, .kRepeatTest c body :: rest, σ =>
+      else checkNeutral (checkSeq sigs Γ body σ) (.kRepeatWhile c body) rest σ
+        (fun Γ' σ' => checkSeq sigs Γ' rest σ')
+  | sigs, Γ, .kRepeatTest c body :: rest, σ =>
       -- pops the boolean verdict: loop (body neutral) or fall through
       match popTy .boolean σ with
       | none => .reject (.kRepeatTest c body) "loop verdict is not boolean" σ
-      | some σ' => checkLoopBody sigs fuel Γ body σ' rest
-  | sigs, fuel + 1, Γ, .kForStart x body :: rest, σ =>
+      | some σ' => checkNeutral (checkSeq sigs Γ body σ') (.kRepeatTest c body) rest σ'
+        (fun Γ' σ'' => checkSeq sigs Γ' rest σ'')
+  | sigs, Γ, .kForStart x body :: rest, σ =>
       match popTy .any σ with
       | none => .reject (.kForStart x body) "for-each over empty stack" σ
-      | some σ' => checkLoopBody sigs fuel ((x, .any) :: Γ) body σ' rest
-  | sigs, fuel + 1, Γ, .kForBody x _ body :: rest, σ =>
-      checkLoopBody sigs fuel ((x, .any) :: Γ) body σ rest
-where
-  popTyN : Nat → STy → List STy → Option (List STy)
-    | 0, _, σ => some σ
-    | k + 1, t, σ => match popTy t σ with
-      | some σ' => popTyN k t σ'
-      | none => none
-  checkLoopBody (sigs : SigTable) (fuel : Nat) (Γ : TyEnv)
-      (body : List Instr) (σ : List STy) (rest : List Instr) : TCResult :=
-    -- loop bodies: stack-neutral (loop invariant) or exit via kRet;
-    -- bindings made in the body persist after the loop (kSet is frame
-    -- state at runtime)
-    match checkSeq sigs fuel Γ body σ with
-    | r@(.reject ..) => r
-    | .exits => .exits
-    | .falls σ' Γ' =>
-        if σ' == σ then checkSeq sigs fuel Γ' rest σ
-        else .reject (body.head?.getD .kRet) "loop body is not stack-neutral" σ'
+      | some σ' => checkNeutral (checkSeq sigs ((x, .any) :: Γ) body σ')
+        (.kForStart x body) rest σ'
+        (fun Γ' σ'' => checkSeq sigs Γ' rest σ'')
+  | sigs, Γ, .kForBody x _ body :: rest, σ =>
+      checkNeutral (checkSeq sigs ((x, .any) :: Γ) body σ)
+        (.kForBody x [] body) rest σ
+        (fun Γ' σ'' => checkSeq sigs Γ' rest σ'')
 
 /- A frame is well typed if every path exits via kRet (falling off the
    end is the runtime's loud `fell`). -/
-def typecheckSeq (sigs : SigTable) (fuel : Nat) (Γ : TyEnv) (seq : List Instr) : TCResult :=
-  checkSeq sigs fuel Γ seq []
+def typecheckSeq (sigs : SigTable) (Γ : TyEnv) (seq : List Instr) : TCResult :=
+  checkSeq sigs Γ seq []
 
 /- Check one AO: params get their declared types from the signature
    table; arity must agree with the registry. Result: none = well
    typed; some r = the first rejection (with reason and stack). -/
-def typecheckAO (sigs : SigTable) (fuel : Nat)
+def typecheckAO (sigs : SigTable)
     (name : «String») (params : List «String») (body : List Instr) : Option TCResult :=
   match sigFind sigs name with
   | none =>
@@ -273,19 +284,24 @@ def typecheckAO (sigs : SigTable) (fuel : Nat)
       if params.length != paramTys.length then
         some (.reject (body.head?.getD .kRet)
           (name ++ ": registry arity ≠ signature arity") [])
-      else match typecheckSeq sigs fuel (zipTy params paramTys) body with
+      else match typecheckSeq sigs (zipTy params paramTys) body with
         | .exits => none
         | r => some r
 
 /- First ill-typed AO in the registry, by name. none = all well typed. -/
-def typecheckReg (sigs : SigTable) (fuel : Nat) (reg : AOReg) : Option («String» × TCResult) :=
+def typecheckReg (sigs : SigTable) (reg : AOReg) : Option («String» × TCResult) :=
   match reg with
   | [] => none
   | (name, (params, prog)) :: rest =>
-      match typecheckAO sigs fuel name params (compileSteps prog) with
+      match typecheckAO sigs name params (compileSteps prog) with
       | some r => some (name, r)
-      | none => typecheckReg sigs fuel rest
+      | none => typecheckReg sigs rest
 
-def typecheckRegOk (sigs : SigTable) (fuel : Nat) (reg : AOReg) : Bool :=
-  (typecheckReg sigs fuel reg).isNone
+def typecheckRegOk (sigs : SigTable) (reg : AOReg) : Bool :=
+  (typecheckReg sigs reg).isNone
 
+/-- Non-rejection as a Bool (for the subject-reduction development). -/
+def isOk (r : TCResult) : Bool :=
+  match r with
+  | .reject _ _ _ => Bool.false
+  | _ => Bool.true
