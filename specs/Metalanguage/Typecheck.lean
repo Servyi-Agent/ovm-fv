@@ -18,10 +18,11 @@ inductive STy where
   | unit
   deriving Repr, BEq, DecidableEq
 
-/-- `t ≤ t'` in the value lattice: `any` absorbs. Defined via
-   DecidableEq so that simp/omega can reason under it. -/
-def tmoves (t t' : STy) : Bool :=
-  decide (t = t' ∨ t' = STy.any)
+/-- Subtyping: covariant under complOf, `any` absorbs. -/
+def tmoves : STy → STy → Bool
+  | .complOf a, .complOf b => tmoves a b
+  | _, .any => Bool.true
+  | t, t' => t == t'
 
 def leList : List STy → List STy → Bool
   | [], [] => Bool.true
@@ -234,7 +235,9 @@ def checkSeq : SigTable → STy → TyEnv → List Instr → List STy → TCResu
       match popTy .boolean σ with
       | some σ' => checkSeq sigs r Γ rest σ'
       | none => .reject .kAssert "kAssert: top is not boolean" σ
-  | _, r, _, .kRet :: _, .complOf _ :: _ => .exits
+  | _, r, _, .kRet :: _, .complOf t' :: _ =>
+      if tmoves t' r then .exits
+      else .reject .kRet "kRet: returned payload does not match the frame's destiny r" (.complOf t' :: [])
   | _, r, _, .kRet :: _, σ =>
       .reject .kRet "kRet: top of stack is not complOf r" σ
   | sigs, r, Γ, .kTest :: rest, .complOf t :: σ' =>

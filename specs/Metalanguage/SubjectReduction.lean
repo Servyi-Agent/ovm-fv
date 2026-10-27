@@ -68,8 +68,7 @@ def selfTestHead : List Instr → Bool
 
 def inflight (sigs : SigTable) (above : Option «String») (f : Fr) : List STy :=
   match above with
-  | some n =>
-      if selfTestHead f.stmts then [STy.complOf (sigRetTy sigs n)] else []
+  | some n => [STy.complOf (sigRetTy sigs n)]
   | none => []
 
 def absStack (sigs : SigTable) (above : Option «String») (f : Fr) : List STy :=
@@ -78,8 +77,11 @@ def absStack (sigs : SigTable) (above : Option «String») (f : Fr) : List STy :
 /- ## Frame and state typing -/
 
 def frameOk (sigs : SigTable) (above : Option «String») (f : Fr) : Prop :=
-  isOk (checkSeq sigs (sigRetTy sigs f.ret) (envTyOf f.env) f.stmts
-          (absStack sigs above f)) = Bool.true
+  -- a frame under a callee MUST be waiting at the self-test idiom:
+  -- the delivery assumption of kRet
+  (above.isNone ∨ selfTestHead f.stmts = Bool.true)
+    ∧ isOk (checkSeq sigs (sigRetTy sigs f.ret) (envTyOf f.env) f.stmts
+              (absStack sigs above f)) = Bool.true
 
 def isComplV : JSValue → Bool
   | .compl _ _ => Bool.true
@@ -151,12 +153,17 @@ def stackSub : List STy → List STy → Bool
   | t :: σ₁, t' :: σ₂ => tmoves t t' && stackSub σ₁ σ₂
   | _, _ => Bool.false
 
-theorem tmoves_trans (t₁ t₂ t₃ : STy) (h₁ : tmoves t₁ t₂ = Bool.true)
-    (h₂ : tmoves t₂ t₃ = Bool.true) : tmoves t₁ t₃ = Bool.true := by
-  unfold tmoves at h₁ h₂ ⊢
-  cases t₁ <;> cases t₂ <;> cases t₃ <;>
-    simp_all only [decide_eq_true_eq] <;>
-    rcases h₁ with h₁ | h₁ <;> rcases h₂ with h₂ | h₂ <;> simp_all
+theorem tmoves_trans (t₂ : STy) :
+    ∀ t₁ t₃, tmoves t₁ t₂ = Bool.true → tmoves t₂ t₃ = Bool.true →
+      tmoves t₁ t₃ = Bool.true := by
+  induction t₂ with
+  | complOf b ih =>
+      intro t₁ t₃ h₁ h₂
+      cases t₁ <;> cases t₃ <;> simp_all [tmoves, reduceBEq]
+      all_goals exact ih _ _ h₁ h₂
+  | _ =>
+      intro t₁ t₃ h₁ h₂
+      cases t₁ <;> cases t₃ <;> simp_all [tmoves, reduceBEq]
 
 theorem popTy_sub {t σ₁ σ₂'} (hsub : stackSub σ₁ σ₂ = Bool.true)
     (h : popTy t σ₂ = some σ₂') :
@@ -172,7 +179,7 @@ theorem popTy_sub {t σ₁ σ₂'} (hsub : stackSub σ₁ σ₂ = Bool.true)
       | true =>
           rw [hh] at h
           cases h
-          have h₃ : tmoves t₁ t = Bool.true := tmoves_trans t₁ t₂ t hs.1 hh
+          have h₃ : tmoves t₁ t = Bool.true := tmoves_trans t₂ t₁ t hs.1 hh
           refine ⟨l₁, ?_, hs.2⟩
           show (if tmoves t₁ t = Bool.true then some l₁ else none) = some l₁
           rw [h₃]; rfl
