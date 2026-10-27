@@ -903,44 +903,15 @@ inductive Prim where              -- bedrock predicates (the axiom stratum)
   | pIsStr (s : «String»)
   deriving Repr
 
-inductive Kon where
-  | kIte (t e : List Step)
-  | kEach (x : «String») (body : List Step)
-  | kBind (n : «String»)
-  | kRet
-  | kPrim (p : Prim) (k : Kon)
-  | kEnter (f : «String») (k : Kon)
-  | kSpine (as : List E2) (rs : List JSValue) (k : Kon)
-  deriving Repr
-
-inductive Arg where
-  | ev (v : JSValue)              -- already a value
-  | ee (e : E2)                   -- pending expression
-  deriving Repr
 
 
-inductive Rt where                -- runtime statements: source steps + bookkeeping
-  | kLoopS (x : «String») (elems : List JSValue) (body : List Rt) (cont : List Rt)
-  | step (s : Step)
-  | kEvalS (cur : Arg) (as : List E2) (rs : List JSValue) (k : Kon)
-  | kEvalNextS (as : List E2) (rs : List JSValue) (k : Kon)
-  | kUnwindS
-  deriving Repr
+
 
 /- Control boundaries as frames: the callee REPLACES the current list
    (caller continuation saved in the frame — cannot be spliced wrong),
    and return POPS one frame (no scanning, cannot discard past a
    boundary). break/continue/try later = more Frame kinds. -/
-inductive Frame where
-  | kRestoreF (ce : Env) (st : List Rt) (k : Kon)
-  deriving Repr
 
-inductive KM where
-  | krun (cur : List Rt) (env : Env) (stack : List Frame)
-  | kdone (v : JSValue)
-  | kthrown
-  | kfell
-  deriving Repr
 
 
 def applyPrim (h : Heap) : Prim → JSValue → JSValue
@@ -1144,142 +1115,8 @@ def findAO : AOReg → «String» → Option (List «String» × Prog)
   | [], _ => none
   | (n, e) :: r, n' => if n == n' then some e else findAO r n'
 
-def kstep (reg : AOReg) : KM → KM
-  | .kdone v => .kdone v
-  | .kthrown => .kthrown
-  | .kfell => .kfell
-  | .krun [] _ _ => .kfell        -- fell off the end: top level, or callee w/o return
-  | .krun (.step (.ret v) :: st) env stack =>
-      .krun (.kEvalS (.ee v) [] [] .kRet :: st) env stack
-  | .krun (.step (.forEach x e body) :: st) env stack =>
-      .krun (.kEvalS (.ee e) [] [] (.kEach x body) :: st) env stack
-  | .krun (.step (.assertE e) :: st) env stack =>
-      match evalE2 emptyHeap env e with
-      | some (.boolean Bool.true) => .krun st env stack
-      | _ => .kfell               -- failed assert: stuck, loudly (asserts are pure)
-  | .krun (.step (.retNewSlot sn vv) :: st) env stack =>
-      match lookup env vv with
-      | some v =>
-          match slotOfName sn with
-          | some ord =>
-              let _obj := { (objWith .ordinary none) with slots := [(ord, v)] }
-              .krun (.kEvalS (.ev (.obj 0)) [] [] .kRet :: st)
-                env stack -- heap not threaded through KM: object at loc 0
-          | none => .kfell
-      | none => .kfell
-  | .krun (.step (.retE e) :: st) env stack =>
-      .krun (.kEvalS (.ee e) [] [] .kRet :: st) env stack
-  | .krun (.step (.retQ op) :: st) env stack =>
-      match evalP2 op with
-      | some v => .krun (.kEvalS (.ev v) [] [] .kRet :: st) env stack
-      | none => .kfell
-  | .krun (.step (.setE n e) :: st) env stack =>
-      .krun (.kEvalS (.ee e) [] [] (.kBind n) :: st) env stack
-  | .krun (.step .throw :: st) env stack => .krun (.kUnwindS :: st) env stack
-  | .krun (.step (.letE n e) :: st) env stack =>
-      .krun (.kEvalS (.ee e) [] [] (.kBind n) :: st) env stack
-  | .krun (.step (.letQ n op) :: st) env stack =>
-      match evalP2 op with
-      | some v => .krun st ((n, v) :: env) stack
-      | none => .kfell
-  | .krun (.step (.ifS c t e) :: st) env stack =>
-      .krun (.kEvalS (.ee c) [] [] (.kIte t e) :: st) env stack
-  | .krun (.step (.elseM _) :: st) env stack => .krun st env stack
-  | .krun (.kEvalS (.ev v) as rs k :: st) env stack =>
-      .krun (.kEvalNextS as (v :: rs) k :: st) env stack
-  | .krun (.kEvalS (.ee (.nv n)) as rs k :: st) env stack =>
-      match lookup env n with
-      | some v => .krun (.kEvalS (.ev v) as rs k :: st) env stack
-      | none => .kfell
-  | .krun (.kEvalS (.ee (.nat n)) as rs k :: st) env stack =>
-      .krun (.kEvalS (.ev (.number n.toFloat)) as rs k :: st) env stack
-  | .krun (.kEvalS (.ee (.const v)) as rs k :: st) env stack =>
-      .krun (.kEvalS (.ev v) as rs k :: st) env stack
-  | .krun (.kEvalS (.ee (.isObject e')) as rs k :: st) env stack =>
-      .krun (.kEvalS (.ee e') [] [] (.kPrim .pIsObj (.kSpine as rs k)) :: st) env stack
-  | .krun (.kEvalS (.ee (.isNotObject e')) as rs k :: st) env stack =>
-      .krun (.kEvalS (.ee e') [] [] (.kPrim .pIsNotObj (.kSpine as rs k)) :: st) env stack
-  | .krun (.kEvalS (.ee (.isNotUndefined e')) as rs k :: st) env stack =>
-      .krun (.kEvalS (.ee e') [] [] (.kPrim .pIsNotU (.kSpine as rs k)) :: st) env stack
-  | .krun (.kEvalS (.ee (.hasCall e')) as rs k :: st) env stack =>
-      .krun (.kEvalS (.ee e') [] [] (.kPrim .pHasCall (.kSpine as rs k)) :: st) env stack
-  | .krun (.kEvalS (.ee (.hasCtor e')) as rs k :: st) env stack =>
-      .krun (.kEvalS (.ee e') [] [] (.kPrim .pHasCtor (.kSpine as rs k)) :: st) env stack
-  | .krun (.kEvalS (.ee (.isU e')) as rs k :: st) env stack =>
-      .krun (.kEvalS (.ee e') [] [] (.kPrim .pIsU (.kSpine as rs k)) :: st) env stack
-  | .krun (.kEvalS (.ee (.isNullOrUnd e')) as rs k :: st) env stack =>
-      .krun (.kEvalS (.ee e') [] [] (.kPrim .pNullOrUnd (.kSpine as rs k)) :: st) env stack
-  | .krun (.kEvalS (.ee (.hasField nm e')) as rs k :: st) env stack =>
-      .krun (.kEvalS (.ee e') [] [] (.kPrim (.pHasField nm) (.kSpine as rs k)) :: st) env stack
-  | .krun (.kEvalS (.ee (.isType ty e')) as rs k :: st) env stack =>
-      .krun (.kEvalS (.ee e') [] [] (.kPrim (.pIsType ty) (.kSpine as rs k)) :: st) env stack
-  | .krun (.kEvalS (.ee (.isNull e')) as rs k :: st) env stack =>
-      .krun (.kEvalS (.ee e') [] [] (.kPrim .pIsNull (.kSpine as rs k)) :: st) env stack
-  | .krun (.kEvalS (.ee (.listE es)) as rs k :: st) env stack =>
-      match evalListE emptyHeap env es with
-      | some vs => .krun (.kEvalS (.ev (.listV vs)) as rs k :: st) env stack
-      | none => .kfell
-  | .krun (.kEvalS (.ee (.imeth _ _ _)) as rs k :: st) env stack =>
-      .krun (.kEvalS (.ee (.nv "IMETH-NATIVE")) as rs k :: st) env stack
-  | .krun (.kEvalS (.ee (.ifield nm e')) as rs k :: st) env stack =>
-      .krun (.kEvalS (.ee e') [] [] (.kPrim (.pDescField nm) (.kSpine as rs k)) :: st) env stack
-  | .krun (.kEvalS (.ee (.isStrVal s e')) as rs k :: st) env stack =>
-      .krun (.kEvalS (.ee e') [] [] (.kPrim (.pIsStr s) (.kSpine as rs k)) :: st) env stack
-  | .krun (.kEvalS (.ee (.isBoolVal b e')) as rs k :: st) env stack =>
-      .krun (.kEvalS (.ee e') [] [] (.kPrim (if b then .pIsTrue else .pIsFalse) (.kSpine as rs k)) :: st) env stack
-  | .krun (.kEvalS (.ee (.varNotPresent n)) as rs k :: st) env stack =>
-      .krun (.kEvalS (.ev (.boolean (lookup env n).isNone)) as rs k :: st) env stack
-  | .krun (.kEvalS (.ee (.call f args)) as rs k :: st) env stack =>
-      .krun (.kEvalNextS args [] (.kEnter f (.kSpine as rs k)) :: st) env stack
-  | .krun (.kEvalNextS (x :: as) rs k :: st) env stack =>
-      .krun (.kEvalS (.ee x) as rs k :: st) env stack
-  | .krun (.kEvalNextS [] [] _ :: _) _ _ => .kfell
-  | .krun (.kEvalNextS [] rs (.kIte t e) :: st) env stack =>
-      match rs with
-      | .boolean b :: _ => .krun ((if b then t else e).map Rt.step ++ st) env stack
-      | _ => .kfell      -- non-Boolean condition: transcription/type error, stuck loudly
-  | .krun (.kEvalNextS [] rs (.kEach x body) :: st) env stack =>
-      match rs with
-      | .listV l :: _ => .krun (.kLoopS x l (body.map Rt.step) st :: st) env stack
-      | _ => .kfell     -- For each over a non-List: stuck, loudly
-  | .krun (.kLoopS x (v :: rest') body _ :: st) env stack =>
-      .krun (body ++ [.kLoopS x rest' body st] ++ st) ((x, v) :: env) stack
-  | .krun (.kLoopS _x [] _ cont :: _st) env stack => .krun cont env stack
-  | .krun (.kEvalNextS [] rs (.kBind n) :: st) env stack =>
-      match rs with
-      | v :: _ => .krun st ((n, v) :: env) stack
-      | [] => .kfell
-  | .krun (.kEvalNextS [] rs (.kPrim p k) :: st) env stack =>
-      match rs with
-      | v :: _ => .krun (.kEvalS (.ev (applyPrim emptyHeap p v)) [] [] k :: st) env stack
-      | [] => .kfell
-  | .krun (.kEvalNextS [] rs (.kSpine as' rs' k) :: st) env stack =>
-      match rs with
-      | v :: _ => .krun (.kEvalS (.ev v) as' rs' k :: st) env stack
-      | [] => .kfell
-  | .krun (.kEvalNextS [] rs (.kEnter f k) :: st) env stack =>
-      match findAO reg f with
-      | some (ps, body) =>
-          .krun (body.map Rt.step) (ps.zip rs.reverse) (.kRestoreF env st k :: stack)
-      | none => .kfell             -- unknown operation: stuck, loudly
-  /- returning: pop exactly one frame — everything in cur belongs to
-     the callee and is discarded wholesale. -/
-  | .krun (.kEvalNextS [] (v :: _) .kRet :: _) _ (.kRestoreF ce st' k' :: stack') =>
-      .krun (.kEvalS (.ev v) [] [] k' :: st') ce stack'
-  | .krun (.kEvalNextS [] (v :: _) .kRet :: _) _ [] => .kdone v
-  /- unwinding: statements one per step, then through frames. -/
-  | .krun (.kUnwindS :: _ :: st) env stack => .krun (.kUnwindS :: st) env stack
-  | .krun [.kUnwindS] _ (.kRestoreF ce st' _ :: stack') =>
-      .krun (.kUnwindS :: st') ce stack'
-  | .krun [.kUnwindS] _ [] => .kthrown
 
-def ksteps (reg : AOReg) : Nat → KM → KM
-  | 0, m => m
-  | n + 1, m => ksteps reg n (kstep reg m)
 
-def ktrace (reg : AOReg) : Nat → KM → List KM
-  | 0, _ => []
-  | n + 1, m => m :: ktrace reg n (kstep reg m)
 
 /- ===== SOS semantics: state = (remaining program, env).
    The if-rule splices the branch:  ifS c t e :: rest → (t ++ rest | e ++ rest).
@@ -1345,18 +1182,9 @@ def sosSteps : Nat → SState → SState
   | 0, s => s
   | n + 1, s => sosSteps n (sosStep s)
 
-def kmOf (p : Prog) : KM := .krun (p.map Rt.step) [] []
-
 /- Outcome-level agreement: SOS and the machine step at different
    granularity, so compare terminals after enough steps for both. -/
-def sameOutcome : SState → KM → Bool
-  | .sret v, .kdone v' => v == v'
-  | .sthrown, .kthrown => Bool.true
-  | .sfell, .kfell => Bool.true
-  | _, _ => Bool.false
 
-def agree (reg : AOReg) (p : Prog) : Bool :=
-  sameOutcome (sosSteps 200 (.srun p [])) (ksteps reg 200 (kmOf p))
 
 /- ===== Frame machine: eval stack + frames + in-list loop markers.
    LoopFrame IS the statement list; the final marker is the redo

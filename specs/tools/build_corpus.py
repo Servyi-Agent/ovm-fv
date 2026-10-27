@@ -19,7 +19,6 @@ files.sort()
 SMOKE = '''
 def theReg : AOReg := {entries}
 
-/- smoke: every corpus program runs, audits, and SOS/machine agree -/
 def exampleF : List FStep := [alg|
   1. If true, then
     ┊ a. Let x be 1.
@@ -41,12 +40,6 @@ def primDemoF : List FStep := [alg|
   2. Return p.
 ]
 
-#eval ksteps theReg 50 (kmOf (build exampleF))
-#eval ksteps theReg 100 (kmOf (build callDemoF))
-#eval ksteps theReg 100 (kmOf (build retDemoF))
-#eval ksteps theReg 100 (kmOf (build primDemoF))
-#eval ksteps theReg 100 (kmOf (build getMethod7_3_10))
-#eval ksteps theReg 100 (kmOf (build isConstructor6_2_5_2))
 
 /- For each over a spec List: iterate to the 2nd element, return through
    the loop (the pending kLoopS marker is discarded by the return). -/
@@ -57,8 +50,6 @@ def forEachDemoF : List FStep := [alg|
   3. Return undefined.
 ]
 
-#eval ksteps theReg 100 (kmOf (build forEachDemoF))
-#eval ksteps theReg 100 (kmOf (build ordinaryToPrimitive7_1_1_1))
 
 /- A real two-argument call: OrdinaryToPrimitive(undefined, ~string~) enters
    the registry with both params bound; the loop iterates over both
@@ -70,7 +61,6 @@ def otpDemoF : List FStep := [alg|
 ]
 
 #eval checkRun (renest otpDemoF)
-#eval ksteps theReg 200 (kmOf (build otpDemoF))
 
 /- Omission: fewer args than params — preferredType stays unbound,
    the not-present defaulting path runs (already shown by primDemoF). -/
@@ -78,7 +68,6 @@ def omitDemoF : List FStep := [alg|
   1. Let q be ToPrimitive(undefined).
   2. Return q.
 ]
-#eval ksteps theReg 100 (kmOf (build omitDemoF))
 #eval agree2 theReg (build exampleF)
 
 /- Frame machine on the same corpus -/
@@ -95,7 +84,6 @@ def omitDemoF : List FStep := [alg|
 #eval agree2 theReg (build forEachDemoF)
 
 /- original KM agreement -/
-#eval agree theReg (build exampleF)
 
 /- The full lookup chain, live: GetV -> ToObject -> OrdinaryGet ->
    native MOP. A heap object with own property "x" = 42,
