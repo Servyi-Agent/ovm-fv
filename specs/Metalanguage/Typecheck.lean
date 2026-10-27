@@ -1,29 +1,62 @@
 import Metalanguage.Grammar
-/- # Static typechecking of compiled instruction sequences. -/
 
-/- ## Static typing of compiled instruction sequences
-   Types classify the PAYLOAD; delivery is always a completion.
-   `typeOfE (call f as)`: check each argument against `paramTys(f)`,
-   push `retTy(f)` — the runtime self-test (propagate-or-unwrap) is
-   implicit in that one rule. -/
+/- # Static typechecking: set-of-constructors types + worlds.
 
-/- Refinement: leaves mirror JSValue constructors exactly (number,
-   boolean, str, obj, listV, descV); `any` is the top of the value
-   lattice (an ECMAScript language value of unknown shape). Demands
-   are strict only where the runtime contract is unconditional
-   (kIte/kAssert/kRepeatTest pop .boolean; kTest's verdict). -/
+   Types are SETS over a closed constructor universe (bitmasks), plus
+   completion wire shapes. The checker tracks a finite set of WORLDS
+   (each an abstract stack + variable types). A shape test
+   `x is a T` SPLITS the world: then-world x : S ∩ T with verdict
+   {trueVal}, else-world x : S - T with verdict {falseVal};
+   impossible worlds are dropped. kIte dispatches each world on its
+   verdict's type ({trueVal} -> then, {falseVal} -> else, wider ->
+   the world fells). Assertions discharge exactly when the split
+   leaves no false-world. -/
+
+/- Constructor universe bits -/
+def cUndef  : Nat := 1
+def cNull   : Nat := 2
+def cTrue   : Nat := 4
+def cFalse  : Nat := 8
+def cNum    : Nat := 16
+def cStr    : Nat := 32
+def cObj    : Nat := 64
+def cList   : Nat := 128
+def cDesc   : Nat := 256
+
+def boolV   : Nat := cTrue + cFalse
+def langV   : Nat := cUndef + cNull + boolV + cNum + cStr + cObj
+def anyV    : Nat := langV + cList + cDesc
+
 inductive STy where
-  | any | number | boolean | str | obj | list | descV
-  | objOrNull            -- [[GetPrototypeOf]] result shape
-  | complN (t : STy)   -- a NORMAL completion wrapping a t-typed payload
-  | complT             -- a THROW (abrupt); payload exempt from r
-  | unit
-  deriving Repr, BEq, DecidableEq
+  | val (mask : Nat)          -- a set of value constructors
+  | complN (t : STy)          -- normal completion wrapping a payload type
+  | complT                    -- a throw
+  deriving Repr, BEq
 
-/-- Subtyping: covariant under complN, `any` absorbs. -/
+/- ## Set operations on types -/
+
+def valMask : STy → Nat
+  | .val m => m
+  | _ => 0
+
+def tyInter (t t' : STy) : STy :=
+  match t, t' with
+  | .val a, .val b => .val (a &&& b)
+  | _, _ => .val 0
+
+def tyDiff (t t' : STy) : STy :=
+  match t, t' with
+  | .val a, .val b => .val (a - (a &&& b))
+  | _, _ => t
+
+def tyNonempty : STy → Bool
+  | .val m => m != 0
+  | _ => true
+
+/-- Subtyping = subset (covariant under complN). -/
 def tmoves : STy → STy → Bool
+  | .val a, .val b => a - (a &&& b) == 0
   | .complN a, .complN b => tmoves a b
-  | _, .any => Bool.true
   | t, t' => t == t'
 
 def leList : List STy → List STy → Bool
@@ -32,19 +65,33 @@ def leList : List STy → List STy → Bool
   | _, _ => Bool.false
 
 def typeOfV : JSValue → STy
-  | .boolean _ => .boolean
-  | .obj _ => .obj
-  | .null => .objOrNull
-  | .listV _ => .list
+  | .undefined => .val cUndef
+  | .null => .val cNull
+  | .boolean Bool.true => .val cTrue
+  | .boolean Bool.false => .val cFalse
+  | .number _ => .val cNum
+  | .str _ => .val cStr
+  | .obj _ => .val cObj
+  | .listV _ => .val cList
+  | .descV _ => .val cDesc
   | .compl Bool.false v => .complN (typeOfV v)
   | .compl Bool.true _ => .complT
-  | _ => .any
 
 abbrev SigTable := List («String» × (List STy × STy))
 
 def sigFind : SigTable → «String» → Option (List STy × STy)
   | [], _ => none
   | (n, s) :: rest, f => if n == f then some s else sigFind rest f
+
+def sigParams (sigs : SigTable) (name : «String») : List STy :=
+  match sigFind sigs name with
+  | some (ps, _) => ps
+  | none => []
+
+def sigRetTy (sigs : SigTable) (name : «String») : STy :=
+  match sigFind sigs name with
+  | some (_, ret) => ret
+  | none => .val anyV
 
 abbrev TyEnv := List («String» × STy)
 
@@ -57,15 +104,30 @@ def tyLookup : TyEnv → «String» → Option STy
   | [], _ => none
   | (n, t) :: r, x => if n == x then some t else tyLookup r x
 
-def mopArity : «String» → Option Nat   -- MOP internal methods (receiver excluded)
+def mopArity : «String» → Option Nat
   | "Get" => some 2
   | "GetOwnProperty" => some 1
   | "GetPrototypeOf" => some 0
   | _ => none
 
-def mopResult : «String» → STy         -- MOP result payload types
-  | "GetPrototypeOf" => .objOrNull
-  | _ => .any
+def mopResult : «String» → STy
+  | "Get" => .val langV          -- [[Get]] delivers a language value
+  | "GetPrototypeOf" => .val (cNull + cObj)
+  | "Value" | "Getter" | "Setter" => .val langV
+  | "Writable" | "Enumerable" | "Configurable" => .val boolV
+  | _ => .val anyV                -- [[GetOwnProperty]]: descriptor | undefined
+
+/- ## Worlds -/
+
+structure World where
+  Γ : TyEnv
+  σ : List STy
+  deriving Repr
+
+abbrev Worlds := List World
+
+/- ## Expression typing (no side conditions; the is-family refines
+   only via the kEval split below) -/
 
 mutual
 def typesOf (sigs : SigTable) (Γ : TyEnv) : List Expr → Option (List STy)
@@ -78,19 +140,14 @@ termination_by es => sizeOf es
 
 def typeOfE (sigs : SigTable) (Γ : TyEnv) : Expr → Option STy
   | .nv x => tyLookup Γ x
-  | .nat _ => some STy.any
+  | .nat _ => some (.val cNum)
   | .const v => some (typeOfV v)
-  | .varNotPresent _ => some .boolean
+  | .varNotPresent _ => some (.val boolV)
   | .call f as =>
       match sigFind sigs f with
       | some (ps, ret) =>
-          -- pointwise subtyping; trailing parameter optional (spec:
-          -- Call(F, V) elides the arguments List)
           match typesOf sigs Γ as with
           | some ts =>
-              -- args/arity checked; the RESULT is the callee's
-              -- declared retTy: justified because the callee body is
-              -- certified ⊢_retTy (every exit returns complN retTy or throws)
               if leList ts ps
                  || (as.length == ps.length - 1
                      && leList ts (ps.dropLast))
@@ -98,73 +155,53 @@ def typeOfE (sigs : SigTable) (Γ : TyEnv) : Expr → Option STy
           | none => none
       | none => none
   | .imeth nm recv args =>
-      -- MOP: the receiver must be obj-typed (machine demands it);
-      -- payload typed per-method
       match mopArity nm with
       | some k =>
-          if args.length == k && typeOfE sigs Γ recv == some .obj
+          if args.length == k && typeOfE sigs Γ recv == some (.val cObj)
              && (typesOf sigs Γ args).isSome
           then some (mopResult nm) else none
       | none => none
-  | .listE es =>
-      if (typesOf sigs Γ es).isSome then some .list else none
   | .ifield nm x =>
-      -- field reads yield a VALUE (or undefined on non-descriptors):
-      -- pDescField is a dynamic guard, so the result is `any` —
-      -- EXCEPT the zero-arg-MOP deviation: `o.[[GetPrototypeOf]]` is
-      -- syntactically a field read but semantically the call
+      -- the zero-arg-MOP deviation: o.[[GetPrototypeOf]] is
+      -- semantically the call; other fields are dynamic guards
       if (typeOfE sigs Γ x).isSome then some (mopResult nm) else none
-  | .isObject x | .isNotObject x | .isNotUndefined x | .hasCall x | .hasCtor x
-  | .isU x | .isBoolVal _ x | .isStrVal _ x | .isNullOrUnd x | .isNull x
-  | .isType _ x | .hasField _ x =>
-      -- predicate forms are Boolean; the prim inputs are dynamic (any)
-      if (typeOfE sigs Γ x).isSome then some .boolean else none
+  | .listE es =>
+      if (typesOf sigs Γ es).isSome then some (.val cList) else none
+  | .isObject x | .isNotObject x | .isNotUndefined x | .hasCall x
+  | .hasCtor x | .isU x | .isBoolVal _ x | .isStrVal _ x
+  | .isNullOrUnd x | .isNull x | .isType _ x | .hasField _ x =>
+      if (typeOfE sigs Γ x).isSome then some (.val boolV) else none
 termination_by e => sizeOf e
 end
 
-/-- Summary of the terminating behaviors of a path set:
-   - exits: some path returns (kRet — the frame delivers to its caller)
-   - falls: some path runs off the end of the list, with stack/env.
-   Divergence is silent: an infinite loop contributes no outcome. -/
+/- ## Flows and results -/
+
 structure Flows where
   exits : Bool
-  falls : Option (List STy × TyEnv)
-  deriving Repr, BEq
-
-/- Result of checking an instruction list: the flow summary, or a
-   rejection AT an instruction with a reason and abstract stack. -/
-inductive TCResult where
-  | flows (f : Flows)
-  | reject (site : Instr) (why : «String») (σ : List STy)
+  falls : Worlds          -- worlds that ran off the end of the list
+  /- Assert obligations that could not be discharged by the splits:
+     each recorded assumption is a proof debt (caller contracts, spec
+     editor claims); the certificate is RELATIVE to them. Discharged
+     asserts (impossible false-worlds) leave no trace. -/
+  assumes : List «String»
   deriving Repr
 
-/-- Frame-level demand: every path returns, nothing falls through,
-   no unconsumed break (a break at frame top has no loop to join). -/
+/-- Frame-level demand: every world exits (returns), none falls
+   through. -/
 def terminal (f : Flows) : Bool :=
-  f.exits && f.falls.isNone
+  f.exits && f.falls.isEmpty
 
-def isOk (r : TCResult) : Bool :=
-  match r with
-  | .reject _ _ _ => Bool.false
-  | _ => Bool.true
+inductive TCResult where
+  | flows (f : Flows)
+  | reject (site : Instr) (why : «String»)
+  deriving Repr
 
+/- ## Stack operations -/
 
 def popTy (t : STy) (σ : List STy) : Option (List STy) :=
   match σ with
   | t' :: σ' => if tmoves t' t then some σ' else none
   | [] => none
-
-/-- Input/output types of the one-input prims. pWrapC is
-   input-dependent () and handled inline in checkSeq. -/
-def primTys (p : Prim) : Option (STy × STy) :=
-  match p with
-  | .pThrowC => some (.any, .complT)
-  -- bedrock predicates: any -> boolean (runtime tests are dynamic)
-  | .pIsObj | .pIsNotObj | .pIsNotU | .pHasCall | .pHasCtor | .pIsU
-  | .pIsTrue | .pIsFalse | .pNullOrUnd | .pIsNull
-  | .pIsType _ | .pHasField _ | .pIsStr _ => some (.any, .boolean)
-  | .pDescField _ => some (.any, .any)  -- dynamic desc guard
-  | .pWrapC => none                     -- t ↦ complN t, inline
 
 def popTyN : Nat → STy → List STy → Option (List STy)
   | 0, _, σ => some σ
@@ -173,224 +210,287 @@ def popTyN : Nat → STy → List STy → Option (List STy)
       | some σ' => popTyN k t σ'
       | none => none
 
-
-/- Branch join for variable types: names bound on ALL falling paths
-   survive (intersection); a name bound in both joins at the LUB. -/
-def lub (t t' : STy) : STy := if t == t' then t else .any
-
-def ΓUnion : TyEnv → TyEnv → TyEnv
-  | [], _ => []
-  | (n, t) :: r, Γ₂ =>
-      match tyLookup Γ₂ n with
-      | some t' => (n, lub t t') :: ΓUnion r Γ₂
-      | none => ΓUnion r Γ₂
-
-/- Branch join: exits are absorbed (a returning path contributes
-   nothing to the continuation); stacks must agree; envs join at the
-   intersection-with-lub (a name bound on one path only does not
-   survive). -/
-def joinFlows (f₁ f₂ : Flows) : Option Flows :=
-  match f₁.falls, f₂.falls with
-  | some (σ₁, Γ₁), some (σ₂, Γ₂) =>
-      if σ₁ == σ₂ then some { exits := f₁.exits || f₂.exits
-                            , falls := some (σ₁, ΓUnion Γ₁ Γ₂) }
-      else none
-  | some b, none | none, some b =>
-      some { exits := f₁.exits || f₂.exits, falls := some b }
-  | none, none => some { exits := f₁.exits || f₂.exits, falls := none }
-
-
-/- Loop join: the body's iteration-completion must be neutral —
-   equal to the loop-entry stack — since exhaustion lands at the
-   continuation with that stack. Exits pass through. -/
-def checkLoopBody (rbody : TCResult) (site : Instr)
-    (σ : List STy) (k : TyEnv → List STy → TCResult) : TCResult :=
-  match rbody with
-  | .reject site' why s => .reject site' why s
-  | .flows fb =>
-      match fb.falls with
-      | some (σ', Γ') =>
-          if σ' == σ then
-            match k Γ' σ with
-            | .flows fr => .flows { exits := fb.exits || fr.exits, falls := fr.falls }
-            | res => res
-          else .reject site "loop body is not stack-neutral" σ
-      | none =>
-          -- body never completes an iteration: exits or diverges;
-          -- the loop cannot reach the continuation
-          .flows { exits := fb.exits, falls := none }
-
-/-- Do the top `ps.length` entries satisfy `ps`? The head of the
-   stack is the LAST argument, so compare against reversed ps. -/
 def popArgs (ps σ : List STy) : Bool :=
   σ.length ≥ ps.length && leList ps.reverse (σ.take ps.length).reverse
 
-/- `checkSeq sigs r Γ is σ`: walk instruction list `is` with ambient
-   return type r (the frame's destiny), variable types Γ, abstract
-   stack σ. kRet demands  (or a throw) — exit uniformity, typed. -/
+def primTys (p : Prim) : Option (STy × STy) :=
+  match p with
+  | .pThrowC => some (.val anyV, .complT)
+  | .pIsObj | .pIsNotObj | .pIsNotU | .pHasCall | .pHasCtor | .pIsU
+  | .pIsTrue | .pIsFalse | .pNullOrUnd | .pIsNull
+  | .pIsType _ | .pHasField _ | .pIsStr _ => some (.val anyV, .val boolV)
+  | .pDescField _ => some (.val anyV, .val anyV)
+  | .pWrapC => none                     -- t ↦ complN t, inline
 
+/- ## Shape tests: the mask a test's THEN side asserts -/
 
-def checkSeq : SigTable → STy → TyEnv → List Instr → List STy → TCResult
-  | _, _, Γ, [], σ => .flows { exits := Bool.false, falls := some (σ, Γ) }
-  | sigs, r, Γ, .kEval e :: rest, σ =>
-      match typeOfE sigs Γ e with
-      | some t => checkSeq sigs r Γ rest (t :: σ)
-      | none => .reject (.kEval e) "ill-typed expression (unbound variable, unknown operation, or argument type mismatch)" σ
-  | sigs, r, Γ, .kPrim1 .pWrapC :: rest, σ =>
-      match σ with
-      | t :: σ' => checkSeq sigs r Γ rest (.complN t :: σ')
-      | [] => .reject (.kPrim1 .pWrapC) "pWrapC on empty stack" σ
-  | sigs, r, Γ, .kPrim1 p :: rest, σ =>
+def typeMask : «String» → Nat
+  | "Boolean" => boolV
+  | "Number" => cNum
+  | "String" => cStr
+  | "Symbol" => 0        -- no such constructor in our universe
+  | "BigInt" => 0
+  | _ => 0
+
+/-- The set a test's THEN world restricts the tested value to.
+   0 = non-splitting predicate (no refinement). -/
+def testMask : Expr → Nat
+  | .isObject _ => cObj
+  | .isNotObject _ => anyV - cObj
+  | .isU _ => cUndef
+  | .isNotUndefined _ => anyV - cUndef
+  | .isNull _ => cNull
+  | .isNullOrUnd _ => cUndef + cNull
+  | .isBoolVal Bool.true _ => cTrue
+  | .isBoolVal Bool.false _ => cFalse
+  | .isType ty _ => typeMask ty
+  | .isStrVal _ _ => cStr
+  | _ => 0
+
+/-- The variable a shape test inspects, if any. -/
+def testedVar : Expr → Option «String»
+  | .isObject (.nv x) | .isNotObject (.nv x) | .isU (.nv x)
+  | .isNotUndefined (.nv x) | .isNull (.nv x) | .isNullOrUnd (.nv x)
+  | .isBoolVal _ (.nv x) | .isStrVal _ (.nv x) | .isType _ (.nv x) => some x
+  | _ => none
+
+/- ## The world-stepping checker
+
+   checkSeq processes one instruction list against a SET of worlds.
+   Shape tests split worlds (dropping impossible ones); kIte sends
+   each world down its verdict's path; falls collect worlds. -/
+
+/-- Step every world through one stack instruction (no control
+   flow). Fails (none) if any world's stack does not match. -/
+def stepWorlds (sigs : SigTable) (ws : Worlds) (i : Instr) : Option Worlds :=
+  match i with
+  | .kPrim1 .pWrapC =>
+      ws.mapM (fun w =>
+        match w.σ with
+        | t :: σ' => some { w with σ := .complN t :: σ' }
+        | [] => none)
+  | .kPrim1 p =>
       match primTys p with
       | some (tin, tout) =>
-          match popTy tin σ with
-          | some σ' => checkSeq sigs r Γ rest (tout :: σ')
-          | none => .reject (.kPrim1 p) "prim expects a different top-of-stack type" σ
-      | none => .reject (.kPrim1 p) "unreachable (pWrapC above)" σ
-  | sigs, r, Γ, .kCall f n :: rest, σ =>
+          ws.mapM (fun w => match popTy tin w.σ with
+            | some σ' => some { w with σ := tout :: σ' }
+            | none => none)
+      | none => some ws
+  | .kCall f n =>
       match sigFind sigs f with
       | some (ps, ret) =>
-          if ps.length == n then
-            -- args are checked against the signature HERE (pointwise
-            -- subtyping), so the callee receives a certified env
-            if popArgs ps σ then
-              checkSeq sigs r Γ rest (.complN ret :: σ.drop n)
-            else .reject (.kCall f n) "call: argument types do not match signature" σ
-          else .reject (.kCall f n) "call arity does not match signature" σ
-      | none => .reject (.kCall f n) "no signature for callee" σ
-  | sigs, r, Γ, .kSet x :: rest, σ =>
-      match σ with
-      | t :: σ' => checkSeq sigs r ((x, t) :: Γ) rest σ'
-      | [] => .reject (.kSet x) "kSet on empty stack" σ
-  | sigs, r, Γ, .kPop :: rest, σ =>
-      match σ with
-      | _ :: σ' => checkSeq sigs r Γ rest σ'
-      | [] => .reject .kPop "kPop on empty stack" σ
-  | sigs, r, Γ, .kIte t e :: rest, σ =>
-      match popTy .boolean σ with
-      | none => .reject (.kIte t e) "kIte: condition is not boolean" σ
-      | some σ' =>
-          match checkSeq sigs r Γ t σ', checkSeq sigs r Γ e σ' with
-          | .reject site why s, _ => .reject site why s
-          | _, .reject site why s => .reject site why s
-          | .flows f₁, .flows f₂ =>
-              match joinFlows f₁ f₂ with
-              | none => .reject (.kIte t e) "branches join with different stacks" σ'
-              | some fj =>
-                  match fj.falls with
-                  | some (σⱼ, Γⱼ) =>
-                      match checkSeq sigs r Γⱼ rest σⱼ with
-                      | .flows fr => .flows { exits := fj.exits || fr.exits, falls := fr.falls }
-                      | res => res
-                  | none => .flows { exits := fj.exits, falls := none }
-  | sigs, r, Γ, .kNarrowNotNull x :: rest, σ =>
-      -- else-path of `If x is null, <exit>`: x is not null here;
-      -- the only leaf that improves is objOrNull -> obj
-      checkSeq sigs r
-        ((x, match tyLookup Γ x with
-             | some .objOrNull => .obj
-             | some t => t
-             | none => .any) :: Γ) rest σ
-  | sigs, r, Γ, .kAssertObj x :: rest, σ =>
-      -- successful `Assert: x is an Object.` narrows x to obj
-      match popTy .boolean σ with
-      | some σ' => checkSeq sigs r ((x, .obj) :: Γ) rest σ'
-      | none => .reject (.kAssertObj x) "kAssertObj: top is not boolean" σ
-  | sigs, r, Γ, .kAssert :: rest, σ =>
-      match popTy .boolean σ with
-      | some σ' => checkSeq sigs r Γ rest σ'
-      | none => .reject .kAssert "kAssert: top is not boolean" σ
-  | _, r, _, .kRet :: _, .complN t' :: _ =>
-      if tmoves t' r then .flows { exits := Bool.true, falls := none }
-      else .reject .kRet "kRet: returned payload does not match the frame's destiny r" (.complN t' :: [])
-  | _, _, _, .kRet :: _, .complT :: _ =>
-      -- a throw: exempt from r (the caller's unwrap never runs on it)
-      .flows { exits := Bool.true, falls := none }
-  | _, _, _, .kRet :: _, σ =>
-      .reject .kRet "kRet: top of stack is not a normal complN-r or a throw" σ
-  | sigs, r, Γ, .kTest :: rest, .complN t :: σ' =>
-      checkSeq sigs r Γ rest (.boolean :: .complN t :: σ')
-  | sigs, r, Γ, .kTest :: rest, .complT :: σ' =>
-      checkSeq sigs r Γ rest (.boolean :: .complT :: σ')
-  | _, _, _, .kTest :: _, σ =>
-      .reject .kTest "kTest: top of stack is not a completion" σ
-  | sigs, r, Γ, .kUnwrap :: rest, .complN t :: σ' =>
-      checkSeq sigs r Γ rest (t :: σ')
-  | sigs, r, Γ, .kUnwrap :: rest, .complT :: σ' =>
-      -- never runs at runtime (the self-test propagates throws); the
-      -- widened `any` is the static price of checking dead paths
-      checkSeq sigs r Γ rest (STy.any :: σ')
-  | _, _, _, .kUnwrap :: _, σ =>
-      .reject .kUnwrap "kUnwrap: top of stack is not a completion" σ
-  | sigs, r, Γ, .kIMeth nm n :: rest, σ =>
-      -- the receiver must be an object: the machine demands it
-      -- unconditionally (this is the dynamic guard the type system
-      -- must own for progress)
+          if ps.length == n && ws.all (fun w => popArgs ps w.σ) then
+            some (ws.map (fun w => { w with σ := .complN ret :: w.σ.drop n }))
+          else none
+      | none => none
+  | .kSet x =>
+      ws.mapM (fun w =>
+        match w.σ with
+        | t :: σ' => some { Γ := (x, t) :: w.Γ, σ := σ' }
+        | [] => none)
+  | .kPop =>
+      ws.mapM (fun w =>
+        match w.σ with
+        | _ :: σ' => some { w with σ := σ' }
+        | [] => none)
+  | .kTest =>
+      -- verdict is EXACT: complN -> falseVal (not abrupt), complT -> trueVal
+      ws.mapM (fun w =>
+        match w.σ with
+        | .complN t :: σ' => some { w with σ := .val cFalse :: .complN t :: σ' }
+        | .complT :: σ' => some { w with σ := .val cTrue :: .complT :: σ' }
+        | _ => none)
+  | .kUnwrap =>
+      ws.mapM (fun w =>
+        match w.σ with
+        | .complN t :: σ' => some { w with σ := t :: σ' }
+        | .complT :: σ' => some { w with σ := .val anyV :: σ' }  -- dead path
+        | _ => none)
+  | .kIMeth nm n =>
       if mopArity nm == some n then
-        match popTyN n .any σ with
-        | some σ' =>
-            match popTy .obj σ' with
-            | some σ'' => checkSeq sigs r Γ rest (.complN (mopResult nm) :: σ'')
-            | none => .reject (.kIMeth nm n) "MOP receiver is not an object" σ
-        | none => .reject (.kIMeth nm n) "MOP dispatch: argument stack mismatch" σ
-      else .reject (.kIMeth nm n) "unknown MOP method or wrong arity" σ
-  | sigs, r, Γ, .kMkList n :: rest, σ =>
-      match popTyN n .any σ with
-      | some σ' => checkSeq sigs r Γ rest (.list :: σ')
-      | none => .reject (.kMkList n) "kMkList: element stack mismatch" σ
-  | sigs, r, Γ, .kNewSlot sn :: rest, σ =>
-      match popTy .any σ with
-      | some σ' =>
-          if (slotOfName sn).isSome then
-            checkSeq sigs r Γ rest (.obj :: σ')
-          else .reject (.kNewSlot sn) "unknown internal slot name" σ
-      | none => .reject (.kNewSlot sn) "kNewSlot on empty stack" σ
-  | sigs, r, Γ, .kRepeatWhile c body :: rest, σ =>
-      if typeOfE sigs Γ c != some .boolean
-      then .reject (.kRepeatWhile c body) "loop condition is not boolean" σ
-      else checkLoopBody (checkSeq sigs r Γ body σ) (.kRepeatWhile c body) σ
-        (fun Γ' σ' => checkSeq sigs r Γ' rest σ')
-  | sigs, r, Γ, .kRepeatTest c body :: rest, σ =>
-      -- pops the boolean verdict: loop (body neutral) or fall through
-      match popTy .boolean σ with
-      | none => .reject (.kRepeatTest c body) "loop verdict is not boolean" σ
-      | some σ' => checkLoopBody (checkSeq sigs r Γ body σ') (.kRepeatTest c body) σ'
-        (fun Γ' σ'' => checkSeq sigs r Γ' rest σ'')
-  | sigs, r, Γ, .kForStart x body :: rest, σ =>
-      -- the machine iterates only over Lists
-      match popTy .list σ with
-      | none => .reject (.kForStart x body) "for-each over a non-list" σ
-      | some σ' => checkLoopBody (checkSeq sigs r ((x, .any) :: Γ) body σ')
-        (.kForStart x body) σ'
-        (fun Γ' σ'' => checkSeq sigs r Γ' rest σ'')
-  | sigs, r, Γ, .kForBody x _ body :: rest, σ =>
-      checkLoopBody (checkSeq sigs r ((x, .any) :: Γ) body σ)
-        (.kForBody x [] body) σ
-        (fun Γ' σ'' => checkSeq sigs r Γ' rest σ'')
+        ws.mapM (fun w =>
+          match popTyN n (.val anyV) w.σ with
+          | some σ' =>
+              match popTy (.val cObj) σ' with
+              | some σ'' => some { w with σ := .complN (mopResult nm) :: σ'' }
+              | none => none
+          | none => none)
+      else none
+  | .kMkList n =>
+      ws.mapM (fun w =>
+        match popTyN n (.val anyV) w.σ with
+        | some σ' => some { w with σ := .val cList :: σ' }
+        | none => none)
+  | .kNewSlot sn =>
+      if (slotOfName sn).isSome then
+        ws.mapM (fun w =>
+          match popTy (.val anyV) w.σ with
+          | some σ' => some { w with σ := .val cObj :: σ' }
+          | none => none)
+      else none
+  | _ => some ws
 
-/- A frame is well typed if every path exits via kRet (falling off the
-   end is the runtime's loud `fell`). -/
+/-- Split worlds at a shape test `tested = .nv x` with mask m. -/
+def splitWorlds (x : «String») (m : Nat) (ws : Worlds) : Option Worlds :=
+  match ws.mapM (fun (w : World) =>
+    match tyLookup w.Γ x with
+    | none => none
+    | some S =>
+        let thenS := tyInter S (.val m)
+        let elseS := tyDiff S (.val m)
+        -- at least one side must be possible; emit verdict + refined Γ
+        let out : List World :=
+          (if tyNonempty thenS then [{ Γ := (x, thenS) :: w.Γ, σ := .val cTrue :: w.σ }] else [])
+          ++ (if tyNonempty elseS then [{ Γ := (x, elseS) :: w.Γ, σ := .val cFalse :: w.σ }] else [])
+        if out.isEmpty then none else (some out : Option (List World))) with
+  | none => none
+  | some wss => some (List.flatten wss)
+
+/- Loop join: every falls-world must come back to the loop-entry
+   stack (neutrality); the continuation runs from those worlds. -/
+def checkLoopBody (rbody : TCResult) (site : Instr)
+    (σ₀ : List STy) (k : Worlds → TCResult) : TCResult :=
+  match rbody with
+  | .reject site' why => .reject site' why
+  | .flows fb =>
+      let neutral := fb.falls.all (fun w => w.σ == σ₀)
+      if neutral then
+        match k fb.falls with
+        | .flows fr => .flows { exits := fb.exits || fr.exits, falls := fr.falls, assumes := fb.assumes ++ fr.assumes }
+        | res => res
+      else .reject site "loop body is not stack-neutral"
+
+def checkSeq : SigTable → STy → Worlds → List Instr → TCResult
+  | _, _, ws, [] => .flows { exits := Bool.false, falls := ws, assumes := [] }
+  | sigs, r, ws, .kRet :: _ =>
+      -- every world returns: complN payload ⊑ r, or a throw
+      if ws.all (fun w =>
+        match w.σ with
+        | .complN t :: _ => tmoves t r
+        | .complT :: _ => Bool.true
+        | _ => Bool.false) then
+        .flows { exits := Bool.true, falls := [], assumes := [] }
+      else .reject .kRet "kRet: payload does not match the frame's destiny r"
+  | sigs, r, ws, .kIte t e :: rest =>
+      -- dispatch each world on its verdict; split both-verdict worlds
+      let dispatch (w : World) : Option (Worlds × Worlds) :=
+        match w.σ with
+        | .val m :: σ' =>
+            if m == cTrue then some ([{ w with σ := σ' }], [])
+            else if m == cFalse then some ([], [{ w with σ := σ' }])
+            else if (m - (m &&& boolV)) == 0 then
+              some ([{ w with σ := σ' }], [{ w with σ := σ' }])
+            else none
+        | _ => none
+      match ws.mapM dispatch with
+      | none => .reject (.kIte t e) "kIte: verdict is not boolean"
+      | some pairs =>
+          let wsT := (pairs.map Prod.fst).flatten
+          let wsE := (pairs.map Prod.snd).flatten
+          match checkSeq sigs r wsT t, checkSeq sigs r wsE e with
+          | .reject site' why, _ => .reject site' why
+          | _, .reject site' why => .reject site' why
+          | .flows f₁, .flows f₂ =>
+              match checkSeq sigs r (f₁.falls ++ f₂.falls) rest with
+              | .flows fr =>
+                  .flows { exits := f₁.exits || f₂.exits || fr.exits
+                         , falls := fr.falls
+                         , assumes := f₁.assumes ++ f₂.assumes ++ fr.assumes }
+              | res => res
+  | sigs, r, ws, .kEval ex :: rest =>
+      -- shape tests on a variable SPLIT the worlds
+      if testMask ex != 0 then
+        match testedVar ex with
+        | some x =>
+            match splitWorlds x (testMask ex) ws with
+            | none => .reject (.kEval ex) "ill-typed shape test (unbound or empty split)"
+            | some ws' => checkSeq sigs r ws' rest
+        | none =>
+            match ws.mapM (fun (w : World) =>
+              match typeOfE sigs w.Γ ex with
+              | none => none
+              | some t => some { w with σ := t :: w.σ }) with
+            | none => .reject (.kEval ex) "ill-typed expression"
+            | some ws' => checkSeq sigs r ws' rest
+      else
+        match ws.mapM (fun (w : World) =>
+          match typeOfE sigs w.Γ ex with
+          | none => none
+          | some t => some { w with σ := t :: w.σ }) with
+        | none => .reject (.kEval ex) "ill-typed expression (unbound or bad args)"
+        | some ws' => checkSeq sigs r ws' rest
+  | sigs, r, ws, .kRepeatWhile c body :: rest =>
+      if ws.all (fun w =>
+        match typeOfE sigs w.Γ c with
+        | some t => tmoves t (.val boolV)
+        | none => Bool.false) then
+        checkLoopBody (checkSeq sigs r ws body) (.kRepeatWhile c body)
+          (ws.head?.map World.σ |>.getD []) (fun wsf => checkSeq sigs r wsf rest)
+      else .reject (.kRepeatWhile c body) "loop condition is not boolean"
+  | sigs, r, ws, .kRepeatTest c body :: rest =>
+      match ws.mapM (fun (w : World) => popTy (.val boolV) w.σ) with
+      | none => .reject (.kRepeatTest c body) "loop verdict is not boolean"
+      | some ws' =>
+          let ws'' := ws.zip ws' |>.map (fun (w, σ') => { w with σ := σ' })
+          checkLoopBody (checkSeq sigs r ws'' body) (.kRepeatTest c body)
+            (ws''.head?.map World.σ |>.getD []) (fun wsf => checkSeq sigs r wsf rest)
+  | sigs, r, ws, .kForStart x body :: rest =>
+      match ws.mapM (fun (w : World) => popTy (.val cList) w.σ) with
+      | none => .reject (.kForStart x body) "for-each over a non-list"
+      | some ws' =>
+          let ws'' := (ws.zip ws').map (fun (w, σ') =>
+            { w with Γ := (x, .val langV) :: w.Γ, σ := σ' })
+          checkLoopBody (checkSeq sigs r ws'' body) (.kForStart x body)
+            (ws''.head?.map World.σ |>.getD []) (fun wsf => checkSeq sigs r wsf rest)
+  | sigs, r, ws, .kForBody x _ body :: rest =>
+      let ws' := ws.map (fun w => { w with Γ := (x, .val langV) :: w.Γ })
+      checkLoopBody (checkSeq sigs r ws' body) (.kForBody x [] body)
+        (ws'.head?.map World.σ |>.getD []) (fun wsf => checkSeq sigs r wsf rest)
+  | sigs, r, ws, .kAssert :: rest =>
+      -- asserts: the trueVal worlds continue; falseVal worlds are
+      -- ASSUMED away (proof debt recorded); a both-verdict world
+      -- continues with its false side assumed away
+      let rec step (w : World) : World × Bool :=
+        match w.σ with
+        | .val m :: σ' =>
+            if m == cTrue then ({ w with σ := σ' }, Bool.false)
+            else ({ w with σ := σ' }, Bool.true)
+        | _ => (w, Bool.true)   -- non-boolean verdict: fell-world
+      let stepped := ws.map step
+      let ws' := stepped.map Prod.fst
+      let anyAssumed := stepped.any Prod.snd
+      let desc :=
+        match rest.head? with
+        | _ => "assert obligation not discharged"
+      match checkSeq sigs r ws' rest with
+      | .flows fr =>
+          if anyAssumed then
+            .flows { fr with assumes := desc :: fr.assumes }
+          else .flows fr
+      | res => res
+  | sigs, r, ws, i :: rest =>
+      match stepWorlds sigs ws i with
+      | none => .reject i "world stack mismatch"
+      | some ws' => checkSeq sigs r ws' rest
+termination_by is' _ _ is => sizeOf is
+
 def typecheckSeq (sigs : SigTable) (r : STy) (Γ : TyEnv) (seq : List Instr) : TCResult :=
-  checkSeq sigs r Γ seq []
+  checkSeq sigs r [{ Γ := Γ, σ := [] }] seq
 
-/- Check one AO: params get their declared types from the signature
-   table; arity must agree with the registry. Result: none = well
-   typed; some r = the first rejection (with reason and stack). -/
 def typecheckAO (sigs : SigTable)
     (name : «String») (params : List «String») (body : List Instr) : Option TCResult :=
   match sigFind sigs name with
   | none =>
       some (.reject (body.head?.getD .kRet)
-        (name ++ " has no entry in the signature table") [])
-  | some (paramTys, ret2) =>
+        (name ++ " has no entry in the signature table"))
+  | some (paramTys, ret) =>
       if params.length != paramTys.length then
         some (.reject (body.head?.getD .kRet)
-          (name ++ ": registry arity ≠ signature arity") [])
-      else match typecheckSeq sigs ret2 (zipTy params paramTys) body with
+          (name ++ ": registry arity/signature arity mismatch"))
+      else match typecheckSeq sigs ret (zipTy params paramTys) body with
         | .flows f => if terminal f then none else some (.flows f)
-        | r => some r
+        | res => some res
 
-/- First ill-typed AO in the registry, by name. none = all well typed. -/
 def typecheckReg (sigs : SigTable) (reg : AOReg) : Option («String» × TCResult) :=
   match reg with
   | [] => none
@@ -401,4 +501,3 @@ def typecheckReg (sigs : SigTable) (reg : AOReg) : Option («String» × TCResul
 
 def typecheckRegOk (sigs : SigTable) (reg : AOReg) : Bool :=
   (typecheckReg sigs reg).isNone
-

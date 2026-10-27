@@ -57,11 +57,6 @@ theorem envTyOf_cons (n : «String») (v : JSValue) (env : Env) :
    destiny: the frame above knows its AO name, hence its declared
    return type. -/
 
-def sigRetTy (sigs : SigTable) (name : «String») : STy :=
-  match sigFind sigs name with
-  | some (_, ret) => ret
-  | none => STy.any
-
 def selfTestHead : List Instr → Bool
   | .kTest :: .kIte [.kRet] [.kUnwrap] :: _ => Bool.true
   | _ => Bool.false
@@ -80,10 +75,9 @@ def frameOk (sigs : SigTable) (above : Option «String») (f : Fr) : Prop :=
   -- a frame under a callee MUST be waiting at the self-test idiom:
   -- the delivery assumption of kRet
   (above.isNone ∨ selfTestHead f.stmts = Bool.true)
-    ∧ (match checkSeq sigs (sigRetTy sigs f.ret) (envTyOf f.env) f.stmts
-                (absStack sigs above f) with
-       | .flows fb => terminal fb = Bool.true   -- every path returns;
-                                                 -- no fall-through, no stray break
+    ∧ (match checkSeq sigs (sigRetTy sigs f.ret)
+                [{ Γ := envTyOf f.env, σ := absStack sigs above f }] f.stmts with
+       | .flows fb => terminal fb = Bool.true  -- every world returns
        | _ => False)
 
 def isComplV : JSValue → Bool
@@ -115,64 +109,75 @@ def stateOk (sigs : SigTable) (m : FM) : Prop :=
    certified at every argument typing that satisfies the signature
    (pointwise: equal, or the parameter is `any`). -/
 
-def sigParams (sigs : SigTable) (name : «String») : List STy :=
-  match sigFind sigs name with
-  | some (ps, _) => ps
-  | none => []
-
 def registryCertified (sigs : SigTable) (reg : AOReg) : Prop :=
   ∀ name ps prog, (name, (ps, prog)) ∈ reg →
     ∀ ts, leList ts (sigParams sigs name) →
-      (match checkSeq sigs (sigRetTy sigs name) (zipTy ps ts)
-              (compileSteps prog) [] with
+      (match checkSeq sigs (sigRetTy sigs name)
+              [{ Γ := zipTy ps ts, σ := [] }] (compileSteps prog) with
        | .flows fb => terminal fb = Bool.true
        | _ => False)
 
-/- ## Unfolding equalities: one machine step of each value instruction
-   is exactly one step of the checker. -/
+/- ## Keystone lemmas -/
 
-theorem checkSeq_kEval_const (sigs : SigTable) (Γ : TyEnv)
-    (v : JSValue) (rest : List Instr) (σ : List STy) :
-    checkSeq sigs r Γ (.kEval (.const v) :: rest) σ
-      = checkSeq sigs r Γ rest (typeOfV v :: σ) := by
-  simp [checkSeq, typeOfE]
-
-theorem checkSeq_kEval_nat (sigs : SigTable) (Γ : TyEnv)
-    (n : Nat) (rest : List Instr) (σ : List STy) :
-    checkSeq sigs r Γ (.kEval (.nat n) :: rest) σ
-      = checkSeq sigs r Γ rest (STy.any :: σ) := by
-  simp [checkSeq, typeOfE]
-
-theorem checkSeq_kEval_nv {sigs : SigTable} {env : Env} {x : «String»}
-    (h : lookup env x = some v) (rest : List Instr) (σ : List STy) :
-    checkSeq sigs r (envTyOf env) (.kEval (.nv x) :: rest) σ
-      = checkSeq sigs r (envTyOf env) rest (typeOfV v :: σ) := by
-  simp only [checkSeq, typeOfE]
-  rw [← envTyOf_lookup, h]
-  rfl
-
-/- ## Entry refinement — see checkSeq_mono below. -/
-
-def stackSub : List STy → List STy → Bool
-  | [], [] => Bool.true
-  | t :: σ₁, t' :: σ₂ => tmoves t t' && stackSub σ₁ σ₂
-  | _, _ => Bool.false
-
+/- Subtype transitivity (set inclusion; covariant under complN). -/
 theorem tmoves_trans (t₂ : STy) :
     ∀ t₁ t₃, tmoves t₁ t₂ = Bool.true → tmoves t₂ t₃ = Bool.true →
       tmoves t₁ t₃ = Bool.true := by
   induction t₂ with
+  | val b =>
+      intro t₁ t₃ h₁ h₂
+      cases t₁ with
+      | val a =>
+          cases t₃ with
+          | val c =>
+              have h₁' : a - (a &&& b) = 0 := by
+                simp only [tmoves] at h₁; exact of_decide_eq_true h₁
+              have h₂' : b - (b &&& c) = 0 := by
+                simp only [tmoves] at h₂; exact of_decide_eq_true h₂
+              have l1 : a &&& b ≤ a := Nat.and_le_left
+              have l2 : b &&& c ≤ b := Nat.and_le_left
+              have hab : a = a &&& b := by omega
+              have hbc : b = b &&& c := by omega
+              have h6 : a &&& c = a := by
+                calc a &&& c = (a &&& b) &&& c := by
+                      conv => lhs; arg 1; rw [hab]
+                  _ = a &&& (b &&& c) := Nat.and_assoc a b c
+                  _ = a &&& b := by rw [← hbc]
+                  _ = a := hab.symm
+              have key : a - (a &&& c) = 0 := by omega
+              simp only [tmoves]
+              exact decide_eq_true key
+          | complT => simp only [tmoves, reduceCtorEq] at h₂; exact Bool.noConfusion h₂
+          | complN _ => simp only [tmoves, reduceCtorEq] at h₂; exact Bool.noConfusion h₂
+      | complT => simp only [tmoves, reduceCtorEq] at h₁; exact Bool.noConfusion h₁
+      | complN _ => simp only [tmoves, reduceCtorEq] at h₁; exact Bool.noConfusion h₁
   | complN b ih =>
       intro t₁ t₃ h₁ h₂
       cases t₁ with
       | complN a =>
           cases t₃ with
-          | complN c => simp only [tmoves] at h₁ h₂ ⊢; exact ih a c h₁ h₂
-          | _ => simp_all [tmoves, reduceBEq, reduceCtorEq, reduceCtorIdx]
-      | _ => cases t₃ <;> simp_all [tmoves, reduceBEq, reduceCtorEq, reduceCtorIdx]
-  | _ =>
+          | complN c =>
+              simp only [tmoves] at h₁ h₂ ⊢
+              exact ih a c h₁ h₂
+          | complT => simp only [tmoves, reduceCtorEq] at h₂; exact Bool.noConfusion h₂
+          | val => simp only [tmoves, reduceCtorEq] at h₂; exact Bool.noConfusion h₂
+      | complT => simp only [tmoves, reduceCtorEq] at h₁; exact Bool.noConfusion h₁
+      | val => simp only [tmoves, reduceCtorEq] at h₁; exact Bool.noConfusion h₁
+  | complT =>
       intro t₁ t₃ h₁ h₂
-      cases t₁ <;> cases t₃ <;> simp_all [tmoves, reduceBEq, reduceCtorEq, reduceCtorIdx]
+      cases t₁ with
+      | complT =>
+          cases t₃ with
+          | complT => rfl
+          | val => simp only [tmoves, reduceCtorEq] at h₂; exact Bool.noConfusion h₂
+          | complN _ => simp only [tmoves, reduceCtorEq] at h₂; exact Bool.noConfusion h₂
+      | val => simp only [tmoves, reduceCtorEq] at h₁; exact Bool.noConfusion h₁
+      | complN _ => simp only [tmoves, reduceCtorEq] at h₁; exact Bool.noConfusion h₁
+
+def stackSub : List STy → List STy → Bool
+  | [], [] => Bool.true
+  | t :: σ₁, t' :: σ₂ => tmoves t t' && stackSub σ₁ σ₂
+  | _, _ => Bool.false
 
 theorem popTy_sub {t σ₁ σ₂'} (hsub : stackSub σ₁ σ₂ = Bool.true)
     (h : popTy t σ₂ = some σ₂') :
@@ -189,8 +194,6 @@ theorem popTy_sub {t σ₁ σ₂'} (hsub : stackSub σ₁ σ₂ = Bool.true)
           rw [hh] at h
           cases h
           have h₃ : tmoves t₁ t = Bool.true := tmoves_trans t₂ t₁ t hs.1 hh
-          refine ⟨l₁, ?_, hs.2⟩
-          show (if tmoves t₁ t = Bool.true then some l₁ else none) = some l₁
-          rw [h₃]; rfl
+          exact ⟨l₁, by simp [popTy, h₃], hs.2⟩
   | [], _ :: _ => simp [stackSub] at hsub
   | _ :: _, [] => simp [stackSub] at hsub

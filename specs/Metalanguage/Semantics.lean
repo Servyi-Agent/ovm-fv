@@ -439,12 +439,6 @@ def fstep (reg : AOReg) : FM → FM
     | .kIte _ _ :: _, _, _ => .fell (f :: fs) heap nl 0  -- non-bool condition: loud
     | .kAssert :: rest, env, .boolean Bool.true :: eval => done (⟨rest, env, eval, f.ret⟩ :: fs)
     | .kAssert :: _, _, _ => .fell (f :: fs) heap nl 0   -- failed assert: loud
-    | .kAssertObj _ :: rest, env, .boolean Bool.true :: eval =>
-        done (⟨rest, env, eval, f.ret⟩ :: fs)
-    | .kNarrowNotNull _ :: rest, env, eval =>
-        -- static-only refinement; runtime no-op
-        done (⟨rest, env, eval, f.ret⟩ :: fs)
-    | .kAssertObj _ :: _, _, _ => .fell (f :: fs) heap nl 0
     | .kRet :: _, _, v :: _ =>
         match fs with
         | caller :: fs' => done (⟨caller.stmts, caller.env, v :: caller.eval, caller.ret⟩ :: fs')
