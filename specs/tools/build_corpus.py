@@ -151,16 +151,9 @@ def corpusSigs : SigTable := [
     (.kRepeatWhile (Expr.varNotPresent "done") loopBody :: loopRest)
 
 -- every registry body typechecks against its declared signature
--- (prints the first rejection with reason + stack, or none).
--- EXCEPTION: ToPrimitive 7.1.1 step 2a references `hint` before any
--- path binds it (steps 3a/4a/5a) — a genuine unbound variable in the
--- spec text itself; the checker catches it (the union-join used to
--- hide it via the sibling branch's binding). Certified aside from
--- that dead path.
-def regMinusToPrimitive : AOReg :=
-  theReg.filter (fun (name, _) => name != "ToPrimitive")
-#eval typecheckReg corpusSigs regMinusToPrimitive
-#eval typecheckRegOk corpusSigs regMinusToPrimitive
+-- (prints the first rejection with reason + stack, or none)
+#eval typecheckReg corpusSigs theReg
+#eval typecheckRegOk corpusSigs theReg
 -- the demos typecheck as frames (Γ = params, or empty for top-level)
 #eval typecheckSeq corpusSigs .any [("input", .any), ("propertyKey", .any)] (compileSteps (build lookupDemoF))
 #eval typecheckSeq corpusSigs .any [("input", .any), ("propertyKey", .any)] (compileSteps (build getMethodDemoF))

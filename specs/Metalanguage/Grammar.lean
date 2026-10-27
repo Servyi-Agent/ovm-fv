@@ -129,18 +129,38 @@ abbrev FStep := Nat × String × FBody
 /- else-if CHAINS nest: an else-step attaches to the end of the last
    if's else-branch, not by overwriting it. A dangling else (no
    preceding if) stays visible. -/
-def attach (e : List LStep) : List LStep → List LStep
-  | [] => e                                          -- pending else becomes the branch
-  | [(l2, LBody.ifS c2 t2 e2)] =>                    -- chain end: nest here
-      [(l2, LBody.ifS c2 t2 (attach e e2))]
-  | [p] => [p, ("", LBody.elseM e)]                  -- dangling: stays visible
-  | s :: rest => s :: attach e rest
+/- Attach a pending else-block at the INNERMOST if whose else is
+   still open — else-if chains nest: `If c1 … / Else if c2 … / Else …`
+   makes the second block the else of c2's if, not c1's. -/
+def setDeepestElse (b : List LStep) : List LStep → List LStep
+  | [] => b
+  | (l, LBody.ifS c t []) :: rest => (l, LBody.ifS c t b) :: rest
+  | (l, LBody.ifS c t e') :: rest => (l, LBody.ifS c t (setDeepestElse b e')) :: rest
+  | p => p ++ b
+
+/-- Attaching an elseM block removes exactly one elseM step; the
+   lexicographic measure (elseM-count, total size) decreases. -/
+def countElse : List LStep → Nat
+  | [] => 0
+  | (_, LBody.elseM _) :: r => 1 + countElse r
+  | _ :: r => countElse r
+
+theorem countElse_cons (n : «String») (b : LBody) (r : List LStep) :
+    countElse r ≤ countElse ((n, b) :: r) := by
+  cases b <;> simp [countElse]
 
 def fuseL : List LStep → List LStep
   | [] => []
   | (l, LBody.ifS c t e') :: (_, LBody.elseM e) :: rest =>
-      (l, LBody.ifS c t (attach e e')) :: fuseL rest
+      fuseL ((l, LBody.ifS c t (setDeepestElse e e')) :: rest)
   | p :: rest => p :: fuseL rest
+termination_by l => countElse l + l.length
+decreasing_by
+  · simp [countElse] <;> omega
+  · obtain ⟨n, b⟩ := p
+    have hmono := countElse_cons n b rest
+    simp only [List.length_cons]
+    omega
 
 mutual
 def strip : List LStep → Prog

@@ -245,6 +245,29 @@ def listOfStrings (s : «String») : JSValue :=
 def listOfNvs (s : «String») : List Expr :=
   ((s.splitOn "\x1f").map Expr.nv)
 
+/-- Descend through wrapper nodes to the first ident. A var-LHS in
+   algExpr position is algExpr > var > ident (<= 2 wrapper levels for
+   every shape the grammar produces), so peel concretely: no
+   recursion, no termination proof. -/
+def firstIdentName (stx : Lean.Syntax) : «String» :=
+  match stx with
+  | .ident _ i _ _ => i.toString
+  | .node _ _ a₁ =>
+      match a₁[0]? with
+      | some w₁ =>
+          match w₁ with
+          | .ident _ i _ _ => i.toString
+          | .node _ _ a₂ =>
+              match a₂[0]? with
+              | some w₂ =>
+                  match w₂ with
+                  | .ident _ i _ _ => i.toString
+                  | _ => "?"
+              | none => "?"
+          | _ => "?"
+      | none => "?"
+  | _ => "?"
+
 open Lean in
 macro_rules
   | `([e| $f:aoName ( )]) =>
@@ -328,10 +351,7 @@ macro_rules
   | `([e| $e:algExpr is true]) => ``(Expr.isBoolVal Bool.true [e| $e])
   | `([e| $e:algExpr is false]) => ``(Expr.isBoolVal Bool.false [e| $e])
   | `([e| $e:algExpr is not present]) =>
-      let name := match e.raw with
-        | .ident _ s _ _ => s.toString
-        | _ => "?"
-      ``(Expr.varNotPresent $(quote name))
+      ``(Expr.varNotPresent $(quote (firstIdentName e.raw)))
   | `([e| % $x:ident % ]) =>
       ``(Expr.const (JSValue.str $(quote ("%" ++ toString x.getId ++ "%"))))
   | `([e| number]) => ``(Expr.const (JSValue.str "number"))
@@ -457,7 +477,29 @@ termination_by f _ => f
 
 def renest (fs : List FStep) : List LStep := renestGo fs.length fs
 
-def build (fs : List FStep) : Prog := strip (fuseL (renest fs))
+/- Sibling fusion must run at EVERY nesting level: elseM blocks are
+   siblings of their if inside the enclosing body, not only at the
+   top. fuseBody descends structurally; fuseDeep fuses bodies
+   bottom-up, then sibling-fuses each level. -/
+mutual
+def fuseDownB : LBody → LBody
+  | .ifS c t e => .ifS c (fuseDeep t) (fuseDeep e)
+  | .elseM b => .elseM (fuseDeep b)
+  | .forEach x e b => .forEach x e (fuseDeep b)
+  | b => b
+termination_by b => sizeOf b
+decreasing_by all_goals simp_wf <;> omega
+
+def fuseDeep : List LStep → List LStep
+  | [] => []
+  | step :: r =>
+      match step with
+      | (lb, b) => fuseL ((lb, fuseDownB b) :: fuseDeep r)
+termination_by l => sizeOf l
+decreasing_by all_goals simp_wf <;> omega
+end
+
+def build (fs : List FStep) : Prog := strip (fuseDeep (renest fs))
 
 open Lean in
 macro_rules
