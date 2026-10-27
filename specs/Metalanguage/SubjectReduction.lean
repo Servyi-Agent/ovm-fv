@@ -147,10 +147,10 @@ theorem tmoves_trans (t₂ : STy) :
               have key : a - (a &&& c) = 0 := by omega
               simp only [tmoves]
               exact decide_eq_true key
-          | complT => simp only [tmoves, reduceCtorEq] at h₂; exact Bool.noConfusion h₂
-          | complN _ => simp only [tmoves, reduceCtorEq] at h₂; exact Bool.noConfusion h₂
-      | complT => simp only [tmoves, reduceCtorEq] at h₁; exact Bool.noConfusion h₁
-      | complN _ => simp only [tmoves, reduceCtorEq] at h₁; exact Bool.noConfusion h₁
+          | complT => simp only [tmoves] at h₂; exact Bool.noConfusion h₂
+          | complN _ => simp only [tmoves] at h₂; exact Bool.noConfusion h₂
+      | complT => simp only [tmoves] at h₁; exact Bool.noConfusion h₁
+      | complN _ => simp only [tmoves] at h₁; exact Bool.noConfusion h₁
   | complN b ih =>
       intro t₁ t₃ h₁ h₂
       cases t₁ with
@@ -159,20 +159,20 @@ theorem tmoves_trans (t₂ : STy) :
           | complN c =>
               simp only [tmoves] at h₁ h₂ ⊢
               exact ih a c h₁ h₂
-          | complT => simp only [tmoves, reduceCtorEq] at h₂; exact Bool.noConfusion h₂
-          | val => simp only [tmoves, reduceCtorEq] at h₂; exact Bool.noConfusion h₂
-      | complT => simp only [tmoves, reduceCtorEq] at h₁; exact Bool.noConfusion h₁
-      | val => simp only [tmoves, reduceCtorEq] at h₁; exact Bool.noConfusion h₁
+          | complT => simp only [tmoves] at h₂; exact Bool.noConfusion h₂
+          | val => simp only [tmoves] at h₂; exact Bool.noConfusion h₂
+      | complT => simp only [tmoves] at h₁; exact Bool.noConfusion h₁
+      | val => simp only [tmoves] at h₁; exact Bool.noConfusion h₁
   | complT =>
       intro t₁ t₃ h₁ h₂
       cases t₁ with
       | complT =>
           cases t₃ with
           | complT => rfl
-          | val => simp only [tmoves, reduceCtorEq] at h₂; exact Bool.noConfusion h₂
-          | complN _ => simp only [tmoves, reduceCtorEq] at h₂; exact Bool.noConfusion h₂
-      | val => simp only [tmoves, reduceCtorEq] at h₁; exact Bool.noConfusion h₁
-      | complN _ => simp only [tmoves, reduceCtorEq] at h₁; exact Bool.noConfusion h₁
+          | val => simp only [tmoves] at h₂; exact Bool.noConfusion h₂
+          | complN _ => simp only [tmoves] at h₂; exact Bool.noConfusion h₂
+      | val => simp only [tmoves] at h₁; exact Bool.noConfusion h₁
+      | complN _ => simp only [tmoves] at h₁; exact Bool.noConfusion h₁
 
 def stackSub : List STy → List STy → Bool
   | [], [] => Bool.true

@@ -164,13 +164,13 @@ def corpusSigs : SigTable := [
 def bug1 : List Instr :=
   [.kEval (Expr.nv "x"), .kTest,
    .kIte [.kRet] [.kUnwrap, .kRet]]
-#eval typecheckSeq corpusSigs .any [("x", .complN (.val anyV))] bug1
+#eval typecheckSeq corpusSigs (.val langV) [("x", .complN (.val anyV))] bug1
 /- Bug 2 (double self-test): kEval of a call yields the payload type
    (raw), a stray kTest demands a completion. -/
 def bug2 : List Instr :=
   [.kEval (Expr.call "GetV" [Expr.nv "v", Expr.nv "p"]), .kTest,
    .kIte [.kRet] [.kUnwrap, .kPrim1 .pWrapC, .kRet]]
-#eval typecheckSeq corpusSigs .any [("v", .any), ("p", .any)] bug2
+#eval typecheckSeq corpusSigs (.val langV) [("v", .val langV), ("p", .val langV)] bug2
 /- Signature-driven argument checking: IteratorClose-style param
    (raw, compl). -/
 def closeSigs : SigTable := [("FakeClose", ([.val langV, .complT], .val langV))]

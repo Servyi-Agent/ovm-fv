@@ -362,7 +362,7 @@ def checkLoopBody (rbody : TCResult) (site : Instr)
 
 def checkSeq : SigTable → STy → Worlds → List Instr → TCResult
   | _, _, ws, [] => .flows { exits := Bool.false, falls := ws, assumes := [] }
-  | sigs, r, ws, .kRet :: _ =>
+  | _, r, ws, .kRet :: _ =>
       -- every world returns: complN payload ⊑ r, or a throw
       if ws.all (fun w =>
         match w.σ with
@@ -472,7 +472,7 @@ def checkSeq : SigTable → STy → Worlds → List Instr → TCResult
       match stepWorlds sigs ws i with
       | none => .reject i "world stack mismatch"
       | some ws' => checkSeq sigs r ws' rest
-termination_by is' _ _ is => sizeOf is
+termination_by _ _ _ is => sizeOf is
 
 def typecheckSeq (sigs : SigTable) (r : STy) (Γ : TyEnv) (seq : List Instr) : TCResult :=
   checkSeq sigs r [{ Γ := Γ, σ := [] }] seq
