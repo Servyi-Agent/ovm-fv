@@ -146,18 +146,6 @@ def corpusSigs : SigTable := [
   ("Call",                ([.any, .any, .any], .any))  -- trailing argsList optional (7.1.1.1 elides it)
 ]
 
-/- break: a loop body that breaks must (a) typecheck with the break
-   consumed by the loop join (terminal at frame top), and (b) at
-   runtime jump past the innermost re-arm marker to the continuation.
-   Body binds nothing; break is neutral by construction here. -/
-def breakBody : List Instr :=
-  [.kEval (.const (JSValue.boolean Bool.true)), .kIte [.kBreak] []]
-def breakLoop : List Instr :=
-  .kRepeatWhile (Expr.varNotPresent "go") breakBody :: loopRest
-#eval fsteps theReg 100
-    (.frames [⟨breakLoop, [], [], "«top»"⟩] emptyHeap 0)
-#eval typecheckSeq corpusSigs .any [] breakLoop
-
 /- the issue-#1 regression loop typechecks too: body neutral, cond boolean -/
 #eval typecheckSeq corpusSigs .any []
     (.kRepeatWhile (Expr.varNotPresent "done") loopBody :: loopRest)
