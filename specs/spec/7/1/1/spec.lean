@@ -1,8 +1,10 @@
 import metalanguage
 
 /- ES 7.1.1 ToPrimitive ( input [, preferredType ] ) - text-equal.
-   GetMethod/OrdinaryToPrimitive/Call/GetV are primitive stubs until
-   the heap. -/
+   GetMethod/OrdinaryToPrimitive are registry entries; Call is
+   native. Certifies with ONE recorded assumption: step iii's assert
+   (preferredType is ~number~) is a caller contract, not derivable
+   from the algorithm's own case analysis. -/
 
 def toPrimitive7_1_1 : List FStep := [alg|
   1. If input is an Object, then
