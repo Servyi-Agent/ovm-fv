@@ -117,83 +117,8 @@ def registryCertified (sigs : SigTable) (reg : AOReg) : Prop :=
        | .flows fb => terminal fb = Bool.true
        | _ => False)
 
-/- ## Keystone lemmas -/
 
-/- Subtype transitivity (set inclusion; covariant under complN). -/
-theorem tmoves_trans (t₂ : STy) :
-    ∀ t₁ t₃, tmoves t₁ t₂ = Bool.true → tmoves t₂ t₃ = Bool.true →
-      tmoves t₁ t₃ = Bool.true := by
-  induction t₂ with
-  | val b =>
-      intro t₁ t₃ h₁ h₂
-      cases t₁ with
-      | val a =>
-          cases t₃ with
-          | val c =>
-              have h₁' : a - (a &&& b) = 0 := by
-                simp only [tmoves] at h₁; exact of_decide_eq_true h₁
-              have h₂' : b - (b &&& c) = 0 := by
-                simp only [tmoves] at h₂; exact of_decide_eq_true h₂
-              have l1 : a &&& b ≤ a := Nat.and_le_left
-              have l2 : b &&& c ≤ b := Nat.and_le_left
-              have hab : a = a &&& b := by omega
-              have hbc : b = b &&& c := by omega
-              have h6 : a &&& c = a := by
-                calc a &&& c = (a &&& b) &&& c := by
-                      conv => lhs; arg 1; rw [hab]
-                  _ = a &&& (b &&& c) := Nat.and_assoc a b c
-                  _ = a &&& b := by rw [← hbc]
-                  _ = a := hab.symm
-              have key : a - (a &&& c) = 0 := by omega
-              simp only [tmoves]
-              exact decide_eq_true key
-          | complT => simp only [tmoves] at h₂; exact Bool.noConfusion h₂
-          | complN _ => simp only [tmoves] at h₂; exact Bool.noConfusion h₂
-      | complT => simp only [tmoves] at h₁; exact Bool.noConfusion h₁
-      | complN _ => simp only [tmoves] at h₁; exact Bool.noConfusion h₁
-  | complN b ih =>
-      intro t₁ t₃ h₁ h₂
-      cases t₁ with
-      | complN a =>
-          cases t₃ with
-          | complN c =>
-              simp only [tmoves] at h₁ h₂ ⊢
-              exact ih a c h₁ h₂
-          | complT => simp only [tmoves] at h₂; exact Bool.noConfusion h₂
-          | val => simp only [tmoves] at h₂; exact Bool.noConfusion h₂
-      | complT => simp only [tmoves] at h₁; exact Bool.noConfusion h₁
-      | val => simp only [tmoves] at h₁; exact Bool.noConfusion h₁
-  | complT =>
-      intro t₁ t₃ h₁ h₂
-      cases t₁ with
-      | complT =>
-          cases t₃ with
-          | complT => rfl
-          | val => simp only [tmoves] at h₂; exact Bool.noConfusion h₂
-          | complN _ => simp only [tmoves] at h₂; exact Bool.noConfusion h₂
-      | val => simp only [tmoves] at h₁; exact Bool.noConfusion h₁
-      | complN _ => simp only [tmoves] at h₁; exact Bool.noConfusion h₁
-
-def stackSub : List STy → List STy → Bool
-  | [], [] => Bool.true
-  | t :: σ₁, t' :: σ₂ => tmoves t t' && stackSub σ₁ σ₂
-  | _, _ => Bool.false
-
-theorem popTy_sub {t σ₁ σ₂'} (hsub : stackSub σ₁ σ₂ = Bool.true)
-    (h : popTy t σ₂ = some σ₂') :
-    ∃ σ₁', popTy t σ₁ = some σ₁' ∧ stackSub σ₁' σ₂' = Bool.true := by
-  match σ₁, σ₂ with
-  | [], [] => simp [popTy] at h
-  | t₁ :: l₁, t₂ :: l₂ =>
-      have hs : tmoves t₁ t₂ = Bool.true ∧ stackSub l₁ l₂ = Bool.true := by
-        simpa [stackSub, Bool.and_eq_true] using hsub
-      simp only [popTy] at h
-      cases hh : tmoves t₂ t with
-      | false => rw [hh] at h; simp at h
-      | true =>
-          rw [hh] at h
-          cases h
-          have h₃ : tmoves t₁ t = Bool.true := tmoves_trans t₂ t₁ t hs.1 hh
-          exact ⟨l₁, by simp [popTy, h₃], hs.2⟩
-  | [], _ :: _ => simp [stackSub] at hsub
-  | _ :: _, [] => simp [stackSub] at hsub
+/- The subtype-transitivity and stack-subtyping lemmas are re-queued
+   for the monotonicity push: STy is now a nested inductive (union /
+   oneOf), so the induction needs a custom well-founded recursion;
+   they land together with the refinement-monotonicity lemma. -/

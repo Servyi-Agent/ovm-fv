@@ -29,40 +29,19 @@ def anyV    : Nat := langV + cList + cDesc
 
 inductive STy where
   | val (mask : Nat)          -- a set of value constructors
+  | isValue (v : JSValue)     -- exactly this value
+  | oneOf (vs : List JSValue) -- one of these values
+  | notPresent                -- the variable is not bound (absent argument)
+  | union (parts : List STy)  -- finite union (used in signatures)
   | complN (t : STy)          -- normal completion wrapping a payload type
   | complT                    -- a throw
-  deriving Repr, BEq
+  deriving Repr, BEq, Inhabited
 
 /- ## Set operations on types -/
 
 def valMask : STy → Nat
   | .val m => m
   | _ => 0
-
-def tyInter (t t' : STy) : STy :=
-  match t, t' with
-  | .val a, .val b => .val (a &&& b)
-  | _, _ => .val 0
-
-def tyDiff (t t' : STy) : STy :=
-  match t, t' with
-  | .val a, .val b => .val (a - (a &&& b))
-  | _, _ => t
-
-def tyNonempty : STy → Bool
-  | .val m => m != 0
-  | _ => true
-
-/-- Subtyping = subset (covariant under complN). -/
-def tmoves : STy → STy → Bool
-  | .val a, .val b => a - (a &&& b) == 0
-  | .complN a, .complN b => tmoves a b
-  | t, t' => t == t'
-
-def leList : List STy → List STy → Bool
-  | [], [] => Bool.true
-  | t :: ts, t' :: ts' => tmoves t t' && leList ts ts'
-  | _, _ => Bool.false
 
 def typeOfV : JSValue → STy
   | .undefined => .val cUndef
@@ -76,6 +55,98 @@ def typeOfV : JSValue → STy
   | .descV _ => .val cDesc
   | .compl Bool.false v => .complN (typeOfV v)
   | .compl Bool.true _ => .complT
+
+/- Unions appear only in signatures; flatten to union-free atoms for
+   the set operations. -/
+def atoms : STy → List STy
+  | .union ps => ps.flatMap atoms
+  | t => [t]
+
+def ofAtoms : List STy → STy
+  | [] => .val 0
+  | [t] => t
+  | ts => .union ts
+
+mutual
+def tyNonemptyList : List STy → Bool
+  | [] => Bool.false
+  | t :: ts => tyNonempty t || tyNonemptyList ts
+termination_by ts => sizeOf ts
+decreasing_by all_goals simp_wf <;> omega
+
+def tyNonempty : STy → Bool
+  | .val m => m != 0
+  | .oneOf vs => !vs.isEmpty
+  | .union ps => tyNonemptyList ps
+  | _ => true
+termination_by t => sizeOf t
+decreasing_by all_goals simp_wf <;> omega
+end
+
+/-- Meet of union-free types (completions never meet values). -/
+def tyMeetAtom : STy → STy → STy
+  | .val a, .val b => .val (a &&& b)
+  | .isValue v, .isValue w => if v == w then .isValue v else .val 0
+  | .isValue v, .oneOf ws => if ws.contains v then .isValue v else .val 0
+  | .oneOf vs, .isValue w => if vs.contains w then .isValue w else .val 0
+  | .isValue v, .val m =>
+      if ((valMask (typeOfV v)) &&& m) != 0 then .isValue v else .val 0
+  | .oneOf vs, .val m =>
+      let kept := vs.filter (fun v => ((valMask (typeOfV v)) &&& m) != 0)
+      if kept.isEmpty then .val 0 else .oneOf kept
+  | .oneOf vs, .oneOf ws => .oneOf (vs.filter ws.contains)
+  | .notPresent, .notPresent => .notPresent
+  | _, _ => .val 0
+
+def tyMeet (t t' : STy) : STy :=
+  ofAtoms ((atoms t).flatMap (fun a =>
+    (atoms t').filterMap (fun b =>
+      let m := tyMeetAtom a b
+      if tyNonempty m then some m else none)))
+
+/-- Difference of union-free types. Masks cannot be punctured by value
+   tests: removing a value from a constructor set keeps the whole set
+   (sound over-approximation; precise signatures lose nothing). -/
+def tyRemoveAtom : STy → STy → STy
+  | .val a, .val b => .val (a - (a &&& b))
+  | .isValue v, .isValue w => if v == w then .val 0 else .isValue v
+  | .isValue v, .oneOf ws => if ws.contains v then .val 0 else .isValue v
+  | .oneOf vs, .isValue v => .oneOf (vs.filter (fun w => !(w == v)))
+  | .oneOf vs, .oneOf ws => .oneOf (vs.filter (fun v => !ws.contains v))
+  | .val a, .isValue _ => .val a            -- conservative: no puncturing
+  | .val a, .oneOf _ => .val a              -- conservative
+  | .notPresent, .notPresent => .val 0
+  | t, _ => t
+
+def tyRemove (t t' : STy) : STy :=
+  ofAtoms ((atoms t).filterMap (fun a =>
+    let r := (atoms t').foldl (fun acc b => tyRemoveAtom acc b) a
+    if tyNonempty r then some r else none))
+
+def tmovesAtom : STy → STy → Bool
+  | .val 0, _ => Bool.true          -- the empty type is below everything
+  | .val a, .val b => (a - (a &&& b)) == 0
+  | .isValue v, .isValue w => v == w
+  | .isValue v, .oneOf ws => ws.contains v
+  | .isValue v, .val m => ((valMask (typeOfV v)) &&& m) != 0
+  | .oneOf vs, .oneOf ws => vs.all ws.contains
+  | .oneOf vs, .val m =>
+      vs.all (fun v => ((valMask (typeOfV v)) &&& m) != 0)
+  | .oneOf vs, .isValue v => vs.length == 1 && vs.contains v
+  | .notPresent, .notPresent => Bool.true
+  | .complN a, .complN b => tmovesAtom a b
+  | t, t' => t == t'
+
+/-- Subtyping (covariant under complN), distributed over union atoms;
+   a val straddling a union is conservatively NOT a subtype. -/
+def tmoves (t t' : STy) : Bool :=
+  (atoms t).all (fun a => (atoms t').any (fun b => tmovesAtom a b))
+
+def leList : List STy → List STy → Bool
+  | [], [] => Bool.true
+  | t :: ts, t' :: ts' => tmoves t t' && leList ts ts'
+  | _, _ => Bool.false
+
 
 abbrev SigTable := List («String» × (List STy × STy))
 
@@ -141,7 +212,7 @@ termination_by es => sizeOf es
 def typeOfE (sigs : SigTable) (Γ : TyEnv) : Expr → Option STy
   | .nv x => tyLookup Γ x
   | .nat _ => some (.val cNum)
-  | .const v => some (typeOfV v)
+  | .const v => some (.isValue v)
   | .varNotPresent _ => some (.val boolV)
   | .call f as =>
       match sigFind sigs f with
@@ -232,26 +303,27 @@ def typeMask : «String» → Nat
   | "BigInt" => 0
   | _ => 0
 
-/-- The set a test's THEN world restricts the tested value to.
-   0 = non-splitting predicate (no refinement). -/
-def testMask : Expr → Nat
-  | .isObject _ => cObj
-  | .isNotObject _ => anyV - cObj
-  | .isU _ => cUndef
-  | .isNotUndefined _ => anyV - cUndef
-  | .isNull _ => cNull
-  | .isNullOrUnd _ => cUndef + cNull
-  | .isBoolVal Bool.true _ => cTrue
-  | .isBoolVal Bool.false _ => cFalse
-  | .isType ty _ => typeMask ty
-  | .isStrVal _ _ => cStr
-  | _ => 0
+/-- The type a test's THEN world restricts the tested value to.
+   none = non-splitting predicate (no refinement). -/
+def testType : Expr → Option STy
+  | .isObject _ => some (.val cObj)
+  | .isNotObject _ => some (.val (anyV - cObj))
+  | .isU _ => some (.val cUndef)
+  | .isNotUndefined _ => some (.val (anyV - cUndef))
+  | .isNull _ => some (.val cNull)
+  | .isNullOrUnd _ => some (.val (cUndef + cNull))
+  | .isBoolVal b _ => some (.isValue (.boolean b))
+  | .isStrVal s _ => some (.isValue (.str s))
+  | .isType ty _ => some (.val (typeMask ty))
+  | .varNotPresent _ => some .notPresent
+  | _ => none
 
 /-- The variable a shape test inspects, if any. -/
 def testedVar : Expr → Option «String»
   | .isObject (.nv x) | .isNotObject (.nv x) | .isU (.nv x)
   | .isNotUndefined (.nv x) | .isNull (.nv x) | .isNullOrUnd (.nv x)
-  | .isBoolVal _ (.nv x) | .isStrVal _ (.nv x) | .isType _ (.nv x) => some x
+  | .isBoolVal _ (.nv x) | .isStrVal _ (.nv x) | .isType _ (.nv x)
+  | .varNotPresent x => some x
   | _ => none
 
 /- ## The world-stepping checker
@@ -330,14 +402,14 @@ def stepWorlds (sigs : SigTable) (ws : Worlds) (i : Instr) : Option Worlds :=
       else none
   | _ => some ws
 
-/-- Split worlds at a shape test `tested = .nv x` with mask m. -/
-def splitWorlds (x : «String») (m : Nat) (ws : Worlds) : Option Worlds :=
+/-- Split worlds at a test of x with then-type T. -/
+def splitWorlds (x : «String») (T : STy) (ws : Worlds) : Option Worlds :=
   match ws.mapM (fun (w : World) =>
     match tyLookup w.Γ x with
     | none => none
     | some S =>
-        let thenS := tyInter S (.val m)
-        let elseS := tyDiff S (.val m)
+        let thenS := tyMeet S T
+        let elseS := tyRemove S T
         -- at least one side must be possible; emit verdict + refined Γ
         let out : List World :=
           (if tyNonempty thenS then [{ Γ := (x, thenS) :: w.Γ, σ := .val cTrue :: w.σ }] else [])
@@ -375,6 +447,8 @@ def checkSeq : SigTable → STy → Worlds → List Instr → TCResult
       -- dispatch each world on its verdict; split both-verdict worlds
       let dispatch (w : World) : Option (Worlds × Worlds) :=
         match w.σ with
+        | .isValue (.boolean Bool.true) :: σ' => some ([{ w with σ := σ' }], [])
+        | .isValue (.boolean Bool.false) :: σ' => some ([], [{ w with σ := σ' }])
         | .val m :: σ' =>
             if m == cTrue then some ([{ w with σ := σ' }], [])
             else if m == cFalse then some ([], [{ w with σ := σ' }])
@@ -398,12 +472,12 @@ def checkSeq : SigTable → STy → Worlds → List Instr → TCResult
                          , assumes := f₁.assumes ++ f₂.assumes ++ fr.assumes }
               | res => res
   | sigs, r, ws, .kEval ex :: rest =>
-      -- shape tests on a variable SPLIT the worlds
-      if testMask ex != 0 then
+      -- tests on a variable SPLIT the worlds
+      if (testType ex).isSome then
         match testedVar ex with
         | some x =>
-            match splitWorlds x (testMask ex) ws with
-            | none => .reject (.kEval ex) "ill-typed shape test (unbound or empty split)"
+            match splitWorlds x (testType ex).get! ws with
+            | none => .reject (.kEval ex) "ill-typed test (unbound or empty split)"
             | some ws' => checkSeq sigs r ws' rest
         | none =>
             match ws.mapM (fun (w : World) =>
@@ -452,6 +526,7 @@ def checkSeq : SigTable → STy → Worlds → List Instr → TCResult
       -- continues with its false side assumed away
       let rec step (w : World) : World × Bool :=
         match w.σ with
+        | .isValue (.boolean Bool.true) :: σ' => ({ w with σ := σ' }, Bool.false)
         | .val m :: σ' =>
             if m == cTrue then ({ w with σ := σ' }, Bool.false)
             else ({ w with σ := σ' }, Bool.true)
