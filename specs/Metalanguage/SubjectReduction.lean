@@ -126,18 +126,21 @@ def objRefs (o : JsObj) : List Nat :=
      | .mk (some v) _ _ _ _ _ => locsOf v
      | _ => []))
 
-/-- Heap agreement, two LOCAL checks (no fixpoint):
-   (a) every frame-rooted object reference resolves;
-   (b) every ALLOCATED object's outgoing references resolve.
+/-- Heap agreement over a BOUNDED region [0, n) — the region grows
+   with allocation, so no separate nextLoc conjunct is needed:
+   (a) every frame-rooted object reference is in-region and resolves;
+   (b) every object allocated IN-REGION has in-region, resolving
+       outgoing references.
    Induction over these gives transitive soundness of every reachable
-   chain — and (b) is stronger than reachability: even unreachable
-   garbage may not dangle. -/
-def heapOk (heap : Heap) : List Fr → Prop
-  | [] => ∀ l o, heap l = some o → (objRefs o).all (fun r => (heap r).isSome)
+   chain; (b) is stronger than reachability (in-region garbage may not
+   dangle either). Allocation at exactly n extends the region by one. -/
+def heapOk (heap : Heap) (n : Nat) : List Fr → Prop
+  | [] => ∀ l < n, ∀ o, heap l = some o →
+      (objRefs o).all (fun r => r < n ∧ (heap r).isSome)
   | f :: fs =>
       (∀ l ∈ (f.eval.flatMap locsOf ++ (f.env.map Prod.snd).flatMap locsOf),
-        (heap l).isSome)
-      ∧ heapOk heap fs
+        l < n ∧ (heap l).isSome)
+      ∧ heapOk heap n fs
 
 /- ## Heap typing (store typing)
 
@@ -161,11 +164,11 @@ def objConsistent (k : Kind) (o : JsObj) : Bool :=
   | .builtin _ _, .builtin _ _ => Bool.true
   | _, _ => Bool.false
 
-def heapTyOk (heap : Heap) (ht : HeapTy) : Prop :=
-  ∀ l o, heap l = some o →
+def heapTyOk (heap : Heap) (ht : HeapTy) (n : Nat) : Prop :=
+  ∀ l < n, ∀ o, heap l = some o →
     objConsistent (ht l) o = Bool.true
     ∧ ∀ p, o.proto = some p →
-        (heap p).isSome = Bool.true ∧ ht p = .ordinary
+        p < n ∧ (heap p).isSome = Bool.true ∧ ht p = .ordinary
 
 /- The machine's return type is the BOTTOM frame's destiny (stable:
    only that frame popping turns the state into fdone). -/
@@ -180,10 +183,10 @@ def machineRet (sigs : SigTable) (fs : List Fr) : STy :=
    already implies progress. -/
 def stateOk (sigs : SigTable) (r : STy) (m : FM) : Prop :=
   match m with
-  | .frames fs heap _ =>
+  | .frames fs heap nl =>
       fs.isEmpty = Bool.false
-      ∧ framesOk sigs fs ∧ heapOk heap fs
-      ∧ ∃ ht, heapTyOk heap ht
+      ∧ framesOk sigs fs ∧ heapOk heap nl fs
+      ∧ ∃ ht, heapTyOk heap ht nl
       ∧ machineRet sigs fs = r
   | .fdone v _ _ _ _ =>
       -- the final value: normal compl-wrapped payload ⊑ r, or a throw
