@@ -154,6 +154,18 @@ def corpusSigs : SigTable := [
 -- (prints the first rejection with reason + stack, or none)
 #eval typecheckReg corpusSigs theReg
 #eval typecheckRegOk corpusSigs theReg
+
+-- per-AO: certificate + assumption count (recorded assert debts)
+#eval typecheckAO corpusSigs "IsCallable" ["arg"] (compileSteps (build isCallable6_2_5_1))
+#eval typecheckAO corpusSigs "IsConstructor" ["arg"] (compileSteps (build isConstructor6_2_5_2))
+#eval typecheckAO corpusSigs "IsDataDescriptor" ["propertyDesc"] (compileSteps (build isDataDescriptor6_2_6_2))
+#eval typecheckAO corpusSigs "IsAccessorDescriptor" ["propertyDesc"] (compileSteps (build isAccessorDescriptor6_2_6_3))
+#eval typecheckAO corpusSigs "OrdinaryToPrimitive" ["obj", "hint"] (compileSteps (build ordinaryToPrimitive7_1_1_1))
+#eval typecheckAO corpusSigs "ToPrimitive" ["input", "preferredType"] (compileSteps (build toPrimitive7_1_1))
+#eval typecheckAO corpusSigs "ToObject" ["arg"] (compileSteps (build toObject7_1_13))
+#eval typecheckAO corpusSigs "GetV" ["value", "propertyKey"] (compileSteps (build getV7_3_1))
+#eval typecheckAO corpusSigs "GetMethod" ["value", "propertyKey"] (compileSteps (build getMethod7_3_10))
+#eval typecheckAO corpusSigs "OrdinaryGet" ["obj", "propertyKey", "receiver"] (compileSteps (build ordinaryGet7_3_2))
 -- the demos typecheck as frames (Γ = params, or empty for top-level)
 #eval typecheckSeq corpusSigs (.val langV) [("input", .val langV), ("propertyKey", .val langV)] (compileSteps (build lookupDemoF))
 #eval typecheckSeq corpusSigs (.val langV) [("input", .val langV), ("propertyKey", .val langV)] (compileSteps (build getMethodDemoF))
