@@ -101,6 +101,69 @@ def stateOk (sigs : SigTable) (m : FM) : Prop :=
   | .fdone v _ _ _ _ => isComplV v = Bool.true
   | .fell _ _ _ _ => True
 
+/-- Object references reachable from a value (completions carry
+   payloads; descriptors and lists carry values). -/
+def locsOf : JSValue → List Nat
+  | .obj l => [l]
+  | .compl _ v => locsOf v
+  | .descV d =>
+      [d.value, d.writable, d.getter, d.setter, d.enumerable, d.configurable]
+        .filterMap id |>.flatMap locsOf
+  | .listV vs => vs.flatMap locsOf
+  | _ => []
+
+/-- Heap agreement: every object reference in any frame's eval stack
+   or environment resolves in the heap. -/
+def heapOk (heap : Heap) : List Fr → Prop
+  | [] => True
+  | f :: fs =>
+      (∀ l ∈ (f.eval.flatMap locsOf ++ (f.env.map Prod.snd).flatMap locsOf),
+        (heap l).isSome)
+      ∧ heapOk heap fs
+
+/- The machine's return type is the BOTTOM frame's destiny (stable:
+   only that frame popping turns the state into fdone). -/
+def machineRet (sigs : SigTable) (fs : List Fr) : STy :=
+  match fs.getLast? with
+  | some f => sigRetTy sigs f.ret
+  | none => .val anyV
+
+/- ## State typing, indexed by the machine's answer type r.
+
+   fell is ILL-TYPED: with this definition, preservation alone
+   already implies progress. -/
+def stateOkR (sigs : SigTable) (r : STy) (m : FM) : Prop :=
+  match m with
+  | .frames fs heap _ =>
+      fs.isEmpty = Bool.false
+      ∧ framesOk sigs fs ∧ heapOk heap fs
+      ∧ machineRet sigs fs = r
+  | .fdone v _ _ _ _ =>
+      -- the final value: normal compl-wrapped payload ⊑ r, or a throw
+      match typeOfV v with
+      | .complN p => tmoves p r = Bool.true
+      | .complT => True
+      | _ => False
+  | .fell _ _ _ _ => False
+
+/- Registry coverage (existence): every name the checker may call is
+   answered by the registry or natively; the MOP-Get dispatch target
+   exists. -/
+def closedRegistry (sigs : SigTable) (reg : AOReg) : Prop :=
+  (∀ n _ps _ret, sigFind sigs n = some (_ps, _ret) →
+      (findAO reg n).isSome = Bool.true ∨ nativeOps.contains n = Bool.true)
+  ∧ (findAO reg "OrdinaryGet").isSome = Bool.true
+
+/- ## The target statement (proof in progress, bottom-up):
+
+   theorem type_safety (sigs : SigTable) (reg : AOReg)
+       (hreg : registryCertified sigs reg)
+       (hcover : closedRegistry sigs reg)
+       (m : FM) (h : stateOkR sigs r m) :
+       stateOkR sigs r (fstep reg m)
+
+   Preservation alone suffices: fell is ill-typed in stateOkR. -/
+
 /- ## Registry certification
 
    kCall pushes the callee's compiled body with a fresh env made from
