@@ -27,8 +27,37 @@ def boolV   : Nat := cTrue + cFalse
 def langV   : Nat := cUndef + cNull + boolV + cNum + cStr + cObj
 def anyV    : Nat := langV + cList + cDesc
 
+/- Descriptor field bits (the six optional fields). -/
+def fValue  : Nat := 1
+def fWrit   : Nat := 2
+def fGetter : Nat := 4
+def fSetter : Nat := 8
+def fEnum   : Nat := 16
+def fConf   : Nat := 32
+
+def fData  : Nat := fValue + fWrit
+def fAcc   : Nat := fGetter + fSetter
+
+/-- The field-set of a descriptor record. -/
+def fieldsOf : Descriptor → Nat
+  | .mk value writ get set enum conf =>
+      (if value.isSome then fValue else 0)
+      + (if writ.isSome then fWrit else 0)
+      + (if get.isSome then fGetter else 0)
+      + (if set.isSome then fSetter else 0)
+      + (if enum.isSome then fEnum else 0)
+      + (if conf.isSome then fConf else 0)
+
+/-- Well-formed field-set: never both a data field and an accessor
+    field — the spec's descriptor-disjointness invariant, hoisted
+    into the type. -/
+def wfFs (fs : Nat) : Bool :=
+    !(((fs &&& fData) != 0) && ((fs &&& fAcc) != 0))
+
 inductive STy where
   | val (mask : Nat)          -- a set of value constructors
+  | desc (fs : Nat)           -- descriptors with EXACTLY this field-set
+  | descAny                   -- any well-formed field-set (loose)
   | isValue (v : JSValue)     -- exactly this value
   | oneOf (vs : List JSValue) -- one of these values
   | notPresent                -- the variable is not bound (absent argument)
@@ -65,6 +94,7 @@ def ctorBit : JSValue → Nat
 def typeOfV : JSValue → STy
   | .compl Bool.false v => .complN (typeOfV v)
   | .compl Bool.true _ => .complT
+  | .descV d => .desc (fieldsOf d)
   | v => .isValue v
 
 /- Unions appear only in signatures; flatten to union-free atoms for
@@ -107,6 +137,12 @@ def tyMeetAtom : STy → STy → STy
       if kept.isEmpty then .val 0 else .oneOf kept
   | .oneOf vs, .oneOf ws => .oneOf (vs.filter ws.contains)
   | .notPresent, .notPresent => .notPresent
+  | .desc a, .desc b => if a == b then .desc a else .val 0
+  | .descAny, .desc b => .desc b
+  | .desc a, .descAny => .desc a
+  | .descAny, .descAny => .descAny
+  | .desc fs, .val m => if (m &&& cDesc) != 0 then .desc fs else .val 0
+  | .descAny, .val m => if (m &&& cDesc) != 0 then .descAny else .val 0
   | _, _ => .val 0
 
 def tyMeet (t t' : STy) : STy :=
@@ -127,6 +163,11 @@ def tyRemoveAtom : STy → STy → STy
   | .val a, .isValue _ => .val a            -- conservative: no puncturing
   | .val a, .oneOf _ => .val a              -- conservative
   | .notPresent, .notPresent => .val 0
+  | .desc a, .desc b => if a == b then .val 0 else .desc a
+  | .desc _, .descAny => .val 0
+  | .descAny, .desc _ => .descAny           -- conservative
+  | .val a, .desc _ => .val a               -- conservative
+  | .val a, .descAny => .val a              -- conservative
   | t, _ => t
 
 def tyRemove (t t' : STy) : STy :=
@@ -145,6 +186,9 @@ def tmovesAtom : STy → STy → Bool
       vs.all (fun v => ((ctorBit v) &&& m) != 0)
   | .oneOf vs, .isValue v => vs.length == 1 && vs.contains v
   | .notPresent, .notPresent => Bool.true
+  | .desc a, .desc b => (a &&& b) == a      -- width: more fields refines
+  | .desc _, .descAny => Bool.true
+  | .descAny, .descAny => Bool.true
   | .complN a, .complN b => tmovesAtom a b
   | t, t' => t == t'
 
@@ -197,7 +241,13 @@ def mopResult : «String» → STy
   | "GetPrototypeOf" => .val (cNull + cObj)
   | "Value" | "Getter" | "Setter" => .val langV
   | "Writable" | "Enumerable" | "Configurable" => .val boolV
-  | _ => .val anyV                -- [[GetOwnProperty]]: descriptor | undefined
+  | "GetOwnProperty" =>
+      -- stored descriptors are completed at write time: data-complete
+      -- or accessor-complete (the spec's disjointness invariant)
+      .union [.desc (fValue + fWrit + fEnum + fConf),
+              .desc (fGetter + fSetter + fEnum + fConf),
+              .val cUndef]
+  | _ => .val anyV
 
 /- ## Worlds -/
 
@@ -413,6 +463,51 @@ def stepWorlds (sigs : SigTable) (ws : Worlds) (i : Instr) : Option Worlds :=
       else none
   | _ => some ws
 
+/-- Correlated predicate tests: IsDataDescriptor(x) /
+    IsAccessorDescriptor(x) are decidable per EXACT desc atom
+    (field-set membership); coarse types (descAny, val masks) are
+    undecided and duplicated to both sides. -/
+def predDecide (f : «String») : Option (STy → Option Bool) :=
+  match f with
+  | "IsDataDescriptor" =>
+      some (fun t => match t with
+        | .desc fs => some ((fs &&& fData) != 0)
+        | _ => none)
+  | "IsAccessorDescriptor" =>
+      some (fun t => match t with
+        | .desc fs => some ((fs &&& fAcc) != 0)
+        | _ => none)
+  | _ => none
+
+/-- The decider for a correlated `IsX(x) is true` expression, if any. -/
+def predDecideEx : Expr → Option (STy → Option Bool)
+  | .isBoolVal Bool.true (Expr.call f [Expr.nv _]) => predDecide f
+  | _ => none
+
+/-- Split worlds by a per-atom decider: determined atoms go to their
+    side (verdict singletons); undecided atoms are duplicated to both
+    sides (verdict singletons per side — the runtime picks one). -/
+def splitWorldsP (x : «String») (dec : STy → Option Bool)
+    (ws : Worlds) : Option Worlds :=
+  match ws.mapM (fun (w : World) =>
+    match tyLookup w.Γ x with
+    | none => none
+    | some S =>
+        let go (acc : List World × List World) (a : STy) : List World × List World :=
+          match dec a with
+          | some Bool.true =>
+              (acc.1 ++ [{ Γ := (x, a) :: w.Γ, σ := .isValue (.boolean Bool.true) :: w.σ }], acc.2)
+          | some Bool.false =>
+              (acc.1, acc.2 ++ [{ Γ := (x, a) :: w.Γ, σ := .isValue (.boolean Bool.false) :: w.σ }])
+          | none =>
+              (acc.1 ++ [{ Γ := (x, a) :: w.Γ, σ := .isValue (.boolean Bool.true) :: w.σ }],
+               acc.2 ++ [{ Γ := (x, a) :: w.Γ, σ := .isValue (.boolean Bool.false) :: w.σ }])
+        let parts := (atoms S).foldl go ([], [])
+        let all := parts.1 ++ parts.2
+        if all.isEmpty then none else (some all : Option (List World))) with
+  | none => none
+  | some wss => some (List.flatten wss)
+
 /-- Split worlds at a test of x with then-type T. -/
 def splitWorlds (x : «String») (T : STy) (ws : Worlds) : Option Worlds :=
   match ws.mapM (fun (w : World) =>
@@ -483,27 +578,35 @@ def checkSeq : SigTable → STy → Worlds → List Instr → TCResult
                          , assumes := f₁.assumes ++ f₂.assumes ++ fr.assumes }
               | res => res
   | sigs, r, ws, .kEval ex :: rest =>
-      -- tests on a variable SPLIT the worlds
-      if (testType ex).isSome then
-        match testedVar ex with
-        | some x =>
-            match splitWorlds x (testType ex).get! ws with
-            | none => .reject (.kEval ex) "ill-typed test (unbound or empty split)"
-            | some ws' => checkSeq sigs r ws' rest
-        | none =>
+      -- correlated predicate tests (IsDataDescriptor(x) is true, …)
+      -- split the worlds via the per-atom decider; otherwise the
+      -- ordinary shape-test / push paths
+      match ex, predDecideEx ex with
+      | .isBoolVal Bool.true (Expr.call f [Expr.nv x]), some dec =>
+          match splitWorldsP x dec ws with
+          | none => .reject (.kEval ex) "ill-typed predicate test (unbound or empty split)"
+          | some ws' => checkSeq sigs r ws' rest
+      | _, _ =>
+          if (testType ex).isSome then
+            match testedVar ex with
+            | some x =>
+                match splitWorlds x (testType ex).get! ws with
+                | none => .reject (.kEval ex) "ill-typed test (unbound or empty split)"
+                | some ws' => checkSeq sigs r ws' rest
+            | none =>
+                match ws.mapM (fun (w : World) =>
+                  match typeOfE sigs w.Γ ex with
+                  | none => none
+                  | some t => some { w with σ := t :: w.σ }) with
+                | none => .reject (.kEval ex) "ill-typed expression"
+                | some ws' => checkSeq sigs r ws' rest
+          else
             match ws.mapM (fun (w : World) =>
               match typeOfE sigs w.Γ ex with
               | none => none
               | some t => some { w with σ := t :: w.σ }) with
-            | none => .reject (.kEval ex) "ill-typed expression"
+            | none => .reject (.kEval ex) "ill-typed expression (unbound or bad args)"
             | some ws' => checkSeq sigs r ws' rest
-      else
-        match ws.mapM (fun (w : World) =>
-          match typeOfE sigs w.Γ ex with
-          | none => none
-          | some t => some { w with σ := t :: w.σ }) with
-        | none => .reject (.kEval ex) "ill-typed expression (unbound or bad args)"
-        | some ws' => checkSeq sigs r ws' rest
   | sigs, r, ws, .kRepeatWhile c body :: rest =>
       if ws.all (fun w =>
         match typeOfE sigs w.Γ c with

@@ -133,8 +133,8 @@ def corpusSigs : SigTable := [
   -- set-typed signatures (params: language values unless noted)
   ("IsCallable",          ([.val langV], .val boolV)),
   ("IsConstructor",       ([.val langV], .val boolV)),
-  ("IsDataDescriptor",    ([.val anyV], .val boolV)),
-  ("IsAccessorDescriptor",([.val anyV], .val boolV)),
+  ("IsDataDescriptor",    ([.descAny], .val boolV)),
+  ("IsAccessorDescriptor",([.descAny], .val boolV)),
   ("OrdinaryToPrimitive", ([.val langV, .oneOf [.str "string", .str "number"]], .val langV)),
   ("ToPrimitive",         ([.val langV, .union [.notPresent, .oneOf [.str "string", .str "number"]]], .val langV)),
   ("ToObject",            ([.val langV], .val cObj)),
@@ -154,6 +154,16 @@ def corpusSigs : SigTable := [
 -- (prints the first rejection with reason + stack, or none)
 #eval typecheckReg corpusSigs theReg
 #eval typecheckRegOk corpusSigs theReg
+
+-- signature well-formedness: every desc atom in the table obeys the
+-- disjointness invariant (no data field together with an accessor field)
+def sigWf : SigTable → Bool := fun sigs =>
+  sigs.all (fun (_, (ps, _)) =>
+    (ps ++ []).all (fun t =>
+      (atoms t).all (fun a => match a with
+        | .desc fs => wfFs fs
+        | _ => Bool.true)))
+#eval sigWf corpusSigs
 
 -- per-AO: certificate AND assumption-freedom — a nonzero debt must
 -- fail the gate loudly, not just certify-with-debt invisibly.
