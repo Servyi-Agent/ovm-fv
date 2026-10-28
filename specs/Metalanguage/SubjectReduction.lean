@@ -126,6 +126,7 @@ def locsOf : JSValue → List Nat
   | _ => []
 termination_by v => sizeOf v
 decreasing_by all_goals simp_wf <;> omega
+end
 
 /-- Heap agreement: every object reference in any frame's eval stack
    or environment resolves in the heap. -/
