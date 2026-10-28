@@ -101,8 +101,8 @@ def stateOk (sigs : SigTable) (m : FM) : Prop :=
   | .fdone v _ _ _ _ => isComplV v = Bool.true
   | .fell _ _ _ _ => True
 
-/-- Object references reachable from a value (completions carry
-   payloads; descriptors and lists carry values). -/
+-- Object references reachable from a value (completions carry
+-- payloads; descriptors and lists carry values).
 mutual
 def locsList : List JSValue → List Nat
   | [] => []
