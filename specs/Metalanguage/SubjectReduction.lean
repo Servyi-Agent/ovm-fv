@@ -107,8 +107,10 @@ def locsOf : JSValue → List Nat
   | .obj l => [l]
   | .compl _ v => locsOf v
   | .descV d =>
-      [d.value, d.writable, d.getter, d.setter, d.enumerable, d.configurable]
-        .filterMap id |>.flatMap locsOf
+      match d with
+      | .mk value writable getter setter _enumerable _configurable =>
+          ([value].filterMap id).flatMap locsOf
+            ++ [getter, setter].filterMap id
   | .listV vs => vs.flatMap locsOf
   | _ => []
 
