@@ -175,22 +175,28 @@ def tyRemove (t t' : STy) : STy :=
     let r := (atoms t').foldl (fun acc b => tyRemoveAtom acc b) a
     if tyNonempty r then some r else none))
 
+/-- Atom-level subtyping with the `.val 0` special case folded INTO
+    the val/val arm (`a == 0 ||`), so no compiled literal-pattern arm
+    exists. -/
 def tmovesAtom : STy → STy → Bool
-  | .val 0, _ => Bool.true          -- the empty type is below everything
-  | .val a, .val b => (a - (a &&& b)) == 0
+  | .val a, .val b => a == 0 || (a - (a &&& b)) == 0
   | .isValue v, .isValue w => v == w
   | .isValue v, .oneOf ws => ws.contains v
   | .isValue v, .val m => ((ctorBit v) &&& m) != 0
   | .oneOf vs, .oneOf ws => vs.all ws.contains
   | .oneOf vs, .val m =>
       vs.all (fun v => ((ctorBit v) &&& m) != 0)
-  | .oneOf vs, .isValue v => vs.length == 1 && vs.contains v
+  | .oneOf vs, .isValue v => vs.all (fun x => x == v)
   | .notPresent, .notPresent => Bool.true
-  | .desc a, .desc b => (a &&& b) == a      -- width: more fields refines
+  | .complT, .complT => Bool.true
+  | .desc a, .desc b => a == 0 || (a &&& b) == a
   | .desc _, .descAny => Bool.true
   | .descAny, .descAny => Bool.true
   | .complN a, .complN b => tmovesAtom a b
-  | t, t' => t == t'
+  -- every cross-constructor pair: false
+  | .val _, _ | .desc _, _ | .descAny, _ | .isValue _, _
+  | .oneOf _, _ | .notPresent, _ | .complN _, _ | .complT, _
+  | .union _, _ => Bool.false
 
 /-- Subtyping (covariant under complN), distributed over union atoms;
    a val straddling a union is conservatively NOT a subtype. -/
@@ -272,7 +278,7 @@ termination_by es => sizeOf es
 
 def typeOfE (sigs : SigTable) (Γ : TyEnv) : Expr → Option STy
   | .nv x => tyLookup Γ x
-  | .nat n => some (.isValue (.number n.toFloat))
+  | .nat n => some (.isValue (.number (↑n : Int)))
   | .const v => some (.isValue v)
   | .varNotPresent _ => some (.val boolV)
   | .call f as =>

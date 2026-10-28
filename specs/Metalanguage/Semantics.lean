@@ -157,7 +157,7 @@ def evalE2 (h : Heap) (env : Env) : Expr → Option JSValue
       match evalListE h env es with
       | some vs => some (.listV vs)
       | none => none
-  | .nat n => some (.number n.toFloat)
+  | .nat n => some (.number (↑n : Int))
   | .const v => some v
   | .isObject e =>
       match evalE2 h env e with
@@ -365,7 +365,7 @@ def fstep (reg : AOReg) : FM → FM
     | [], _, _ => .fell (f :: fs) heap nl 0    -- fell through without kRet
     | .kEval (.const v) :: rest, env, eval => done (⟨rest, env, v :: eval, f.ret⟩ :: fs)
     | .kEval (.nat n) :: rest, env, eval =>
-        done (⟨rest, env, .number n.toFloat :: eval, f.ret⟩ :: fs)
+        done (⟨rest, env, .number (↑n : Int) :: eval, f.ret⟩ :: fs)
     | .kEval (.nv x) :: rest, env, eval =>
         match lookup env x with
         | some v => done (⟨rest, env, v :: eval, f.ret⟩ :: fs)
