@@ -128,14 +128,54 @@ termination_by v => sizeOf v
 decreasing_by all_goals simp_wf <;> omega
 end
 
-/-- Heap agreement: every object reference in any frame's eval stack
-   or environment resolves in the heap. -/
+/- References out of an allocated object: property descriptor
+   payloads. -/
+def objRefs (o : JsObj) : List Nat :=
+  (o.props.flatMap (fun (_, d) =>
+     match d with
+     | .mk (some v) _ _ _ _ _ => locsOf v
+     | _ => []))
+
+/-- Heap agreement, two LOCAL checks (no fixpoint):
+   (a) every frame-rooted object reference resolves;
+   (b) every ALLOCATED object's outgoing references resolve.
+   Induction over these gives transitive soundness of every reachable
+   chain — and (b) is stronger than reachability: even unreachable
+   garbage may not dangle. -/
 def heapOk (heap : Heap) : List Fr → Prop
-  | [] => True
+  | [] => ∀ l o, heap l = some o → (objRefs o).all (fun r => (heap r).isSome)
   | f :: fs =>
       (∀ l ∈ (f.eval.flatMap locsOf ++ (f.env.map Prod.snd).flatMap locsOf),
         (heap l).isSome)
       ∧ heapOk heap fs
+
+/- ## Heap typing (store typing)
+
+   A kind-map over locations, EXISTENTIALLY quantified in the state
+   invariant. It makes the machine's "prototype chain is ordinary"
+   assumption LOCAL: each object checks only its own edge —
+   (1) the object is consistent with its map entry (kind matches;
+       grows to shape checks per kind when exotics arrive),
+   (2) if it has a prototype, the parent is allocated AND its map
+       entry is ordinary (our [[Get]] runs OrdinaryGet unconditionally;
+       per-kind dispatch would relax this to "parent's entry has a
+       kind-appropriate [[Get]]").
+   Composition over edges gives the whole chain — no chain walk, and
+   no acyclicity (agreed: termination only, not safety). -/
+abbrev HeapTy := Nat → Kind
+
+def objConsistent (k : Kind) (o : JsObj) : Bool :=
+  match k, o.kind with
+  | .ordinary, .ordinary => Bool.true
+  | .string _, .string _ => Bool.true
+  | .builtin _ _, .builtin _ _ => Bool.true
+  | _, _ => Bool.false
+
+def heapTyOk (heap : Heap) (ht : HeapTy) : Prop :=
+  ∀ l o, heap l = some o →
+    objConsistent (ht l) o = Bool.true
+    ∧ ∀ p, o.proto = some p →
+        (heap p).isSome = Bool.true ∧ ht p = .ordinary
 
 /- The machine's return type is the BOTTOM frame's destiny (stable:
    only that frame popping turns the state into fdone). -/
@@ -153,6 +193,7 @@ def stateOkR (sigs : SigTable) (r : STy) (m : FM) : Prop :=
   | .frames fs heap _ =>
       fs.isEmpty = Bool.false
       ∧ framesOk sigs fs ∧ heapOk heap fs
+      ∧ ∃ ht, heapTyOk heap ht
       ∧ machineRet sigs fs = r
   | .fdone v _ _ _ _ =>
       -- the final value: normal compl-wrapped payload ⊑ r, or a throw

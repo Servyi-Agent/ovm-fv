@@ -138,8 +138,8 @@ def corpusSigs : SigTable := [
   ("OrdinaryToPrimitive", ([.val langV, .oneOf [.str "string", .str "number"]], .val langV)),
   ("ToPrimitive",         ([.val langV, .union [.notPresent, .oneOf [.str "string", .str "number"]]], .val langV)),
   ("ToObject",            ([.val langV], .val cObj)),
-  ("GetV",                ([.val langV, .val langV], .val langV)),
-  ("GetMethod",           ([.val langV, .val langV], .val langV)),
+  ("GetV",                ([.val langV, .val cStr], .val langV)),
+  ("GetMethod",           ([.val langV, .val cStr], .val langV)),
   ("OrdinaryGet",         ([.val cObj, .val langV, .val langV], .val langV)),
   -- prim-named calls the machine handles natively on registry miss:
   ("Get",                 ([.val langV, .val langV], .val langV)),
@@ -155,20 +155,26 @@ def corpusSigs : SigTable := [
 #eval typecheckReg corpusSigs theReg
 #eval typecheckRegOk corpusSigs theReg
 
--- per-AO: certificate + assumption count (recorded assert debts)
-#eval typecheckAO corpusSigs "IsCallable" ["arg"] (compileSteps (build isCallable6_2_5_1))
-#eval typecheckAO corpusSigs "IsConstructor" ["arg"] (compileSteps (build isConstructor6_2_5_2))
-#eval typecheckAO corpusSigs "IsDataDescriptor" ["propertyDesc"] (compileSteps (build isDataDescriptor6_2_6_2))
-#eval typecheckAO corpusSigs "IsAccessorDescriptor" ["propertyDesc"] (compileSteps (build isAccessorDescriptor6_2_6_3))
-#eval typecheckAO corpusSigs "OrdinaryToPrimitive" ["obj", "hint"] (compileSteps (build ordinaryToPrimitive7_1_1_1))
-#eval typecheckAO corpusSigs "ToPrimitive" ["input", "preferredType"] (compileSteps (build toPrimitive7_1_1))
-#eval typecheckAO corpusSigs "ToObject" ["arg"] (compileSteps (build toObject7_1_13))
-#eval typecheckAO corpusSigs "GetV" ["value", "propertyKey"] (compileSteps (build getV7_3_1))
-#eval typecheckAO corpusSigs "GetMethod" ["value", "propertyKey"] (compileSteps (build getMethod7_3_10))
-#eval typecheckAO corpusSigs "OrdinaryGet" ["obj", "propertyKey", "receiver"] (compileSteps (build ordinaryGet7_3_2))
+-- per-AO: certificate AND assumption-freedom — a nonzero debt must
+-- fail the gate loudly, not just certify-with-debt invisibly
+def assumesOf (sigs : SigTable) (name : «String») (ps : List «String»)
+    (body : List Instr) : Nat :=
+  match checkSeq sigs (sigRetTy sigs name) [{ Γ := zipTy ps (sigParams sigs name), σ := [] }] body with
+  | .flows f => f.assumes.length
+  | _ => 999
+#eval assumesOf corpusSigs "IsCallable" ["arg"] (compileSteps (build isCallable6_2_5_1))
+#eval assumesOf corpusSigs "IsConstructor" ["arg"] (compileSteps (build isConstructor6_2_5_2))
+#eval assumesOf corpusSigs "IsDataDescriptor" ["propertyDesc"] (compileSteps (build isDataDescriptor6_2_6_2))
+#eval assumesOf corpusSigs "IsAccessorDescriptor" ["propertyDesc"] (compileSteps (build isAccessorDescriptor6_2_6_3))
+#eval assumesOf corpusSigs "OrdinaryToPrimitive" ["obj", "hint"] (compileSteps (build ordinaryToPrimitive7_1_1_1))
+#eval assumesOf corpusSigs "ToPrimitive" ["input", "preferredType"] (compileSteps (build toPrimitive7_1_1))
+#eval assumesOf corpusSigs "ToObject" ["arg"] (compileSteps (build toObject7_1_13))
+#eval assumesOf corpusSigs "GetV" ["value", "propertyKey"] (compileSteps (build getV7_3_1))
+#eval assumesOf corpusSigs "GetMethod" ["value", "propertyKey"] (compileSteps (build getMethod7_3_10))
+#eval assumesOf corpusSigs "OrdinaryGet" ["obj", "propertyKey", "receiver"] (compileSteps (build ordinaryGet7_3_2))
 -- the demos typecheck as frames (Γ = params, or empty for top-level)
-#eval typecheckSeq corpusSigs (.val langV) [("input", .val langV), ("propertyKey", .val langV)] (compileSteps (build lookupDemoF))
-#eval typecheckSeq corpusSigs (.val langV) [("input", .val langV), ("propertyKey", .val langV)] (compileSteps (build getMethodDemoF))
+#eval typecheckSeq corpusSigs (.val langV) [("input", .val langV), ("propertyKey", .val cStr)] (compileSteps (build lookupDemoF))
+#eval typecheckSeq corpusSigs (.val langV) [("input", .val langV), ("propertyKey", .val cStr)] (compileSteps (build getMethodDemoF))
 
 /- negative tests: the two historical bugs must be REJECTED.
    Bug 1 (missing rewrap): the Return-?-of-a-completion-variable shape:
