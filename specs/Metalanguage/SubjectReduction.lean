@@ -80,10 +80,6 @@ def frameOk (sigs : SigTable) (above : Option «String») (f : Fr) : Prop :=
        | .flows fb => terminal fb = Bool.true  -- every world returns
        | _ => False)
 
-def isComplV : JSValue → Bool
-  | .compl _ _ => Bool.true
-  | _ => Bool.false
-
 /-- Each frame is checked at its own destiny (its AO's declared
    return type), anticipating a delivery TYPED by the frame directly
    above. -/
@@ -94,12 +90,6 @@ def framesOkFrom : SigTable → Option «String» → List Fr → Prop
 
 def framesOk (sigs : SigTable) (fs : List Fr) : Prop :=
   framesOkFrom sigs none fs
-
-def stateOk (sigs : SigTable) (m : FM) : Prop :=
-  match m with
-  | .frames fs _ _ => framesOk sigs fs
-  | .fdone v _ _ _ _ => isComplV v = Bool.true
-  | .fell _ _ _ _ => True
 
 -- Object references reachable from a value (completions carry
 -- payloads; descriptors and lists carry values).
@@ -188,7 +178,7 @@ def machineRet (sigs : SigTable) (fs : List Fr) : STy :=
 
    fell is ILL-TYPED: with this definition, preservation alone
    already implies progress. -/
-def stateOkR (sigs : SigTable) (r : STy) (m : FM) : Prop :=
+def stateOk (sigs : SigTable) (r : STy) (m : FM) : Prop :=
   match m with
   | .frames fs heap _ =>
       fs.isEmpty = Bool.false
@@ -216,10 +206,10 @@ def closedRegistry (sigs : SigTable) (reg : AOReg) : Prop :=
    theorem type_safety (sigs : SigTable) (reg : AOReg)
        (hreg : registryCertified sigs reg)
        (hcover : closedRegistry sigs reg)
-       (m : FM) (h : stateOkR sigs r m) :
-       stateOkR sigs r (fstep reg m)
+       (m : FM) (h : stateOk sigs r m) :
+       stateOk sigs r (fstep reg m)
 
-   Preservation alone suffices: fell is ill-typed in stateOkR. -/
+   Preservation alone suffices: fell is ill-typed in stateOk. -/
 
 /- ## Registry certification
 
