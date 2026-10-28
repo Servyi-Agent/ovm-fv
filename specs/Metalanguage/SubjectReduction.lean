@@ -103,16 +103,29 @@ def stateOk (sigs : SigTable) (m : FM) : Prop :=
 
 /-- Object references reachable from a value (completions carry
    payloads; descriptors and lists carry values). -/
+mutual
+def locsList : List JSValue → List Nat
+  | [] => []
+  | v :: vs => locsOf v ++ locsList vs
+termination_by vs => sizeOf vs
+decreasing_by all_goals simp_wf <;> omega
+
 def locsOf : JSValue → List Nat
   | .obj l => [l]
   | .compl _ v => locsOf v
-  | .descV d =>
-      match d with
-      | .mk value writable getter setter _enumerable _configurable =>
-          ([value].filterMap id).flatMap locsOf
-            ++ [getter, setter].filterMap id
-  | .listV vs => vs.flatMap locsOf
+  | .descV (.mk (some v) _ (some g) (some s) _ _) =>
+      locsOf v ++ [g, s]
+  | .descV (.mk (some v) _ _ (some s) _ _) => locsOf v ++ [s]
+  | .descV (.mk (some v) _ (some g) _ _ _) => locsOf v ++ [g]
+  | .descV (.mk (some v) _ _ _ _ _) => locsOf v
+  | .descV (.mk none _ (some g) (some s) _ _) => [g, s]
+  | .descV (.mk none _ _ (some s) _ _) => [s]
+  | .descV (.mk none _ (some g) _ _ _) => [g]
+  | .descV _ => []
+  | .listV vs => locsList vs
   | _ => []
+termination_by v => sizeOf v
+decreasing_by all_goals simp_wf <;> omega
 
 /-- Heap agreement: every object reference in any frame's eval stack
    or environment resolves in the heap. -/
