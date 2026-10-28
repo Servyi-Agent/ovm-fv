@@ -43,18 +43,29 @@ def valMask : STy → Nat
   | .val m => m
   | _ => 0
 
+/-- Constructor bit of a value — booleans resolve to their exact
+   bit, so `isValue (boolean true) ⊑ val cTrue` holds. -/
+def ctorBit : JSValue → Nat
+  | .undefined => cUndef
+  | .null => cNull
+  | .boolean Bool.true => cTrue
+  | .boolean Bool.false => cFalse
+  | .number _ => cNum
+  | .str _ => cStr
+  | .obj _ => cObj
+  | .listV _ => cList
+  | .descV _ => cDesc
+  | .compl _ _ => 0
+
+/-- Canonical types are SINGLETONS for known values: the canonical
+   abstraction must not lose value identity, or mid-execution
+   re-typechecks fail where the original certification passed (e.g.
+   `set preferredType to ~number~` then calling a oneOf-parameter
+   callee: coarse {cStr} ⊄ oneOf ["string","number"]). -/
 def typeOfV : JSValue → STy
-  | .undefined => .val cUndef
-  | .null => .val cNull
-  | .boolean Bool.true => .val cTrue
-  | .boolean Bool.false => .val cFalse
-  | .number _ => .val cNum
-  | .str _ => .val cStr
-  | .obj _ => .val cObj
-  | .listV _ => .val cList
-  | .descV _ => .val cDesc
   | .compl Bool.false v => .complN (typeOfV v)
   | .compl Bool.true _ => .complT
+  | v => .isValue v
 
 /- Unions appear only in signatures; flatten to union-free atoms for
    the set operations. -/
@@ -90,9 +101,9 @@ def tyMeetAtom : STy → STy → STy
   | .isValue v, .oneOf ws => if ws.contains v then .isValue v else .val 0
   | .oneOf vs, .isValue w => if vs.contains w then .isValue w else .val 0
   | .isValue v, .val m =>
-      if ((valMask (typeOfV v)) &&& m) != 0 then .isValue v else .val 0
+      if ((ctorBit v) &&& m) != 0 then .isValue v else .val 0
   | .oneOf vs, .val m =>
-      let kept := vs.filter (fun v => ((valMask (typeOfV v)) &&& m) != 0)
+      let kept := vs.filter (fun v => ((ctorBit v) &&& m) != 0)
       if kept.isEmpty then .val 0 else .oneOf kept
   | .oneOf vs, .oneOf ws => .oneOf (vs.filter ws.contains)
   | .notPresent, .notPresent => .notPresent
@@ -128,10 +139,10 @@ def tmovesAtom : STy → STy → Bool
   | .val a, .val b => (a - (a &&& b)) == 0
   | .isValue v, .isValue w => v == w
   | .isValue v, .oneOf ws => ws.contains v
-  | .isValue v, .val m => ((valMask (typeOfV v)) &&& m) != 0
+  | .isValue v, .val m => ((ctorBit v) &&& m) != 0
   | .oneOf vs, .oneOf ws => vs.all ws.contains
   | .oneOf vs, .val m =>
-      vs.all (fun v => ((valMask (typeOfV v)) &&& m) != 0)
+      vs.all (fun v => ((ctorBit v) &&& m) != 0)
   | .oneOf vs, .isValue v => vs.length == 1 && vs.contains v
   | .notPresent, .notPresent => Bool.true
   | .complN a, .complN b => tmovesAtom a b
@@ -211,7 +222,7 @@ termination_by es => sizeOf es
 
 def typeOfE (sigs : SigTable) (Γ : TyEnv) : Expr → Option STy
   | .nv x => tyLookup Γ x
-  | .nat _ => some (.val cNum)
+  | .nat n => some (.isValue (.number n.toFloat))
   | .const v => some (.isValue v)
   | .varNotPresent _ => some (.val boolV)
   | .call f as =>

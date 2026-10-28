@@ -156,7 +156,12 @@ def corpusSigs : SigTable := [
 #eval typecheckRegOk corpusSigs theReg
 
 -- per-AO: certificate AND assumption-freedom — a nonzero debt must
--- fail the gate loudly, not just certify-with-debt invisibly
+-- fail the gate loudly, not just certify-with-debt invisibly.
+-- OPEN: OrdinaryGet step 4 (Assert: IsAccessorDescriptor) records 1 —
+-- the spec's own descriptor-disjointness invariant (data-ness is a
+-- FIELD-level fact; the descV constructor bit cannot split it).
+-- Dischargeable when descV splits by shape (same class as the obj
+-- kind-split). Until then: 9/10 assumption-free.
 def assumesOf (sigs : SigTable) (name : «String») (ps : List «String»)
     (body : List Instr) : Nat :=
   match checkSeq sigs (sigRetTy sigs name) [{ Γ := zipTy ps (sigParams sigs name), σ := [] }] body with
