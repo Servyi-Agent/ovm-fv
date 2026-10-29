@@ -1019,3 +1019,129 @@ theorem checkSeq_kPop (sigs : SigTable) (r : STy) (w : World)
     checkSeq sigs r [{ w with σ := t :: σ }] (.kPop :: rest)
       = checkSeq sigs r [{ w with σ := σ }] rest := by
   simp [checkSeq, stepWorlds]
+
+/- ## Nonemptiness machinery (unblocked by the tyNonempty complN fix). -/
+
+theorem tyNonemptyList_ex : ∀ (ps : List STy), tyNonemptyList ps = Bool.true →
+    ∃ p ∈ ps, tyNonempty p = Bool.true := by
+  intro ps h
+  induction ps with
+  | nil => simp only [tyNonemptyList] at h; exact Bool.noConfusion h
+  | cons p rest ih =>
+      simp only [tyNonemptyList, Bool.or_eq_true] at h
+      rcases h with h | h
+      · exact ⟨p, by simp, h⟩
+      · obtain ⟨q, hq, hneq⟩ := ih h
+        exact ⟨q, by simp [hq], hneq⟩
+
+/-- A nonempty type has a nonempty atom (by union depth). -/
+theorem tyNonempty_atom : ∀ (n : Nat) (t : STy), aDepth t ≤ n →
+    tyNonempty t = Bool.true → ∃ a₀ ∈ atoms t, tyNonempty a₀ = Bool.true := by
+  intro n
+  induction n with
+  | zero =>
+      intro t ht hne
+      cases t with
+      | union ps => have h1 : 1 ≤ aDepth (STy.union ps) := by simp only [aDepth]; omega
+                    omega
+      | complN t' => have h1 : 1 ≤ aDepth (STy.complN t') := by simp only [aDepth]; omega
+                     omega
+      | val _ | isValue _ | oneOf _ | desc _ | descAny | notPresent | complT =>
+          exact ⟨_, by simp [atoms], hne⟩
+  | succ n ih =>
+      intro t ht hne
+      cases t with
+      | union ps =>
+          obtain ⟨p, hp, hnp⟩ := tyNonemptyList_ex ps (by simpa only [tyNonempty] using hne)
+          have hfold : aDepth p ≤ (ps.map aDepth).foldr Nat.max 0 :=
+            foldr_max_ge (ps.map aDepth) (aDepth p) (List.mem_map_of_mem hp)
+          simp only [aDepth] at ht
+          obtain ⟨a₀, ha₀, hn₀⟩ := ih p (by omega) hnp
+          refine ⟨a₀, ?_, hn₀⟩
+          simp only [atoms, List.mem_flatMap]
+          exact ⟨p, hp, ha₀⟩
+      | complN t' =>
+          simp only [tyNonempty] at hne
+          simp only [aDepth] at ht
+          obtain ⟨a₀, ha₀, hn₀⟩ := ih t' (by omega) hne
+          refine ⟨STy.complN a₀, ?_, ?_⟩
+          · simp only [atoms, List.mem_map]
+            exact ⟨a₀, ha₀, rfl⟩
+          · simpa only [tyNonempty] using hn₀
+      | val _ | isValue _ | oneOf _ | desc _ | descAny | notPresent | complT =>
+          exact ⟨_, by simp [atoms], hne⟩
+
+theorem atom_ne_below_oneOf : ∀ (a₀ : STy) (vs : List JSValue),
+    tmovesAtom a₀ (.oneOf vs) = Bool.true → tyNonempty a₀ = Bool.true →
+    ∃ v, v ∈ vs := by
+  intro a₀ vs h hne
+  cases a₀ with
+  | isValue v =>
+      exact ⟨v, List.contains_iff_mem.mp (by simpa only [tmovesAtom] using h)⟩
+  | oneOf us =>
+      simp only [tmovesAtom, List.all_eq_true] at h
+      cases us with
+      | nil => simp only [tyNonempty] at hne; exact Bool.noConfusion hne
+      | cons u rest =>
+          exact ⟨u, List.contains_iff_mem.mp (h u (by simp))⟩
+  | val _ | desc _ | descAny | notPresent | union _ | complN _ | complT =>
+      simp only [tmovesAtom] at h; exact Bool.noConfusion h
+
+/-- Nonemptiness transfers up through atom-subtyping. -/
+theorem tmovesAtom_le_ne (a b : STy) (h : tmovesAtom a b = Bool.true)
+    (hne : tyNonempty a = Bool.true) : tyNonempty b = Bool.true := by
+  cases b with
+  | val m =>
+      simp only [tyNonempty, bne_iff_ne]
+      intro hm0
+      rw [hm0] at h
+      cases a with
+      | val k =>
+          simp only [tmovesAtom, Bool.or_eq_true, beq_iff_eq] at h
+          simp only [tyNonempty, bne_iff_ne] at hne
+          rcases h with h1 | h1
+          · exact hne h1
+          · rw [Nat.and_zero, Nat.sub_zero] at h1
+            exact hne h1
+      | isValue v =>
+          have hb := bne_iff_ne.mp (by simpa only [tmovesAtom] using h)
+          rw [Nat.and_zero] at hb
+          exact hb rfl
+      | oneOf vs =>
+          simp only [tmovesAtom, List.all_eq_true] at h
+          cases vs with
+          | nil => simp only [tyNonempty] at hne; exact Bool.noConfusion hne
+          | cons v rest =>
+              have hb := bne_iff_ne.mp (h v (by simp))
+              rw [Nat.and_zero] at hb
+              exact hb rfl
+      | union _ | desc _ | descAny | notPresent | complN _ | complT =>
+          simp only [tmovesAtom] at h; exact Bool.noConfusion h
+  | oneOf vs =>
+      have key : ∃ v, v ∈ vs := by
+        cases a with
+        | isValue v =>
+            exact atom_ne_below_oneOf (.isValue v) vs
+              (by simpa only [tmovesAtom] using h) hne
+        | oneOf us =>
+            exact atom_ne_below_oneOf (.oneOf us) vs
+              (by simpa only [tmovesAtom] using h) hne
+        | val _ | desc _ | descAny | notPresent | union _ | complN _ | complT =>
+            simp only [tmovesAtom] at h; exact Bool.noConfusion h
+      obtain ⟨v, hv⟩ := key
+      cases vs with
+      | nil => exact absurd hv (by simp)
+      | cons x rest => simp [tyNonempty]
+  | union _ =>
+      cases a <;> simp only [tmovesAtom] at h <;> exact Bool.noConfusion h
+  | desc _ | descAny | isValue _ | notPresent | complT =>
+      simp only [tyNonempty]
+  | complN t =>
+      cases a with
+      | complN a₂ =>
+          simp only [tmovesAtom] at h
+          simp only [tyNonempty] at hne
+          simp only [tyNonempty]
+          exact tmovesAtom_le_ne a₂ t h hne
+      | val _ | isValue _ | oneOf _ | desc _ | descAny | notPresent | union _ | complT =>
+          simp only [tmovesAtom] at h; exact Bool.noConfusion h
