@@ -579,3 +579,396 @@ theorem tmoves_trans (t u v : STy)
   obtain ⟨c, hc, hbc⟩ := hbc
   simp only [List.any_eq_true]
   exact ⟨c, hc, tmovesAtom_trans b a c hab hbc⟩
+
+/- ## Step 2: refinement monotonicity.
+
+    The static certificate explores a FINITE set of worlds; the runtime
+    realizes ONE world that refines one of them pointwise (e.g. the
+    checker reasons `val boolV`, the machine holds `isValue true`).
+    Every checker operation is monotone under refinement, so the
+    realized world stays inside the certificate's world set as
+    execution proceeds. -/
+
+/-- Type refinement (subtyping as a Prop). -/
+def tyLe (t' t : STy) : Prop := tmoves t' t = Bool.true
+
+/-- Environment refinement: every static binding is realized at a
+    subtype (shadowing-identical first-match structure). -/
+def envLe (Γ' Γ : TyEnv) : Prop :=
+  ∀ x t, tyLookup Γ x = some t → ∃ t', tyLookup Γ' x = some t' ∧ tyLe t' t
+
+/-- Stack refinement: same length, pointwise subtypes. -/
+def stackLe : List STy → List STy → Prop
+  | [], [] => True
+  | t' :: σ', t :: σ => tyLe t' t ∧ stackLe σ' σ
+  | _, _ => False
+
+def worldLe (w' w : World) : Prop := envLe w'.Γ w.Γ ∧ stackLe w'.σ w.σ
+
+def worldsLe (ws' ws : Worlds) : Prop := ∀ w' ∈ ws', ∃ w ∈ ws, worldLe w' w
+
+/-- Atoms never contain an OUTER union; complN spines descend into
+    union-free payloads (guaranteed by atoms's normalization). -/
+def atomSh : STy → Bool
+  | .union _ => Bool.false
+  | .complN t => atomSh t
+  | _ => Bool.true
+
+/-- Combined union/complN nesting depth. -/
+def aDepth : STy → Nat
+  | .union ps => 1 + (ps.map aDepth).foldr Nat.max 0
+  | .complN t => 1 + aDepth t
+  | _ => 0
+
+theorem foldr_max_ge : ∀ (xs : List Nat) (x : Nat), x ∈ xs →
+    x ≤ xs.foldr Nat.max 0 := by
+  intro xs x hx
+  induction xs with
+  | nil => cases hx
+  | cons y rest ih =>
+      simp only [List.mem_cons] at hx
+      rcases hx with rfl | hx'
+      · simp only [List.foldr_cons]
+        exact Nat.le_max_left _ (List.foldr Nat.max 0 rest)
+      · have h1 := ih hx'
+        simp only [List.foldr_cons]
+        exact Nat.le_trans h1 (Nat.le_max_right _ (List.foldr Nat.max 0 rest))
+
+theorem all_append' {P : STy → Bool} {l₁ l₂ : List STy} :
+    l₁.all P = Bool.true → l₂.all P = Bool.true →
+    (l₁ ++ l₂).all P = Bool.true := by
+  intro h₁ h₂
+  simp only [List.all_eq_true, List.mem_append] at h₁ h₂ ⊢
+  intro a ha
+  rcases ha with ha | ha
+  · exact h₁ a ha
+  · exact h₂ a ha
+
+theorem flatMap_all {P : STy → Bool} {ps : List STy}
+    (h : ∀ p ∈ ps, (atoms p).all P = Bool.true) :
+    (ps.flatMap atoms).all P = Bool.true := by
+  induction ps with
+  | nil => rfl
+  | cons p rest ih =>
+      have hp : (atoms p).all P = Bool.true := h p (by simp)
+      have hr : (rest.flatMap atoms).all P = Bool.true :=
+        ih (fun q hq => h q (by simp [hq]))
+      simp only [List.flatMap_cons]
+      exact all_append' hp hr
+
+theorem map_all {P : STy → Bool} {f : STy → STy} {l : List STy}
+    (h : l.all (fun x => P (f x)) = Bool.true) : (l.map f).all P = Bool.true := by
+  simp only [List.all_eq_true, List.mem_map] at h ⊢
+  intro a ha
+  obtain ⟨x, hx, rfl⟩ := ha
+  exact h x hx
+
+/-- Every atom satisfies atomSh. -/
+theorem atoms_sh : ∀ (n : Nat) (t : STy), aDepth t ≤ n →
+    (atoms t).all atomSh = Bool.true := by
+  intro n
+  induction n with
+  | zero =>
+      intro t ht
+      cases t with
+      | union ps =>
+          have h1 : 1 ≤ aDepth (STy.union ps) := by simp only [aDepth]; omega
+          have h2 : aDepth (STy.union ps) ≤ 0 := ht
+          omega
+      | complN t' =>
+          have h1 : 1 ≤ aDepth (STy.complN t') := by simp only [aDepth]; omega
+          omega
+      | val _ | isValue _ | oneOf _ | desc _ | descAny | notPresent | complT =>
+          simp only [atoms, atomSh, List.all_cons, List.all_nil, Bool.and_true]
+  | succ n ih =>
+      intro t ht
+      cases t with
+      | union ps =>
+          simp only [atoms]
+          apply flatMap_all
+          intro p hp
+          have hfold : aDepth p ≤ (ps.map aDepth).foldr Nat.max 0 :=
+            foldr_max_ge (ps.map aDepth) (aDepth p) (List.mem_map_of_mem hp)
+          simp only [aDepth] at ht
+          have : aDepth p ≤ n := by omega
+          exact ih p this
+      | complN t' =>
+          simp only [atoms]
+          refine map_all ?_
+          simp only [aDepth] at ht
+          have : aDepth t' ≤ n := by omega
+          have := ih t' this
+          rw [List.all_eq_true] at this ⊢
+          intro a ha
+          have := this a ha
+          simp only [atomSh]
+          exact this
+      | val _ | isValue _ | oneOf _ | desc _ | descAny | notPresent | complT =>
+          simp only [atoms, atomSh, List.all_cons, List.all_nil, Bool.and_true]
+
+/-- Atom reflexivity for union-free spines, by spine fuel. -/
+theorem tmovesAtom_refl_sh : ∀ (n : Nat) (a : STy), complDepth a ≤ n →
+    atomSh a = Bool.true → tmovesAtom a a = Bool.true := by
+  intro n
+  induction n with
+  | zero =>
+      intro a ha hsh
+      cases a with
+      | complN t => rw [complDepth] at ha; omega
+      | union _ => simp only [atomSh] at hsh; exact Bool.noConfusion hsh
+      | val m =>
+          simp only [tmovesAtom, Bool.or_eq_true, beq_iff_eq, Nat.and_self, Nat.sub_self]
+          exact Or.inr trivial
+      | desc m =>
+          simp only [tmovesAtom, Bool.or_eq_true, beq_iff_eq, Nat.and_self]
+          exact Or.inr trivial
+      | isValue v => simp only [tmovesAtom, beq_self_eq_true]
+      | oneOf vs =>
+          simp only [tmovesAtom, List.all_eq_true]
+          intro v hv
+          exact List.contains_iff_mem.mpr hv
+      | descAny | notPresent | complT => rfl
+  | succ n ih =>
+      intro a ha hsh
+      cases a with
+      | complN t =>
+          simp only [tmovesAtom]
+          have ht : complDepth t ≤ n := by
+            have := complDepth_lt t
+            simp only [complDepth] at this ha
+            omega
+          exact ih t ht (by simp only [atomSh] at hsh; exact hsh)
+      | union _ => simp only [atomSh] at hsh; exact Bool.noConfusion hsh
+      | val m =>
+          simp only [tmovesAtom, Bool.or_eq_true, beq_iff_eq, Nat.and_self, Nat.sub_self]
+          exact Or.inr trivial
+      | desc m =>
+          simp only [tmovesAtom, Bool.or_eq_true, beq_iff_eq, Nat.and_self]
+          exact Or.inr trivial
+      | isValue v => simp only [tmovesAtom, beq_self_eq_true]
+      | oneOf vs =>
+          simp only [tmovesAtom, List.all_eq_true]
+          intro v hv
+          exact List.contains_iff_mem.mpr hv
+      | descAny | notPresent | complT => rfl
+
+theorem tmoves_refl (t : STy) : tmoves t t = Bool.true := by
+  have hsh := atoms_sh (aDepth t) t (Nat.le_refl _)
+  simp only [tmoves, List.all_eq_true] at hsh ⊢
+  intro a ha
+  have h1 := hsh a ha
+  have h2 := tmovesAtom_refl_sh (complDepth a) a (Nat.le_refl _) h1
+  simp only [List.any_eq_true]
+  exact ⟨a, ha, h2⟩
+
+theorem tyLe_refl (t : STy) : tyLe t t := tmoves_refl t
+
+theorem envLe_refl (Γ : TyEnv) : envLe Γ Γ := by
+  intro x t h
+  exact ⟨t, h, tyLe_refl t⟩
+
+theorem stackLe_refl (σ : List STy) : stackLe σ σ := by
+  cases σ with
+  | nil => exact True.intro
+  | cons t rest => exact ⟨tyLe_refl t, stackLe_refl rest⟩
+
+theorem worldLe_refl (w : World) : worldLe w w :=
+  ⟨envLe_refl w.Γ, stackLe_refl w.σ⟩
+
+/- ## mapM plumbing -/
+
+theorem mapM_some_all : ∀ (l : List World) (f : World → Option World),
+    (∀ x ∈ l, ∃ y, f x = some y) → ∃ l₂, l.mapM f = some l₂ := by
+  intro l f h
+  induction l with
+  | nil => exact ⟨[], by simp⟩
+  | cons x rest ih =>
+      obtain ⟨y, hy⟩ := h x (by simp)
+      obtain ⟨l₂, hl₂⟩ := ih (fun q hq => h q (by simp [hq]))
+      refine ⟨y :: l₂, ?_⟩
+      simp only [List.mapM_cons, hy, hl₂]
+      rfl
+
+theorem mapM_some_mem : ∀ (l : List World) (f : World → Option World) (l₂ : List World),
+    l.mapM f = some l₂ → ∀ x ∈ l, ∃ y, f x = some y ∧ y ∈ l₂ := by
+  intro l f l₂ h
+  induction l generalizing l₂ with
+  | nil => cases h; intro x hx; cases hx
+  | cons x rest ih =>
+      simp only [List.mapM_cons] at h
+      obtain ⟨y, hfx, hy2⟩ := Option.bind_eq_some_iff.mp h
+      obtain ⟨l₂', hrest, hpure⟩ := Option.bind_eq_some_iff.mp hy2
+      rw [Option.pure_def] at hpure
+      injection hpure with hl
+      subst hl
+      intro x' hx'
+      simp only [List.mem_cons] at hx'
+      rcases hx' with rfl | hx''
+      · exact ⟨y, hfx, by simp⟩
+      · obtain ⟨z, hz1, hz2⟩ := ih l₂' hrest x' hx''
+        exact ⟨z, hz1, by simp [hz2]⟩
+
+theorem mapM_mem_of_mem : ∀ (l : List World) (f : World → Option World) (l₂ : List World),
+    l.mapM f = some l₂ → ∀ v ∈ l₂, ∃ x ∈ l, f x = some v := by
+  intro l f l₂ h
+  induction l generalizing l₂ with
+  | nil => cases h; intro v hv; cases hv
+  | cons x rest ih =>
+      simp only [List.mapM_cons] at h
+      obtain ⟨y, hfx, hy2⟩ := Option.bind_eq_some_iff.mp h
+      obtain ⟨l₂', hrest, hpure⟩ := Option.bind_eq_some_iff.mp hy2
+      rw [Option.pure_def] at hpure
+      injection hpure with hl
+      subst hl
+      intro v hv
+      simp only [List.mem_cons] at hv
+      rcases hv with rfl | hv'
+      · exact ⟨x, by simp, hfx⟩
+      · obtain ⟨z, hz1, hz2⟩ := ih l₂' hrest v hv'
+        exact ⟨z, by simp [hz1], hz2⟩
+
+theorem mapM_mono (f g : World → Option World)
+    (h : ∀ w' w, worldLe w' w → ∀ v, f w = some v → ∃ v', g w' = some v' ∧ worldLe v' v)
+    (hle : worldsLe ws' ws) (hM : ws.mapM f = some ws₂) :
+    ∃ ws₂', ws'.mapM g = some ws₂' ∧ worldsLe ws₂' ws₂ := by
+  have hall : ∀ w' ∈ ws', ∃ v', g w' = some v' ∧ ∃ v, v ∈ ws₂ ∧ worldLe v' v := by
+    intro w' hw'
+    obtain ⟨w, hw, hwl⟩ := hle w' hw'
+    obtain ⟨v, hv, hvw⟩ := mapM_some_mem ws f ws₂ hM w hw
+    obtain ⟨v', hv', hle'⟩ := h w' w hwl v hv
+    exact ⟨v', hv', v, hvw, hle'⟩
+  obtain ⟨ws₂', hM'⟩ := mapM_some_all ws' g
+    (fun w' hw' => by obtain ⟨v', hv', _⟩ := hall w' hw'; exact ⟨v', hv'⟩)
+  refine ⟨ws₂', hM', ?_⟩
+  intro v' hv'
+  obtain ⟨w', hw', hv'⟩ := mapM_mem_of_mem ws' g ws₂' hM' v' hv'
+  obtain ⟨v₂, hv₂, ⟨v, hv, hle'⟩⟩ := hall w' hw'
+  rw [hv₂] at hv'
+  injection hv' with he
+  subst he
+  exact ⟨v, hv, hle'⟩
+
+/- ## Stack plumbing -/
+
+theorem leList_trans : ∀ (as bs cs : List STy),
+    leList as bs = Bool.true → leList bs cs = Bool.true → leList as cs = Bool.true := by
+  intro as bs cs h1 h2
+  induction as generalizing bs cs with
+  | nil =>
+      cases bs <;> cases cs <;> first
+        | rfl
+        | (simp only [leList] at h1; exact Bool.noConfusion h1)
+        | (simp only [leList] at h2; exact Bool.noConfusion h2)
+  | cons a rest ih =>
+      cases bs with
+      | nil => simp only [leList] at h1; exact Bool.noConfusion h1
+      | cons b bs' =>
+          cases cs with
+          | nil => simp only [leList] at h2; exact Bool.noConfusion h2
+          | cons c cs' =>
+              simp only [leList, Bool.and_eq_true] at h1 h2 ⊢
+              obtain ⟨h1a, h1r⟩ := h1
+              obtain ⟨h2a, h2r⟩ := h2
+              exact ⟨tmoves_trans a b c h1a h2a, ih bs' cs' h1r h2r⟩
+
+theorem stackLe_leList : ∀ (σ' σ : List STy),
+    stackLe σ' σ → leList σ' σ = Bool.true := by
+  intro σ' σ h
+  induction σ' generalizing σ with
+  | nil => cases σ with
+    | nil => rfl
+    | cons t rest => exact absurd h (by intro hc; cases hc)
+  | cons t' rest' ih =>
+      cases σ with
+      | nil => exact absurd h (by intro hc; cases hc)
+      | cons t rest =>
+          obtain ⟨h1, h2⟩ := h
+          simp only [leList, Bool.and_eq_true]
+          exact ⟨h1, ih rest h2⟩
+
+theorem popTy_le (t : STy) (σ' σ : List STy) (hle : stackLe σ' σ) :
+    ∀ σ₂, popTy t σ = some σ₂ → ∃ σ₂', popTy t σ' = some σ₂' ∧ stackLe σ₂' σ₂ := by
+  cases σ with
+  | nil =>
+      intro σ₂ h
+      simp only [popTy] at h
+      exact absurd h (by simp)
+  | cons s rest =>
+      intro σ₂ h
+      cases σ' with
+      | nil => exact absurd hle (by intro hc; cases hc)
+      | cons s' rest' =>
+          simp only [stackLe] at hle
+          obtain ⟨h1, h2⟩ := hle
+          simp only [popTy] at h
+          by_cases hst : tmoves s t = Bool.true
+          · rw [if_pos hst] at h
+            injection h with hl
+            subst hl
+            have hst' : tmoves s' t = Bool.true := tmoves_trans s' s t h1 hst
+            exact ⟨rest', by simp only [popTy, if_pos hst'], h2⟩
+          · rw [if_neg (by simpa using hst)] at h
+            exact absurd h (by simp)
+
+theorem popTyN_le (n : Nat) (t : STy) (σ' σ : List STy) (hle : stackLe σ' σ) :
+    ∀ σ₂, popTyN n t σ = some σ₂ → ∃ σ₂', popTyN n t σ' = some σ₂' ∧ stackLe σ₂' σ₂ := by
+  induction n generalizing σ σ' hle with
+  | zero =>
+      intro σ₂ h
+      simp only [popTyN] at h
+      injection h with hl
+      subst hl
+      exact ⟨σ', rfl, hle⟩
+  | succ n ih =>
+      intro σ₂ h
+      simp only [popTyN] at h
+      cases hp : popTy t σ with
+      | none => rw [hp] at h; exact absurd h (by simp)
+      | some σ₁ =>
+          rw [hp] at h
+          obtain ⟨σ₁', hp', hle₁⟩ := popTy_le t σ' σ hle σ₁ hp
+          obtain ⟨σ₂', h', hle₂⟩ := ih σ₁' σ₁ hle₁ σ₂ h
+          exact ⟨σ₂', by simp only [popTyN, hp', h'], hle₂⟩
+
+theorem leList_nil_cons (b : STy) (bs : List STy) : leList [] (b :: bs) = Bool.false := rfl
+
+theorem leList_take : ∀ (n : Nat) (bs bs' : List STy),
+    leList bs bs' = Bool.true → leList (bs.take n) (bs'.take n) = Bool.true := by
+  intro n
+  induction n with
+  | zero => intro bs bs' _; rfl
+  | succ n ih =>
+      intro bs bs' h
+      cases bs with
+      | nil => cases bs' with
+        | nil => rfl
+        | cons b bs'' =>
+            rw [leList_nil_cons] at h
+            exact Bool.noConfusion h
+      | cons b rest =>
+          cases bs' with
+          | nil => simp only [leList] at h; exact Bool.noConfusion h
+          | cons b' rest' =>
+              simp only [leList, Bool.and_eq_true] at h
+              obtain ⟨h1, h2⟩ := h
+              rw [List.take_cons (by omega : (0:Nat) < n + 1),
+                  List.take_cons (by omega : (0:Nat) < n + 1)]
+              simp only [Nat.add_sub_cancel, leList, Bool.and_eq_true]
+              exact ⟨h1, ih rest rest' h2⟩
+
+theorem stackLe_length : ∀ (σ' σ : List STy), stackLe σ' σ → σ'.length = σ.length := by
+  intro σ' σ h
+  cases σ' with
+  | nil => cases σ with
+    | nil => rfl
+    | cons t rest => exact absurd h (by intro hc; cases hc)
+  | cons t' rest' =>
+      cases σ with
+      | nil => exact absurd h (by intro hc; cases hc)
+      | cons t rest =>
+          simp only [stackLe] at h
+          obtain ⟨_, h2⟩ := h
+          have hlen := stackLe_length rest' rest h2
+          simp only [List.length_cons]
+          omega
+

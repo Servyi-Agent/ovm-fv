@@ -101,6 +101,7 @@ def typeOfV : JSValue → STy
    the set operations. -/
 def atoms : STy → List STy
   | .union ps => ps.flatMap atoms
+  | .complN t => (atoms t).map STy.complN
   | t => [t]
 
 def ofAtoms : List STy → STy
