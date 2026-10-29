@@ -120,6 +120,7 @@ def tyNonempty : STy → Bool
   | .val m => m != 0
   | .oneOf vs => !vs.isEmpty
   | .union ps => tyNonemptyList ps
+  | .complN t => tyNonempty t
   | _ => true
 termination_by t => sizeOf t
 decreasing_by all_goals simp_wf <;> omega
@@ -349,8 +350,13 @@ def popTyN : Nat → STy → List STy → Option (List STy)
       | some σ' => popTyN k t σ'
       | none => none
 
+/- Argument check: the TOP n stack types must be SUBTYPES of the
+    callee's parameters (args fit the contract). The previous
+    ps ⊑ tops direction was inverted: it demanded stack supersets,
+    which singleton (runtime-precise) worlds can never satisfy and
+    which does not chain under refinement. -/
 def popArgs (ps σ : List STy) : Bool :=
-  σ.length ≥ ps.length && leList ps.reverse (σ.take ps.length).reverse
+  σ.length ≥ ps.length && leList (σ.take ps.length).reverse ps.reverse
 
 def primTys (p : Prim) : Option (STy × STy) :=
   match p with
