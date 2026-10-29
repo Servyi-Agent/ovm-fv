@@ -972,3 +972,50 @@ theorem stackLe_length : ∀ (σ' σ : List STy), stackLe σ' σ → σ'.length 
           simp only [List.length_cons]
           omega
 
+
+/- ## Step 3 (start): one-step unfolding identities.
+
+    Each machine step corresponds EXACTLY to one unfolding of
+    checkSeq's recursion; these computational identities are the
+    lockstep spine of the subject-reduction assembly. -/
+
+/-- kEval (const v): the checker pushes `isValue v`, the machine pushes
+    `v` whose canonical type is `isValue v` — IDENTICAL for non-
+    completion literals (completion literals never occur in the
+    corpus; the static side would type them `isValue (compl …)` while
+    the runtime abstraction is `complN …`). -/
+theorem checkSeq_kEval_const (sigs : SigTable) (r : STy) (w : World)
+    (rest : List Instr) (v : JSValue)
+    (hv : ∀ b x, v ≠ JSValue.compl b x) (hv2 : ∀ d, v ≠ JSValue.descV d) :
+    checkSeq sigs r [w] (.kEval (.const v) :: rest)
+      = checkSeq sigs r [{ w with σ := typeOfV v :: w.σ }] rest := by
+  have hvv : typeOfV v = STy.isValue v := by
+    cases v with
+    | compl b x => exact absurd rfl (hv b x)
+    | descV d => exact absurd rfl (hv2 d)
+    | undefined | null | boolean _ | number _ | str _
+    | listV _ | obj _ => rfl
+  rw [hvv]
+  simp [checkSeq, testType, typeOfE]
+
+/-- kEval (nat n): both sides push the singleton number type. -/
+theorem checkSeq_kEval_nat (sigs : SigTable) (r : STy) (w : World)
+    (rest : List Instr) (n : Nat) :
+    checkSeq sigs r [w] (.kEval (.nat n) :: rest)
+      = checkSeq sigs r [{ w with σ := typeOfV (.number ↑n) :: w.σ }] rest := by
+  simp only [checkSeq, testType, typeOfE]
+  rfl
+
+/-- kSet x on a nonempty stack: both sides bind the top type. -/
+theorem checkSeq_kSet (sigs : SigTable) (r : STy) (w : World)
+    (rest : List Instr) (x : «String») (t : STy) (σ : List STy) :
+    checkSeq sigs r [{ w with σ := t :: σ }] (.kSet x :: rest)
+      = checkSeq sigs r [{ Γ := (x, t) :: w.Γ, σ := σ }] rest := by
+  simp [checkSeq, stepWorlds]
+
+/-- kPop on a nonempty stack: both sides drop the top type. -/
+theorem checkSeq_kPop (sigs : SigTable) (r : STy) (w : World)
+    (rest : List Instr) (t : STy) (σ : List STy) :
+    checkSeq sigs r [{ w with σ := t :: σ }] (.kPop :: rest)
+      = checkSeq sigs r [{ w with σ := σ }] rest := by
+  simp [checkSeq, stepWorlds]
