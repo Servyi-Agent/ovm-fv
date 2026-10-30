@@ -1223,3 +1223,126 @@ theorem maskSub_inter (j k m : Nat) (h1 : maskSub j k = Bool.true)
       _ = j := e2.symm
   have hle : j &&& (k &&& m) ≤ j := Nat.and_le_left (n := j) (m := k &&& m)
   omega
+
+theorem ctorBit_inter_ne (v : JSValue) (k m : Nat)
+    (h1 : ((ctorBit v) &&& k) ≠ 0) (h2 : ((ctorBit v) &&& m) ≠ 0) :
+    ((ctorBit v) &&& (k &&& m)) ≠ 0 := by
+  rcases ctorBit_pow2 v with ⟨p, hp⟩ | h0
+  · rw [hp] at h1 h2 ⊢
+    exact hasBit_pow2_trans p k m h1 h2
+  · rw [h0] at h1
+    exact absurd h1 (by simp)
+
+/-- Meet soundness at the atom level: a witness below both inputs is
+    below the computed meet (for mask tests). -/
+theorem tmovesAtom_meet_val (a₀ s₀ : STy) (m : Nat)
+    (hle : tmovesAtom a₀ s₀ = Bool.true)
+    (hm : tmovesAtom a₀ (STy.val m) = Bool.true) :
+    tmovesAtom a₀ (tyMeetAtom s₀ (STy.val m)) = Bool.true := by
+  cases s₀ with
+  | val k =>
+      cases a₀ with
+      | val j =>
+          simp only [tyMeetAtom, tmovesAtom, Bool.or_eq_true, beq_iff_eq] at hle hm ⊢
+          rcases hle with h1 | h1 <;> rcases hm with h2 | h2
+          · exact Or.inl h1
+          · exact Or.inl h1
+          · exact Or.inl h2
+          · have hb := maskSub_inter j k m (decide_eq_true h1) (decide_eq_true h2)
+            rw [maskSub, beq_iff_eq] at hb
+            exact Or.inr hb
+      | isValue v =>
+          simp only [tyMeetAtom, tmovesAtom, bne_iff_ne] at hle hm ⊢
+          exact ctorBit_inter_ne v k m hle hm
+      | oneOf vs =>
+          have hall : ∀ w ∈ vs, ((ctorBit w) &&& k) ≠ 0 ∧ ((ctorBit w) &&& m) ≠ 0 := by
+            intro w hw
+            have e1 := (List.all_eq_true.mp (by simpa only [tmovesAtom] using hle)) w hw
+            have e2 := (List.all_eq_true.mp (by simpa only [tmovesAtom] using hm)) w hw
+            constructor
+            · simpa only [bne_iff_ne] using e1
+            · simpa only [bne_iff_ne] using e2
+          simp only [tyMeetAtom, tmovesAtom, List.all_eq_true, bne_iff_ne]
+          intro w hw
+          obtain ⟨h1, h2⟩ := hall w hw
+          exact ctorBit_inter_ne w k m h1 h2
+      | desc _ | descAny | notPresent | union _ | complN _ | complT =>
+          simp only [tmovesAtom] at hm; exact Bool.noConfusion hm
+  | isValue v =>
+      cases a₀ with
+      | isValue w =>
+          have hwv : w = v := eq_of_beq (by simpa only [tmovesAtom] using hle)
+          rw [hwv] at hle hm
+          rw [hwv]
+          have hcond : (((ctorBit v) &&& m) != 0) = Bool.true := by
+            simpa only [tmovesAtom, bne_iff_ne] using hm
+          simp only [tyMeetAtom, if_pos hcond, tmovesAtom, beq_self_eq_true]
+      | oneOf ws =>
+          cases ws with
+          | nil =>
+              simp only [tyMeetAtom]
+              split <;> simp [tmovesAtom]
+          | cons w rest =>
+              have hwv : w = v := eq_of_beq
+                ((List.all_eq_true.mp (by simpa only [tmovesAtom] using hle)) w (by simp))
+              have hwm : ((ctorBit w) &&& m) ≠ 0 := by
+                have := (List.all_eq_true.mp (by simpa only [tmovesAtom] using hm)) w (by simp)
+                simpa only [tmovesAtom, bne_iff_ne] using this
+              have hbm : ((ctorBit v) &&& m) ≠ 0 := by rw [hwv] at hwm; exact hwm
+              have hcond : (((ctorBit v) &&& m) != 0) = Bool.true := bne_iff_ne.mpr hbm
+              simp only [tyMeetAtom, if_pos hcond]
+              simpa only [tmovesAtom] using hle
+      | val _ | desc _ | descAny | notPresent | union _ | complN _ | complT =>
+          simp only [tmovesAtom] at hle; exact Bool.noConfusion hle
+  | oneOf us =>
+      cases a₀ with
+      | isValue v =>
+          have hv : us.contains v = Bool.true := by simpa only [tmovesAtom] using hle
+          have hbm : ((ctorBit v) &&& m) ≠ 0 := by
+            simpa only [tmovesAtom, bne_iff_ne] using hm
+          have hmem : v ∈ us.filter (fun w => ((ctorBit w) &&& m) != 0) :=
+            List.mem_filter.mpr ⟨List.contains_iff_mem.mp hv, bne_iff_ne.mpr hbm⟩
+          have hne : (us.filter (fun w => ((ctorBit w) &&& m) != 0)).isEmpty = Bool.false := by
+            cases hf : us.filter (fun w => ((ctorBit w) &&& m) != 0) with
+            | nil => rw [hf] at hmem; exact absurd hmem (by simp)
+            | cons x r => rfl
+          simp only [tyMeetAtom, hne, Bool.false_eq_true, if_false]
+          exact List.contains_iff_mem.mpr hmem
+      | oneOf ws =>
+          have hall : ws.all us.contains = Bool.true := by simpa only [tmovesAtom] using hle
+          have hball : ∀ w ∈ ws, ((ctorBit w) &&& m) ≠ 0 := by
+            intro w hw
+            have := (List.all_eq_true.mp (by simpa only [tmovesAtom] using hm)) w hw
+            simpa only [tmovesAtom, bne_iff_ne] using this
+          cases hf : us.filter (fun w => ((ctorBit w) &&& m) != 0) with
+          | nil =>
+              cases ws with
+              | nil =>
+                  simp [tyMeetAtom, hf, tmovesAtom]
+              | cons w rest =>
+                  exfalso
+                  have hwu : w ∈ us := List.contains_iff_mem.mp
+                    ((List.all_eq_true.mp hall) w (by simp))
+                  have hmem : w ∈ us.filter (fun w => ((ctorBit w) &&& m) != 0) :=
+                    List.mem_filter.mpr ⟨hwu, bne_iff_ne.mpr (hball w (by simp))⟩
+                  rw [hf] at hmem
+                  exact absurd hmem (by simp)
+          | cons x r =>
+              simp only [tyMeetAtom, hf, List.isEmpty_cons, Bool.false_eq_true,
+                if_false, tmovesAtom, List.all_eq_true]
+              intro w hw
+              have hwu : w ∈ us := List.contains_iff_mem.mp
+                ((List.all_eq_true.mp hall) w hw)
+              have hmem : w ∈ us.filter (fun z => ((ctorBit z) &&& m) != 0) :=
+                List.mem_filter.mpr ⟨hwu, bne_iff_ne.mpr (hball w hw)⟩
+              rw [hf] at hmem
+              exact List.contains_iff_mem.mpr hmem
+      | val _ | desc _ | descAny | notPresent | union _ | complN _ | complT =>
+          simp only [tmovesAtom] at hle; exact Bool.noConfusion hle
+  | desc _ | descAny | notPresent | complN _ | complT =>
+      cases a₀ <;> first
+        | (simp only [tmovesAtom] at hm; exact Bool.noConfusion hm)
+        | (simp only [tmovesAtom] at hle; exact Bool.noConfusion hle)
+  | union ps =>
+      cases a₀ <;> simp only [tmovesAtom] at hle <;> exact Bool.noConfusion hle
+
