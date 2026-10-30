@@ -1346,3 +1346,95 @@ theorem tmovesAtom_meet_val (a₀ s₀ : STy) (m : Nat)
   | union ps =>
       cases a₀ <;> simp only [tmovesAtom] at hle <;> exact Bool.noConfusion hle
 
+
+/-- Intro rule for tmoves: exhibit a partner atom per LHS atom. -/
+theorem tmoves_intro (a X : STy)
+    (h : ∀ a₀ ∈ atoms a, ∃ k ∈ atoms X, tmovesAtom a₀ k = Bool.true) :
+    tmoves a X = Bool.true := by
+  simp only [tmoves, List.all_eq_true]
+  intro a₀ ha₀
+  obtain ⟨k, hk, hle⟩ := h a₀ ha₀
+  simp only [List.any_eq_true]
+  exact ⟨k, hk, hle⟩
+
+/-- tyMeetAtom results are union-free singletons of themselves. -/
+theorem meetAtom_atoms_self (s t : STy) :
+    atoms (tyMeetAtom s t) = [tyMeetAtom s t] := by
+  cases s <;> cases t <;>
+    simp only [tyMeetAtom, atoms] <;>
+    first
+      | rfl
+      | (split <;> first
+          | rfl
+          | (simp only [atoms])
+          | (simp only [atoms, List.isEmpty_cons, Bool.not_false]))
+
+/-- Elements of a kept list appear among the atoms of its union. -/
+theorem ofAtoms_mem (L : List STy) (hL : ∀ k ∈ L, atoms k = [k]) :
+    ∀ k ∈ L, k ∈ atoms (ofAtoms L) := by
+  intro k hk
+  cases L with
+  | nil => exact absurd hk (by simp)
+  | cons x r =>
+      cases r with
+      | nil =>
+          obtain rfl := List.mem_singleton.mp hk
+          simp only [ofAtoms]
+          rw [hL k (by simp)]
+          exact List.mem_singleton.mpr rfl
+      | cons y r' =>
+          simp only [ofAtoms, atoms, List.mem_flatMap]
+          refine ⟨k, hk, ?_⟩
+          rw [hL k hk]
+          exact List.mem_singleton.mpr rfl
+
+/-- Meet soundness, mask tests (full type level). -/
+theorem tmoves_meet_val (a S : STy) (m : Nat) (hne : atomsNE a = Bool.true)
+    (hS : tmoves a S = Bool.true) (hm : tmoves a (STy.val m) = Bool.true) :
+    tmoves a (tyMeet S (STy.val m)) = Bool.true := by
+  refine tmoves_intro a _ ?_
+  intro a₀ ha₀
+  have hn₀ : tyNonempty a₀ = Bool.true :=
+    (List.all_eq_true.mp hne) a₀ ha₀
+  have hS' := (List.all_eq_true.mp hS) a₀ ha₀
+  simp only [List.any_eq_true] at hS'
+  obtain ⟨s₀, hs₀, hle₀⟩ := hS'
+  have hm₀ : tmovesAtom a₀ (STy.val m) = Bool.true := by
+    have hany := (List.all_eq_true.mp hm) a₀ ha₀
+    simp only [List.any_eq_true] at hany
+    obtain ⟨b, hb, hbe⟩ := hany
+    have hbv : b = STy.val m := by
+      cases b with
+      | val n =>
+          exact List.mem_singleton.mp (by simpa only [atoms] using hb)
+      | isValue _ | oneOf _ | desc _ | descAny | notPresent
+      | union _ | complN _ | complT =>
+          exact absurd hb (by simp [atoms])
+    subst hbv
+    exact hbe
+  have hgrid := tmovesAtom_meet_val a₀ s₀ m hle₀ hm₀
+  have hkeep : tyNonempty (tyMeetAtom s₀ (STy.val m)) = Bool.true :=
+    tmovesAtom_le_ne _ _ hgrid hn₀
+  refine ⟨tyMeetAtom s₀ (STy.val m), ?_, hgrid⟩
+  have hself := meetAtom_atoms_self s₀ (STy.val m)
+  have hLcond : ∀ k ∈ (atoms S).flatMap
+      (fun s => (atoms (STy.val m)).filterMap
+        (fun b => let mm := tyMeetAtom s b
+                  if tyNonempty mm then some mm else none)),
+      atoms k = [k] := by
+    intro k hk
+    simp only [List.mem_flatMap] at hk
+    obtain ⟨s₁, _, hk₁⟩ := hk
+    simp only [List.mem_filterMap] at hk₁
+    obtain ⟨b, _, hfb⟩ := hk₁
+    split at hfb
+    · injection hfb with hk'
+      subst hk'
+      exact meetAtom_atoms_self s₁ b
+    · exact absurd hfb (by simp)
+  exact ofAtoms_mem _ hLcond _ (by
+    simp only [List.mem_flatMap]
+    exact ⟨s₀, hs₀, by
+      simp only [List.mem_filterMap]
+      exact ⟨STy.val m, by simp [atoms], by
+        rw [if_pos hkeep]⟩⟩)
