@@ -283,7 +283,7 @@ termination_by es => sizeOf es
 def typeOfE (sigs : SigTable) (Γ : TyEnv) : Expr → Option STy
   | .nv x => tyLookup Γ x
   | .nat n => some (.isValue (.number (↑n : Int)))
-  | .const v => some (.isValue v)
+  | .const v => some (typeOfV v)
   | .varNotPresent _ => some (.val boolV)
   | .call f as =>
       match sigFind sigs f with

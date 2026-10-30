@@ -181,13 +181,37 @@ def machineRet (sigs : SigTable) (fs : List Fr) : STy :=
 
    fell is ILL-TYPED: with this definition, preservation alone
    already implies progress. -/
+/- Program-side literal well-formedness: every location referenced by
+    a constant literal still to be executed is inside the heap region
+    and resolves. Syntax is the only channel by which a location can
+    enter the runtime state without having been reachable before (the
+    emu-alg surface never embeds object literals, so corpus programs
+    satisfy this vacuously; the conjunct covers the model's degenerate
+    instructions). -/
+def instrWf (heap : Heap) (nl : Nat) (i : Instr) : Prop :=
+  match i with
+  | .kEval (.const v) =>
+      ∀ l ∈ locsOf v, l < nl ∧ (heap l).isSome = Bool.true
+  | .kForBody _ vs _ =>
+      ∀ l ∈ vs.flatMap locsOf, l < nl ∧ (heap l).isSome = Bool.true
+  | _ => True
+
+def instrsWf (heap : Heap) (nl : Nat) : List Instr → Prop
+  | [] => True
+  | i :: rest => instrWf heap nl i ∧ instrsWf heap nl rest
+
+def framesWf (heap : Heap) (nl : Nat) : List Fr → Prop
+  | [] => True
+  | f :: fs => instrsWf heap nl f.stmts ∧ framesWf heap nl fs
+
 def stateOk (sigs : SigTable) (r : STy) (m : FM) : Prop :=
   match m with
   | .frames fs heap nl =>
       fs.isEmpty = Bool.false
       ∧ framesOk sigs fs ∧ heapOk heap nl fs
-      ∧ ∃ ht, heapTyOk heap ht nl
+      ∧ (∃ ht, heapTyOk heap ht nl)
       ∧ machineRet sigs fs = r
+      ∧ framesWf heap nl fs
   | .fdone v _ _ _ _ =>
       -- the final value: normal compl-wrapped payload ⊑ r, or a throw
       match typeOfV v with
@@ -979,24 +1003,16 @@ theorem stackLe_length : ∀ (σ' σ : List STy), stackLe σ' σ → σ'.length 
     checkSeq's recursion; these computational identities are the
     lockstep spine of the subject-reduction assembly. -/
 
-/-- kEval (const v): the checker pushes `isValue v`, the machine pushes
-    `v` whose canonical type is `isValue v` — IDENTICAL for non-
-    completion literals (completion literals never occur in the
-    corpus; the static side would type them `isValue (compl …)` while
-    the runtime abstraction is `complN …`). -/
+/-- kEval (const v): the checker pushes `typeOfV v`, the machine pushes
+    `v` whose canonical type is `typeOfV v` — IDENTICAL for every
+    value now that typeOfE (const v) is the canonical abstraction
+    (this closed the latent divergence for desc/compl literals). -/
 theorem checkSeq_kEval_const (sigs : SigTable) (r : STy) (w : World)
-    (rest : List Instr) (v : JSValue)
-    (hv : ∀ b x, v ≠ JSValue.compl b x) (hv2 : ∀ d, v ≠ JSValue.descV d) :
+    (rest : List Instr) (v : JSValue) :
     checkSeq sigs r [w] (.kEval (.const v) :: rest)
       = checkSeq sigs r [{ w with σ := typeOfV v :: w.σ }] rest := by
-  have hvv : typeOfV v = STy.isValue v := by
-    cases v with
-    | compl b x => exact absurd rfl (hv b x)
-    | descV d => exact absurd rfl (hv2 d)
-    | undefined | null | boolean _ | number _ | str _
-    | listV _ | obj _ => rfl
-  rw [hvv]
-  simp [checkSeq, testType, typeOfE]
+  simp only [checkSeq, testType, typeOfE]
+  rfl
 
 /-- kEval (nat n): both sides push the singleton number type. -/
 theorem checkSeq_kEval_nat (sigs : SigTable) (r : STy) (w : World)
@@ -1565,3 +1581,75 @@ theorem tmovesAtom_meet_isValue (a₀ s₀ : STy) (w : JSValue)
           simp only [tmovesAtom] at hle; exact Bool.noConfusion hle
   | union ps =>
       cases a₀ <;> simp only [tmovesAtom] at hle <;> exact Bool.noConfusion hle
+
+/- ## First per-arm preservation lemma. -/
+
+theorem machineRet_cons_eq (sigs : SigTable) (f g : Fr) (fs : List Fr)
+    (hr : f.ret = g.ret) :
+    machineRet sigs (f :: fs) = machineRet sigs (g :: fs) := by
+  unfold machineRet
+  cases fs with
+  | nil =>
+      show sigRetTy sigs f.ret = sigRetTy sigs g.ret
+      rw [hr]
+  | cons x xs => simp only [List.getLast?_cons_cons]
+
+/-- One machine step preserves the state typing: the const-literal
+    push. The certificate's own continuation (via the unfolding
+    identity) IS the new frame's check; the literal's locations enter
+    the heap invariant through instrsWf (syntax is the only channel by
+    which a location can appear without prior reachability). -/
+theorem step_pres_kEval_const (sigs : SigTable) (reg : AOReg) (r : STy)
+    (env : Env) (eval : List JSValue) (ret : «String»)
+    (fs : List Fr) (heap : Heap) (nl : Nat)
+    (rest : List Instr) (v : JSValue)
+    (h : stateOk sigs r (FM.frames
+        (⟨.kEval (.const v) :: rest, env, eval, ret⟩ :: fs) heap nl)) :
+    stateOk sigs r (fstep reg (FM.frames
+        (⟨.kEval (.const v) :: rest, env, eval, ret⟩ :: fs) heap nl)) := by
+  have hstep : fstep reg (FM.frames
+      (⟨.kEval (.const v) :: rest, env, eval, ret⟩ :: fs) heap nl)
+      = FM.frames (⟨rest, env, v :: eval, ret⟩ :: fs) heap nl := rfl
+  rw [hstep]
+  obtain ⟨hne, hframes, hheap, hht, hret, hwf⟩ := h
+  simp only [framesOk, framesOkFrom] at hframes
+  obtain ⟨hf0, hft⟩ := hframes
+  simp only [frameOk] at hf0
+  obtain ⟨_, hcheck⟩ := hf0
+  simp only [absStack, inflight, List.nil_append] at hcheck
+  have hid : checkSeq sigs (sigRetTy sigs ret)
+      [{ Γ := envTyOf env, σ := stackTyOf eval }] (.kEval (.const v) :: rest)
+      = checkSeq sigs (sigRetTy sigs ret)
+        [{ Γ := envTyOf env, σ := typeOfV v :: stackTyOf eval }] rest :=
+    checkSeq_kEval_const _ _ _ _ v
+  cases hb : checkSeq sigs (sigRetTy sigs ret)
+      [{ Γ := envTyOf env, σ := stackTyOf eval }] (.kEval (.const v) :: rest) with
+  | flows fb =>
+      rw [hb] at hcheck
+      rw [hid] at hb
+      obtain ⟨hwf1, hwf2⟩ := hwf
+      obtain ⟨hhead, hrest⟩ := hwf1
+      have hmr := machineRet_cons_eq sigs
+        (⟨rest, env, v :: eval, ret⟩ : Fr)
+        (⟨.kEval (.const v) :: rest, env, eval, ret⟩ : Fr) fs rfl
+      exact ⟨rfl,
+        ⟨⟨Or.inl Option.isNone_none, by
+            show (match checkSeq sigs (sigRetTy sigs ret)
+              [{ Γ := envTyOf env, σ := typeOfV v :: stackTyOf eval }] rest with
+              | .flows fb => terminal fb = Bool.true
+              | _ => False)
+            rw [hb]
+            exact hcheck⟩, hft⟩,
+        ⟨by
+            intro l hl
+            simp only [List.flatMap_cons, List.append_assoc, List.mem_append] at hl
+            rcases hl with hl | hl
+            · exact hhead l hl
+            · exact hheap.1 l
+                ((List.mem_append.mpr hl) : l ∈ (List.flatMap locsOf eval
+                  ++ List.flatMap locsOf (List.map Prod.snd env))), hheap.2⟩,
+        hht,
+        ⟨hmr.trans hret, ⟨hrest, hwf2⟩⟩⟩
+  | reject s w' =>
+      rw [hb] at hcheck
+      exact False.elim hcheck
