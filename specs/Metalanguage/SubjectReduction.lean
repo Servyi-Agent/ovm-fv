@@ -1438,3 +1438,130 @@ theorem tmoves_meet_val (a S : STy) (m : Nat) (hne : atomsNE a = Bool.true)
       simp only [List.mem_filterMap]
       exact ⟨STy.val m, by simp [atoms], by
         rw [if_pos hkeep]⟩⟩)
+
+/-- Meet soundness for absent-variable tests. -/
+theorem tmovesAtom_meet_notPresent (a₀ s₀ : STy)
+    (hle : tmovesAtom a₀ s₀ = Bool.true)
+    (hm : tmovesAtom a₀ .notPresent = Bool.true) :
+    tmovesAtom a₀ (tyMeetAtom s₀ .notPresent) = Bool.true := by
+  cases a₀ with
+  | notPresent =>
+      cases s₀ with
+      | notPresent => rfl
+      | val _ | isValue _ | oneOf _ | desc _ | descAny
+      | union _ | complN _ | complT =>
+          simp only [tmovesAtom] at hle; exact Bool.noConfusion hle
+  | val _ | isValue _ | oneOf _ | desc _ | descAny
+  | union _ | complN _ | complT =>
+      simp only [tmovesAtom] at hm; exact Bool.noConfusion hm
+
+/-- Meet soundness for singleton tests, atom level. -/
+theorem tmovesAtom_meet_isValue (a₀ s₀ : STy) (w : JSValue)
+    (hle : tmovesAtom a₀ s₀ = Bool.true)
+    (hm : tmovesAtom a₀ (STy.isValue w) = Bool.true) :
+    tmovesAtom a₀ (tyMeetAtom s₀ (STy.isValue w)) = Bool.true := by
+  cases s₀ with
+  | isValue v =>
+      cases a₀ with
+      | isValue x =>
+          have h1 : x = v := eq_of_beq (by simpa only [tmovesAtom] using hle)
+          have h2 : x = w := eq_of_beq (by simpa only [tmovesAtom] using hm)
+          have hvw : v = w := by rw [← h1]; exact h2
+          rw [hvw] at hle ⊢
+          have hxw : x = w := eq_of_beq (by simpa only [tmovesAtom] using hle)
+          rw [hxw]
+          simp only [tyMeetAtom, beq_self_eq_true, if_true, tmovesAtom,
+            beq_self_eq_true]
+      | oneOf xs =>
+          cases xs with
+          | nil =>
+              simp only [tyMeetAtom]
+              split <;> simp [tmovesAtom]
+          | cons x r =>
+              have h1 : x = v := eq_of_beq
+                ((List.all_eq_true.mp (by simpa only [tmovesAtom] using hle)) x (by simp))
+              have h2 : x = w := eq_of_beq
+                ((List.all_eq_true.mp (by simpa only [tmovesAtom] using hm)) x (by simp))
+              have hvw : v = w := by rw [← h1]; exact h2
+              rw [hvw] at hle ⊢
+              simp only [tyMeetAtom, beq_self_eq_true, if_true]
+              simpa only [tmovesAtom] using hle
+      | val _ =>
+          simp only [tmovesAtom] at hm; exact Bool.noConfusion hm
+      | desc _ | descAny | notPresent | union _ | complN _ | complT =>
+          simp only [tmovesAtom] at hle; exact Bool.noConfusion hle
+  | val k =>
+      cases a₀ with
+      | isValue x =>
+          have hxw : x = w := eq_of_beq (by simpa only [tmovesAtom] using hm)
+          rw [hxw] at hle hm ⊢
+          have hcond : (((ctorBit w) &&& k) != 0) = Bool.true := by
+            simpa only [tmovesAtom, bne_iff_ne] using hle
+          simp only [tyMeetAtom, hcond, if_pos, tmovesAtom, beq_self_eq_true]
+      | oneOf xs =>
+          cases xs with
+          | nil =>
+              simp only [tyMeetAtom]
+              split <;> simp [tmovesAtom]
+          | cons x r =>
+              have hxw : x = w := eq_of_beq
+                ((List.all_eq_true.mp (by simpa only [tmovesAtom] using hm)) x (by simp))
+              rw [hxw] at hle hm ⊢
+              have hcond : (((ctorBit w) &&& k) != 0) = Bool.true := by
+                have hlek : tmovesAtom (STy.isValue w) (STy.val k) = Bool.true :=
+                  (List.all_eq_true.mp (by simpa only [tmovesAtom] using hle)) w
+                    (by simp)
+                simpa only [tmovesAtom, bne_iff_ne] using hlek
+              simp only [tyMeetAtom, hcond, if_pos]
+              exact hm
+      | val _ =>
+          simp only [tmovesAtom] at hm; exact Bool.noConfusion hm
+      | desc _ | descAny | notPresent | union _ | complN _ | complT =>
+          simp only [tmovesAtom] at hle; exact Bool.noConfusion hle
+  | oneOf us =>
+      cases a₀ with
+      | isValue x =>
+          have hxw : x = w := eq_of_beq (by simpa only [tmovesAtom] using hm)
+          rw [hxw] at hle hm ⊢
+          have hc : us.contains w = Bool.true := by
+            simpa only [tmovesAtom] using hle
+          simp only [tyMeetAtom, hc, if_pos, tmovesAtom, beq_self_eq_true]
+      | oneOf xs =>
+          cases xs with
+          | nil =>
+              simp only [tyMeetAtom]
+              split <;> simp [tmovesAtom]
+          | cons x r =>
+              have hxw : x = w := eq_of_beq
+                ((List.all_eq_true.mp (by simpa only [tmovesAtom] using hm)) x (by simp))
+              rw [hxw] at hle hm ⊢
+              have hc : us.contains w = Bool.true := by
+                have hxu : us.contains w = Bool.true :=
+                  (List.all_eq_true.mp (by simpa only [tmovesAtom] using hle)) w (by simp)
+                exact hxu
+              simp only [tyMeetAtom, hc, if_pos]
+              exact hm
+      | val _ =>
+          simp only [tmovesAtom] at hm; exact Bool.noConfusion hm
+      | desc _ | descAny | notPresent | union _ | complN _ | complT =>
+          simp only [tmovesAtom] at hle; exact Bool.noConfusion hle
+  | desc _ | descAny =>
+      cases a₀ with
+      | desc _ | descAny =>
+          simp only [tmovesAtom] at hm; exact Bool.noConfusion hm
+      | val _ | isValue _ | oneOf _ | notPresent | union _ | complN _ | complT =>
+          simp only [tmovesAtom] at hle; exact Bool.noConfusion hle
+  | notPresent =>
+      cases a₀ with
+      | notPresent =>
+          simp only [tmovesAtom] at hm; exact Bool.noConfusion hm
+      | val _ | isValue _ | oneOf _ | desc _ | descAny | union _ | complN _ | complT =>
+          simp only [tmovesAtom] at hle; exact Bool.noConfusion hle
+  | complN _ | complT =>
+      cases a₀ with
+      | complN _ | complT =>
+          simp only [tmovesAtom] at hm; exact Bool.noConfusion hm
+      | val _ | isValue _ | oneOf _ | desc _ | descAny | notPresent | union _ =>
+          simp only [tmovesAtom] at hle; exact Bool.noConfusion hle
+  | union ps =>
+      cases a₀ <;> simp only [tmovesAtom] at hle <;> exact Bool.noConfusion hle
