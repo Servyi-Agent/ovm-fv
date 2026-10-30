@@ -134,6 +134,8 @@ def tyMeetAtom : STy → STy → STy
   | .oneOf vs, .isValue w => if vs.contains w then .isValue w else .val 0
   | .isValue v, .val m =>
       if ((ctorBit v) &&& m) != 0 then .isValue v else .val 0
+  | .val m, .isValue w =>
+      if ((ctorBit w) &&& m) != 0 then .isValue w else .val 0
   | .oneOf vs, .val m =>
       let kept := vs.filter (fun v => ((ctorBit v) &&& m) != 0)
       if kept.isEmpty then .val 0 else .oneOf kept

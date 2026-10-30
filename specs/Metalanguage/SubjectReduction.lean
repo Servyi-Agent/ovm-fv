@@ -1145,3 +1145,81 @@ theorem tmovesAtom_le_ne (a b : STy) (h : tmovesAtom a b = Bool.true)
           exact tmovesAtom_le_ne a₂ t h hne
       | val _ | isValue _ | oneOf _ | desc _ | descAny | notPresent | union _ | complT =>
           simp only [tmovesAtom] at h; exact Bool.noConfusion h
+
+/- ## Bit algebra + meet soundness. -/
+
+theorem pow2_land_eq (p k : Nat) (hk : Nat.testBit k p = true) :
+    (2 ^ p &&& k) = 2 ^ p := by
+  apply Nat.eq_of_testBit_eq
+  intro i
+  rw [Nat.testBit_and, Nat.testBit_two_pow]
+  by_cases hpi : p = i
+  · subst hpi
+    simp only [Bool.and_true]
+    exact hk
+  · have hd : (decide (p = i) : Bool) = false := by simp [hpi]
+    rw [hd]
+    rfl
+
+theorem pow2_land (p k : Nat) : (2 ^ p &&& k) = 0 ∨ (2 ^ p &&& k) = 2 ^ p := by
+  by_cases hk : Nat.testBit k p = true
+  · exact Or.inr (pow2_land_eq p k hk)
+  · left
+    by_cases hz : (2 ^ p &&& k) = 0
+    · exact hz
+    · exfalso
+      obtain ⟨i, hi⟩ := Nat.exists_testBit_of_ne_zero hz
+      have h1 : ((decide (p = i)) && Nat.testBit k i) = true := by
+        have hh := hi
+        rw [Nat.testBit_and, Nat.testBit_two_pow] at hh
+        exact hh
+      rw [Bool.and_eq_true, decide_eq_true_eq] at h1
+      obtain ⟨hip, hkb⟩ := h1
+      subst hip
+      exact hk hkb
+
+theorem hasBit_pow2_trans (p k m : Nat) (h1 : (2 ^ p &&& k) ≠ 0)
+    (h2 : (2 ^ p &&& m) ≠ 0) : (2 ^ p &&& (k &&& m)) ≠ 0 := by
+  rcases pow2_land p k with hc | hc
+  · exact absurd hc h1
+  · rcases pow2_land p m with hd | hd
+    · exact absurd hd h2
+    · rw [← Nat.and_assoc, hc, hd]
+      exact Nat.ne_of_gt (Nat.two_pow_pos p)
+
+theorem ctorBit_pow2 (v : JSValue) :
+    (∃ p, ctorBit v = 2 ^ p) ∨ ctorBit v = 0 := by
+  cases v with
+  | undefined => exact Or.inl ⟨0, rfl⟩
+  | null => exact Or.inl ⟨1, rfl⟩
+  | boolean b => cases b with
+    | true => exact Or.inl ⟨2, rfl⟩
+    | false => exact Or.inl ⟨3, rfl⟩
+  | number _ => exact Or.inl ⟨4, rfl⟩
+  | str _ => exact Or.inl ⟨5, rfl⟩
+  | obj _ => exact Or.inl ⟨6, rfl⟩
+  | listV _ => exact Or.inl ⟨7, rfl⟩
+  | descV _ => exact Or.inl ⟨8, rfl⟩
+  | compl _ _ => exact Or.inr rfl
+
+/-- All atoms nonempty (the runtime side typeOfV satisfies this). -/
+def atomsNE (a : STy) : Bool := (atoms a).all tyNonempty
+
+theorem maskSub_inter (j k m : Nat) (h1 : maskSub j k = Bool.true)
+    (h2 : maskSub j m = Bool.true) : maskSub j (k &&& m) = Bool.true := by
+  have e1 : j = j &&& k := by
+    have := Nat.and_le_left (n := j) (m := k)
+    have := (of_decide_eq_true h1)
+    omega
+  have e2 : j = j &&& m := by
+    have := Nat.and_le_left (n := j) (m := m)
+    have := (of_decide_eq_true h2)
+    omega
+  unfold maskSub
+  refine decide_eq_true ?_
+  have hcalc : j &&& (k &&& m) = j := by
+    calc j &&& (k &&& m) = (j &&& k) &&& m := (Nat.and_assoc j k m).symm
+      _ = j &&& m := by conv => rhs; rw [e1]
+      _ = j := e2.symm
+  have hle : j &&& (k &&& m) ≤ j := Nat.and_le_left (n := j) (m := k &&& m)
+  omega
