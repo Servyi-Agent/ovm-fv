@@ -1653,3 +1653,59 @@ theorem step_pres_kEval_const (sigs : SigTable) (reg : AOReg) (r : STy)
   | reject s w' =>
       rw [hb] at hcheck
       exact False.elim hcheck
+
+/- ## Preservation status ledger.
+
+    PROVEN (exact-match family - the runtime world after the step IS
+    the certificate's own continuation world; no monotonicity needed):
+    * step_pres_kEval_const          (the template case)
+
+    NOT YET PROVEN - collected with the missing ingredient:
+
+    Exact-match, template-extractable (the identities exist; packaging
+    into a common step_pres_exact master hit record-projection /
+    anonymous-constructor whnf friction - mechanical, next session):
+    * kEval (nat n)      identity: checkSeq_kEval_nat (proven)
+    * kPrim1 pWrapC      identity: new (needs stepWorlds pWrapC unfold)
+    * kUnwrap            identity: new (normal completions only; the
+                         machine arm accepts abrupt compls whose static
+                         twin is the dead val anyV path)
+    * kPop               identity: checkSeq_kPop (proven)
+    * kSet x             identity: checkSeq_kSet (proven); envTyOf cons
+    * kRet (bottom frame pops to fdone): extraction from the kRet-arm's
+                         payload check (tmoves p r where typeOfV v =
+                         complN p); the machineRet is the frame destiny
+    * fdone/fell absorbing steps, frames-nil, stmts-nil: vacuous/trivial
+    * kEval (nv x) with lookup = some v: identity needs envTyOf_lookup
+                         INSIDE the mapM-pushed world (mapM-singleton
+                         beta before the tyLookup rewrite); unbound is
+                         vacuous via the checker's reject
+
+    Refinement cases (need the realization invariant / checkSeq_mono,
+    powered by tmoves_meet_val + the remove side still to come):
+    * kPrim1 p for p != pWrapC: checker pushes val boolV, machine holds
+      isValue (boolean b) - a strict refinement, not equality
+    * kEval (varNotPresent x): same val boolV vs singleton boolean
+    * kTest: verdict val cFalse/cTrue vs isValue (boolean abrupt)
+    * kIte: dispatch precision (both-verdict worlds split by the checker)
+    * kMkList: val cList vs isValue (listV vs)
+    * kNewSlot: val cObj vs isValue (obj nl) + heap-extension lemmas
+    * kAssert: true-branch continuation under the refined verdict
+    * kRet with caller frames: in-flight delivery refinement
+      (complN p ⊑ complN (sigRetTy callee))
+
+    Expansion cases (machine rewrites kEval e into sub-evaluation
+    instruction lists; the checker instead splits worlds or consults
+    the signature - needs the world-set realization argument over the
+    EXPANDED prefix):
+    * kEval e for the is-family tests (isObject, isU, isType, ...):
+      machine: kEval e' :: kPrim1 p :: rest; checker: splitWorlds
+    * kEval (call f args): arg decomposition + kCall + kTest/kIte
+      self-test idiom; callee frames via registryCertified (V ts ⊑ ps)
+    * kEval (imeth ...): MOP dispatch; OrdinaryGet via registry
+    * kEval (ifield ...): pDescField result typing
+    * kEval (listE es): element decomposition + kMkList
+
+    Loop family (stack neutrality under refinement):
+    * kRepeatWhile / kRepeatTest / kForStart / kForBody
+-/
