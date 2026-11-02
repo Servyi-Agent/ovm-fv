@@ -217,8 +217,54 @@ def goodArg : List Instr := badArg
 def bug3 : List Instr :=
   [.kEval (.const (JSValue.number 5)), .kIte [] []]
 #eval typecheckSeq corpusSigs (.val langV) [] bug3
-'''
 
+/- ## Reference machine equivalence (exit-checked).
+    Reference.lean is re-exported by the root metalanguage module. -/
+
+def theRefReg : RefReg := fun f =>
+  match f with
+  | .isCallable => some (["arg"], build isCallable6_2_5_1)
+  | .isConstructor => some (["argument"], build isConstructor6_2_5_2)
+  | .isDataDescriptor => some (["Desc"], build isDataDescriptor6_2_6_2)
+  | .isAccessorDescriptor => some (["Desc"], build isAccessorDescriptor6_2_6_3)
+  | .toPrimitive => some (["input", "preferredType"],
+      build toPrimitive7_1_1)
+  | .ordinaryToPrimitive => some (["obj", "hint"],
+      build ordinaryToPrimitive7_1_1_1)
+  | .toObject => some (["value"], build toObject7_1_13)
+  | .getV => some (["V", "P"], build getV7_3_1)
+  | .getMethod => some (["V", "P"], build getMethod7_3_10)
+  | .ordinaryGet => some (["O", "P", "Receiver"],
+      build ordinaryGet7_3_2)
+  | .get | .call => none
+
+/-- Reference vs machine: same terminal outcome on the same program.
+    timeout counts as failure (the fuel budget is generous). -/
+def refAgree (reg : RefReg) (n : Nat) (p : Prog)
+    (m : FM) : Bool :=
+  match refRun reg n p [] emptyHeap 0, m with
+  | .done v _ _, .fdone (.compl Bool.false v') _ _ _ _ => v == v'
+  | .threw v _ _, .fdone (.compl Bool.true v') _ _ _ _ => v == v'
+  | .fell _ _, .fell _ _ _ _ => Bool.true
+  | _, _ => Bool.false
+
+def refDemos : Bool :=
+  refAgree theRefReg 600 (build exampleF)
+    (fsteps theReg 300 (fmOf (build exampleF)))
+  && refAgree theRefReg 600 (build callDemoF)
+    (fsteps theReg 300 (fmOf (build callDemoF)))
+  && refAgree theRefReg 600 (build retDemoF)
+    (fsteps theReg 300 (fmOf (build retDemoF)))
+  && refAgree theRefReg 600 (build primDemoF)
+    (fsteps theReg 300 (fmOf (build primDemoF)))
+  && refAgree theRefReg 600 (build forEachDemoF)
+    (fsteps theReg 300 (fmOf (build forEachDemoF)))
+  && refAgree theRefReg 900 (build otpDemoF)
+    (fsteps theReg 300 (fmOf (build otpDemoF)))
+
+#eval refDemos
+example : refDemos = Bool.true := by native_decide
+'''
 out = ["import metalanguage", ""]
 entries = []
 for f in files:
