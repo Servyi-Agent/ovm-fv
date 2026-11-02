@@ -357,8 +357,16 @@ def popTyN : Nat → STy → List STy → Option (List STy)
     ps ⊑ tops direction was inverted: it demanded stack supersets,
     which singleton (runtime-precise) worlds can never satisfy and
     which does not chain under refinement. -/
+/- Argument check (arg-order): the top-n stack types REVERSED (the
+    machine pushes args in order, so the top is the LAST argument) are
+    pointwise below the callee's parameters. The previous
+    ps.reverse on the right misaligned the pairing for n >= 2 (it
+    compared the kth-from-top argument with the kth parameter); it
+    was latent because compiled programs never contain a bare kCall
+    instruction - the static check goes through kEval(call)'s
+    signature arm - so the corpus never exercised it. -/
 def popArgs (ps σ : List STy) : Bool :=
-  σ.length ≥ ps.length && leList (σ.take ps.length).reverse ps.reverse
+  σ.length ≥ ps.length && leList (σ.take ps.length).reverse ps
 
 def primTys (p : Prim) : Option (STy × STy) :=
   match p with

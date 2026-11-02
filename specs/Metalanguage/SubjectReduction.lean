@@ -246,13 +246,37 @@ def closedRegistry (sigs : SigTable) (reg : AOReg) : Prop :=
    certified at every argument typing that satisfies the signature
    (pointwise: equal, or the parameter is `any`). -/
 
+/-- The certificate a registry entry carries at a given argument
+    typing. -/
+def certifies (sigs : SigTable) (name : «String») (ps : List «String»)
+    (ts : List STy) (prog : Prog) : Prop :=
+  match checkSeq sigs (sigRetTy sigs name)
+      [{ Γ := zipTy ps ts, σ := [] }] (compileSteps prog) with
+  | .flows fb => terminal fb = Bool.true
+  | _ => False
+
+theorem certifies_flows_elim {sigs : SigTable} {name : «String»}
+    {ps : List «String»} {ts : List STy} {prog : Prog}
+    (h : certifies sigs name ps ts prog) :
+    ∃ fb, checkSeq sigs (sigRetTy sigs name)
+        [{ Γ := zipTy ps ts, σ := [] }] (compileSteps prog)
+        = TCResult.flows fb ∧ terminal fb = Bool.true := by
+  cases hb : checkSeq sigs (sigRetTy sigs name)
+      [{ Γ := zipTy ps ts, σ := [] }] (compileSteps prog) with
+  | flows fb =>
+      simp only [certifies] at h
+      rw [hb] at h
+      exact ⟨fb, rfl, h⟩
+  | reject s w =>
+      simp only [certifies] at h
+      rw [hb] at h
+      exact False.elim h
+
 def registryCertified (sigs : SigTable) (reg : AOReg) : Prop :=
   ∀ name ps prog, (name, (ps, prog)) ∈ reg →
+    (∀ (heap : Heap) (nl : Nat), instrsWf heap nl (compileSteps prog)) ∧
     ∀ ts, leList ts (sigParams sigs name) →
-      (match checkSeq sigs (sigRetTy sigs name)
-              [{ Γ := zipTy ps ts, σ := [] }] (compileSteps prog) with
-       | .flows fb => terminal fb = Bool.true
-       | _ => False)
+      certifies sigs name ps ts prog
 
 
 /- The subtype-transitivity and stack-subtyping lemmas are re-queued
@@ -1870,3 +1894,361 @@ theorem sr_kEval_const (sigs : SigTable) (reg : AOReg) (r : STy)
       (⟨.kEval (.const v) :: rest, env, eval, ret⟩ :: fs) heap nl) :=
   fun _ _ h => subject_reduction_kEval_const sigs reg r env eval ret
     fs heap nl rest v h
+
+/- ## Plumbing for the call family. -/
+
+theorem leList_length : ∀ (as bs : List STy), leList as bs = Bool.true →
+    as.length = bs.length := by
+  intro as bs h
+  induction as generalizing bs with
+  | nil =>
+      cases bs with
+      | nil => rfl
+      | cons b bs' => exact absurd h (by simp [leList])
+  | cons a rest ih =>
+      cases bs with
+      | nil => exact absurd h (by simp [leList])
+      | cons b bs' =>
+          simp only [leList, Bool.and_eq_true] at h
+          have h3 := ih bs' h.2
+          simp only [List.length_cons]
+          omega
+
+theorem leList_snoc {xs ys : List STy} {a b : STy} :
+    leList (xs ++ [a]) (ys ++ [b]) = (tmoves a b && leList xs ys) := by
+  induction xs generalizing ys with
+  | nil =>
+      cases ys with
+      | nil => rfl
+      | cons y ys' => simp [leList]
+  | cons x xs' ih =>
+      cases ys with
+      | nil => simp [leList]
+      | cons y ys' =>
+          simp only [List.cons_append, leList, ih]
+          simp [Bool.and_assoc, Bool.and_comm, Bool.and_left_comm]
+
+theorem leList_nil_false (X : List STy) (h : X ≠ []) :
+    leList [] X = Bool.false := by
+  cases X with
+  | nil => exact absurd rfl h
+  | cons x xs => rfl
+
+theorem rev_cons_ne_nil {α : Type} (b : α) (bs : List α) :
+    (b :: bs).reverse ≠ [] := by
+  intro hc
+  have h1 : (b :: bs).reverse.length = (b :: bs).length := List.length_reverse
+  rw [hc] at h1
+  simp at h1
+
+theorem leList_cons_nil_false (X : List STy) (h : X ≠ []) :
+    leList X [] = Bool.false := by
+  cases X with
+  | nil => exact absurd rfl h
+  | cons x xs => rfl
+
+theorem leList_rev_cancel : ∀ (as bs : List STy),
+    leList as.reverse bs.reverse = leList as bs := by
+  intro as bs
+  induction as generalizing bs with
+  | nil =>
+      cases bs with
+      | nil => simp [List.reverse_nil]
+      | cons b bs' =>
+          simp only [List.reverse_nil]
+          rw [leList_nil_false _ (rev_cons_ne_nil b bs'),
+            leList_nil_false _ (by simp)]
+  | cons a rest ih =>
+      cases bs with
+      | nil =>
+          simp only [List.reverse_nil]
+          rw [leList_cons_nil_false _ (rev_cons_ne_nil a rest),
+            leList_cons_nil_false _ (by simp)]
+      | cons b bs' =>
+          rw [List.reverse_cons, List.reverse_cons, leList_snoc, ih, leList]
+
+theorem list_map_take {α β : Type} (f : α → β) : ∀ (l : List α) (n : Nat),
+    (l.take n).map f = (l.map f).take n := by
+  intro l n
+  induction l generalizing n with
+  | nil => simp [List.take_nil]
+  | cons a rest ih =>
+      cases n with
+      | zero => rfl
+      | succ m =>
+          rw [List.take_cons (Nat.succ_pos m)]
+          simp only [List.map_cons, List.take_cons (Nat.succ_pos m),
+            Nat.succ_sub_one]
+          exact congrArg _ (ih m)
+
+theorem list_map_drop {α β : Type} (f : α → β) : ∀ (l : List α) (n : Nat),
+    (l.drop n).map f = (l.map f).drop n := by
+  intro l n
+  induction l generalizing n with
+  | nil => simp [List.drop_nil]
+  | cons a rest ih =>
+      cases n with
+      | zero => rfl
+      | succ m =>
+          rw [List.drop_cons (Nat.succ_pos m)]
+          simp only [List.map_cons, List.drop_cons (Nat.succ_pos m),
+            Nat.succ_sub_one]
+          exact ih m
+
+theorem stackTyOf_take (l : List JSValue) (n : Nat) :
+    (stackTyOf l).take n = stackTyOf (l.take n) := by
+  simp only [stackTyOf, list_map_take]
+
+theorem stackTyOf_drop (l : List JSValue) (n : Nat) :
+    (stackTyOf l).drop n = stackTyOf (l.drop n) := by
+  simp only [stackTyOf, list_map_drop]
+
+theorem envTyOf_zip : ∀ (ps : List «String») (vs : List JSValue),
+    envTyOf (ps.zip vs) = zipTy ps (vs.map typeOfV) := by
+  intro ps vs
+  induction ps generalizing vs with
+  | nil => cases vs <;> rfl
+  | cons p rest ih =>
+      cases vs with
+      | nil => rfl
+      | cons v vs' =>
+          show (p, typeOfV v) :: envTyOf (rest.zip vs')
+            = (p, typeOfV v) :: zipTy rest (vs'.map typeOfV)
+          rw [ih vs']
+
+theorem findAO_mem : ∀ (reg : AOReg) (name : «String») (ps : List «String»)
+    (prog : Prog), findAO reg name = some (ps, prog) → (name, (ps, prog)) ∈ reg := by
+  intro reg name ps prog h
+  induction reg with
+  | nil =>
+      simp only [findAO] at h
+      exact absurd h (by simp)
+  | cons e rest ih =>
+      rcases e with ⟨en, ee⟩
+      simp only [findAO] at h
+      by_cases hn : (en == name) = Bool.true
+      · rw [if_pos hn] at h
+        injection h with hv
+        subst hv
+        exact List.mem_cons.mpr (Or.inl (by rw [← eq_of_beq hn]))
+      · rw [if_neg hn] at h
+        right
+        exact ih h
+
+theorem mem_of_mem_take {α : Type} (n : Nat) : ∀ (l : List α) (a : α),
+    a ∈ l.take n → a ∈ l := by
+  induction n with
+  | zero => intro l a h; simp at h
+  | succ m ih =>
+      intro l a h
+      cases l with
+      | nil => simp at h
+      | cons b rest =>
+          simp only [List.take_cons (Nat.succ_pos m), Nat.succ_sub_one,
+            List.mem_cons] at h
+          rcases h with rfl | h
+          · exact List.mem_cons_self ..
+          · exact List.mem_cons_of_mem _ (ih rest a h)
+
+theorem mem_of_mem_drop {α : Type} (n : Nat) : ∀ (l : List α) (a : α),
+    a ∈ l.drop n → a ∈ l := by
+  induction n with
+  | zero => intro l a h; exact h
+  | succ m ih =>
+      intro l a h
+      cases l with
+      | nil => simp at h
+      | cons b rest =>
+          simp only [List.drop_cons (Nat.succ_pos m), Nat.succ_sub_one] at h
+          exact List.mem_cons_of_mem _ (ih rest a h)
+
+theorem mem_of_mem_zip_snd {α β : Type} : ∀ (ps : List α) (vs : List β)
+    (p : α × β), p ∈ ps.zip vs → p.2 ∈ vs := by
+  intro ps vs p h
+  induction ps generalizing vs with
+  | nil => cases vs <;> simp at h
+  | cons q ps' ih =>
+      cases vs with
+      | nil => simp at h
+      | cons v vs' =>
+          rcases List.mem_cons.mp h with h | h
+          · rw [h]
+            exact List.mem_cons_self
+          · exact List.mem_cons_of_mem _ (ih vs' h)
+
+theorem list_map_reverse {α β : Type} (f : α → β) : ∀ (l : List α),
+    (l.reverse).map f = (l.map f).reverse := by
+  intro l
+  induction l with
+  | nil => rfl
+  | cons a rest ih =>
+      simp [List.reverse_cons, List.map_append, ih]
+
+theorem machineRet_push (sigs : SigTable) (callee caller caller' : Fr)
+    (fs : List Fr) (hr : caller'.ret = caller.ret) :
+    machineRet sigs (callee :: caller' :: fs) = machineRet sigs (caller :: fs) := by
+  unfold machineRet
+  cases fs with
+  | nil =>
+      rw [List.getLast?_cons_cons, List.getLast?_singleton, List.getLast?_singleton]
+      exact congrArg (sigRetTy sigs) hr
+  | cons x xs => rfl
+
+/- ## The call identity and the push master. -/
+
+theorem checkSeq_kCall (sigs : SigTable) (rr : STy) (w : World)
+    (ps : List STy) (ret : STy) (fname : «String») (n : Nat) (rest : List Instr)
+    (hsig : sigFind sigs fname = some (ps, ret))
+    (hlen : (ps.length == n) = Bool.true)
+    (hpops : popArgs ps w.σ = Bool.true) :
+    checkSeq sigs rr [w] (.kCall fname n :: rest)
+      = checkSeq sigs rr [{ w with σ := .complN ret :: w.σ.drop n }] rest := by
+  simp only [checkSeq, stepWorlds, hsig, hlen, hpops,
+    List.all_cons, List.all_nil, Bool.and_true]
+  rfl
+
+theorem subject_reduction_push (sigs : SigTable) (reg : AOReg) (r : STy)
+    (callee caller caller' : Fr) (fs : List Fr) (heap : Heap) (nl : Nat)
+    (h : stateOk sigs r (FM.frames (caller :: fs) heap nl))
+    (hstep : fstep reg (FM.frames (caller :: fs) heap nl)
+      = FM.frames (callee :: caller' :: fs) heap nl)
+    (hreq : caller'.ret = caller.ret)
+    (hcertc : frameOk sigs none callee)
+    (hcert2 : frameOk sigs (some callee.ret) caller')
+    (hrootsC : ∀ l ∈ (callee.eval.flatMap locsOf
+        ++ (callee.env.map Prod.snd).flatMap locsOf),
+      l < nl ∧ (heap l).isSome = Bool.true)
+    (hrootsC' : ∀ l ∈ (caller'.eval.flatMap locsOf
+        ++ (caller'.env.map Prod.snd).flatMap locsOf),
+      l < nl ∧ (heap l).isSome = Bool.true)
+    (hwfs : instrsWf heap nl callee.stmts)
+    (hwfs' : instrsWf heap nl caller'.stmts) :
+    stateOk sigs r (fstep reg (FM.frames (caller :: fs) heap nl)) := by
+  rw [hstep]
+  refine ⟨rfl, ?_, ?_, stateOk_heapTy h, ?_, ?_⟩
+  · simp only [framesOk, framesOkFrom]
+    exact And.intro hcertc
+      (And.intro hcert2 (by rw [hreq]; exact stateOk_tail_framesOkFrom h))
+  · simp only [heapOk]
+    exact And.intro hrootsC (And.intro hrootsC' (stateOk_heap_tail h))
+  · exact (machineRet_push sigs callee caller caller' fs hreq).trans
+      (stateOk_machineRet h)
+  · exact ⟨hwfs, hwfs', stateOk_framesWf_tail h⟩
+
+/-- The call dispatch: THE registry-consuming arm. The callee frame is
+    certified by registryCertified at the ACTUAL argument abstractions
+    (the canonical world makes them coincide with the static stack);
+    the caller's continuation certificate carries over the kCall
+    identity; the caller re-enters with the in-flight completion typed
+    by the callee's destiny, and its remaining stmts are exactly the
+    self-test idiom the delivery protocol demands. -/
+theorem sr_kCall (sigs : SigTable) (reg : AOReg) (r : STy)
+    (env : Env) (eval : List JSValue) (ret : «String»)
+    (fs : List Fr) (heap : Heap) (nl : Nat)
+    (rest₀ : List Instr) (fname : «String») (n : Nat)
+    (ps : List STy) (retsig : STy) (regps : List «String») (body : Prog)
+    (hsig : sigFind sigs fname = some (ps, retsig))
+    (hnp : ps.length = n)
+    (hle : leList (((eval.take n).reverse).map typeOfV) ps)
+    (hfind : findAO reg fname = some (regps, body)) :
+    SR sigs reg r (FM.frames
+      (⟨.kCall fname n :: .kTest :: .kIte [.kRet] [.kUnwrap] :: rest₀,
+        env, eval, ret⟩ :: fs) heap nl) := by
+  intro hreg _ h
+  have hll : (eval.take n).length = ps.length := by
+    have h2 := leList_length _ _ hle
+    simpa using h2
+  have hge : ¬ (eval.length < n) := by
+    have h3 : Nat.min n eval.length = ps.length := by
+      rw [← hll, List.length_take]
+    have h5 : n ≤ eval.length := by
+      calc n = ps.length := hnp.symm
+        _ = Nat.min n eval.length := h3.symm
+        _ ≤ eval.length := Nat.min_le_right n eval.length
+    exact Nat.not_lt.mpr h5
+  have hstep : fstep reg (FM.frames
+      (⟨.kCall fname n :: .kTest :: .kIte [.kRet] [.kUnwrap] :: rest₀,
+        env, eval, ret⟩ :: fs) heap nl)
+      = FM.frames (⟨compileSteps body, regps.zip (eval.take n).reverse, [], fname⟩
+          :: ⟨.kTest :: .kIte [.kRet] [.kUnwrap] :: rest₀, env, eval.drop n, ret⟩
+          :: fs) heap nl := by
+    simp only [fstep, if_neg hge, hfind]
+  obtain ⟨fb, hb0, ht⟩ := frameOk_flows_elim (stateOk_head_frameOk h)
+  have ha : absStack sigs none
+      (⟨.kCall fname n :: .kTest :: .kIte [.kRet] [.kUnwrap] :: rest₀,
+        env, eval, ret⟩ : Fr) = stackTyOf eval := rfl
+  rw [ha] at hb0
+  have hpops : popArgs ps (stackTyOf eval) = Bool.true := by
+    have h3 : Nat.min n eval.length = ps.length := by
+      rw [← hll, List.length_take]
+    simp only [popArgs, Bool.and_eq_true, decide_eq_true_eq]
+    refine ⟨?_, ?_⟩
+    · have h1 : (stackTyOf eval).length = eval.length := by simp [stackTyOf]
+      have h3 : Nat.min n eval.length = ps.length := by
+        rw [← hll, List.length_take]
+      calc (stackTyOf eval).length = eval.length := h1
+        _ ≥ Nat.min n eval.length := Nat.min_le_right n eval.length
+        _ = ps.length := h3
+    · rw [hnp, stackTyOf_take]
+      simp only [stackTyOf, ← list_map_reverse]
+      exact hle
+  rw [checkSeq_kCall sigs _ _ ps retsig fname n _ hsig (by simpa using hnp) hpops,
+    stackTyOf_drop] at hb0
+  have hsr : sigRetTy sigs fname = retsig := by simp only [sigRetTy, hsig]
+  have hcert2 : frameOk sigs (some fname)
+      ⟨.kTest :: .kIte [.kRet] [.kUnwrap] :: rest₀, env, eval.drop n, ret⟩ := by
+    refine ⟨Or.inr rfl, ?_⟩
+    have habs : absStack sigs (some fname)
+        (⟨.kTest :: .kIte [.kRet] [.kUnwrap] :: rest₀, env, eval.drop n, ret⟩ : Fr)
+        = .complN retsig :: stackTyOf (eval.drop n) := by
+      simp only [absStack, inflight, List.cons_append, List.nil_append, hsr]
+    show (match checkSeq sigs (sigRetTy sigs ret)
+            [{ Γ := envTyOf env,
+               σ := absStack sigs (some fname)
+                 ⟨.kTest :: .kIte [.kRet] [.kUnwrap] :: rest₀, env, eval.drop n, ret⟩ }]
+            (.kTest :: .kIte [.kRet] [.kUnwrap] :: rest₀) with
+      | .flows fb => terminal fb = Bool.true
+      | _ => False)
+    rw [habs, hb0]
+    exact ht
+  obtain ⟨hwfbody, hcertgen⟩ :=
+    hreg fname regps body (findAO_mem reg fname regps body hfind)
+  have hts : leList (((eval.take n).reverse).map typeOfV)
+      (sigParams sigs fname) := by
+    have hp : sigParams sigs fname = ps := by simp only [sigParams, hsig]
+    rw [hp]
+    exact hle
+  obtain ⟨fb2, hb2, ht2⟩ := certifies_flows_elim (hcertgen _ hts)
+  have hcertc : frameOk sigs none
+      ⟨compileSteps body, regps.zip (eval.take n).reverse, [], fname⟩ := by
+    refine ⟨Or.inl Option.isNone_none, ?_⟩
+    rw [envTyOf_zip,
+      show absStack sigs none
+        (⟨compileSteps body, regps.zip (eval.take n).reverse, [], fname⟩ : Fr)
+        = ([] : List STy) from rfl, hb2]
+    exact ht2
+  refine subject_reduction_push sigs reg r
+    ⟨compileSteps body, regps.zip (eval.take n).reverse, [], fname⟩
+    ⟨.kCall fname n :: .kTest :: .kIte [.kRet] [.kUnwrap] :: rest₀, env, eval, ret⟩
+    ⟨.kTest :: .kIte [.kRet] [.kUnwrap] :: rest₀, env, eval.drop n, ret⟩
+    fs heap nl h hstep rfl hcertc hcert2 ?_ ?_ (hwfbody heap nl) ?_
+  · intro l hl
+    rcases List.mem_append.mp hl with hl | hl
+    · exact absurd hl (by simp)
+    · obtain ⟨v, hv, hlv⟩ := List.mem_flatMap.mp hl
+      have hvp : v ∈ (regps.zip (eval.take n).reverse).map Prod.snd := hv
+      obtain ⟨p, hp, hp2⟩ := List.mem_map.mp hvp
+      have hv2 : v ∈ (eval.take n).reverse := by
+        rw [← hp2]
+        exact mem_of_mem_zip_snd _ _ _ hp
+      have hv3 : v ∈ eval.take n := List.mem_reverse.mp hv2
+      refine (stateOk_heap_roots h) l (List.mem_append.mpr (Or.inl ?_))
+      exact List.mem_flatMap.mpr ⟨v, mem_of_mem_take n eval v hv3, hlv⟩
+  · intro l hl
+    rcases List.mem_append.mp hl with hl | hl
+    · obtain ⟨v, hv, hlv⟩ := List.mem_flatMap.mp hl
+      refine (stateOk_heap_roots h) l (List.mem_append.mpr (Or.inl ?_))
+      exact List.mem_flatMap.mpr ⟨v, mem_of_mem_drop n eval v hv, hlv⟩
+    · exact (stateOk_heap_roots h) l (List.mem_append.mpr (Or.inr hl))
+  · obtain ⟨_, hr2⟩ := stateOk_framesWf_head h
+    exact hr2
