@@ -1582,7 +1582,13 @@ theorem tmovesAtom_meet_isValue (a₀ s₀ : STy) (w : JSValue)
   | union ps =>
       cases a₀ <;> simp only [tmovesAtom] at hle <;> exact Bool.noConfusion hle
 
-/- ## First per-arm preservation lemma. -/
+/- ## Preservation templates.
+
+    One generic statement per STATE SHAPE; every arm is then an
+    instance supplying: the machine-step equation, the new frame's
+    certificate, heap-root coverage, and continuation
+    well-formedness. Shared stateOk structure is factored into
+    extractors so instances never destructure it. -/
 
 theorem machineRet_cons_eq (sigs : SigTable) (f g : Fr) (fs : List Fr)
     (hr : f.ret = g.ret) :
@@ -1594,12 +1600,141 @@ theorem machineRet_cons_eq (sigs : SigTable) (f g : Fr) (fs : List Fr)
       rw [hr]
   | cons x xs => simp only [List.getLast?_cons_cons]
 
-/-- One machine step preserves the state typing: the const-literal
-    push. The certificate's own continuation (via the unfolding
-    identity) IS the new frame's check; the literal's locations enter
-    the heap invariant through instrsWf (syntax is the only channel by
-    which a location can appear without prior reachability). -/
-theorem step_pres_kEval_const (sigs : SigTable) (reg : AOReg) (r : STy)
+/- ### Extractors -/
+
+theorem stateOk_head_frameOk {sigs : SigTable} {r : STy} {f : Fr}
+    {fs : List Fr} {heap : Heap} {nl : Nat}
+    (h : stateOk sigs r (FM.frames (f :: fs) heap nl)) :
+    frameOk sigs none f := by
+  obtain ⟨_, hframes, _, _, _, _⟩ := h
+  simp only [framesOk, framesOkFrom] at hframes
+  exact hframes.1
+
+theorem stateOk_tail_framesOkFrom {sigs : SigTable} {r : STy} {f : Fr}
+    {fs : List Fr} {heap : Heap} {nl : Nat}
+    (h : stateOk sigs r (FM.frames (f :: fs) heap nl)) :
+    framesOkFrom sigs f.ret fs := by
+  obtain ⟨_, hframes, _, _, _, _⟩ := h
+  simp only [framesOk, framesOkFrom] at hframes
+  exact hframes.2
+
+theorem stateOk_heap_roots {sigs : SigTable} {r : STy} {f : Fr}
+    {fs : List Fr} {heap : Heap} {nl : Nat}
+    (h : stateOk sigs r (FM.frames (f :: fs) heap nl)) :
+    ∀ l ∈ (f.eval.flatMap locsOf ++ (f.env.map Prod.snd).flatMap locsOf),
+      l < nl ∧ (heap l).isSome = Bool.true := by
+  obtain ⟨_, _, hheap, _, _, _⟩ := h
+  exact hheap.1
+
+theorem stateOk_heap_tail {sigs : SigTable} {r : STy} {f : Fr}
+    {fs : List Fr} {heap : Heap} {nl : Nat}
+    (h : stateOk sigs r (FM.frames (f :: fs) heap nl)) :
+    heapOk heap nl fs := by
+  obtain ⟨_, _, hheap, _, _, _⟩ := h
+  exact hheap.2
+
+theorem stateOk_heapTy {sigs : SigTable} {r : STy} {f : Fr}
+    {fs : List Fr} {heap : Heap} {nl : Nat}
+    (h : stateOk sigs r (FM.frames (f :: fs) heap nl)) :
+    ∃ ht, heapTyOk heap ht nl := by
+  obtain ⟨_, _, _, hht, _, _⟩ := h
+  exact hht
+
+theorem stateOk_machineRet {sigs : SigTable} {r : STy} {f : Fr}
+    {fs : List Fr} {heap : Heap} {nl : Nat}
+    (h : stateOk sigs r (FM.frames (f :: fs) heap nl)) :
+    machineRet sigs (f :: fs) = r := by
+  obtain ⟨_, _, _, _, hret, _⟩ := h
+  exact hret
+
+theorem stateOk_framesWf_head {sigs : SigTable} {r : STy} {f : Fr}
+    {fs : List Fr} {heap : Heap} {nl : Nat}
+    (h : stateOk sigs r (FM.frames (f :: fs) heap nl)) :
+    instrsWf heap nl f.stmts := by
+  obtain ⟨_, _, _, _, _, hwf⟩ := h
+  exact hwf.1
+
+theorem stateOk_framesWf_tail {sigs : SigTable} {r : STy} {f : Fr}
+    {fs : List Fr} {heap : Heap} {nl : Nat}
+    (h : stateOk sigs r (FM.frames (f :: fs) heap nl)) :
+    framesWf heap nl fs := by
+  obtain ⟨_, _, _, _, _, hwf⟩ := h
+  exact hwf.2
+
+theorem frameOk_flows_elim {sigs : SigTable} {above : Option «String»} {f : Fr}
+    (h : frameOk sigs above f) :
+    ∃ fb, checkSeq sigs (sigRetTy sigs f.ret)
+        [{ Γ := envTyOf f.env, σ := absStack sigs above f }] f.stmts
+        = TCResult.flows fb ∧ terminal fb = Bool.true := by
+  obtain ⟨_, hc⟩ := h
+  cases hb : checkSeq sigs (sigRetTy sigs f.ret)
+      [{ Γ := envTyOf f.env, σ := absStack sigs above f }] f.stmts with
+  | flows fb =>
+      rw [hb] at hc
+      exact ⟨fb, rfl, hc⟩
+  | reject s w => rw [hb] at hc; exact False.elim hc
+
+theorem frameOk_none_flows (sigs : SigTable) (f : Fr) (fb : Flows)
+    (h : checkSeq sigs (sigRetTy sigs f.ret)
+        [{ Γ := envTyOf f.env, σ := stackTyOf f.eval }] f.stmts
+        = TCResult.flows fb)
+    (ht : terminal fb = Bool.true) :
+    frameOk sigs none f :=
+  ⟨Or.inl Option.isNone_none, by
+    have ha : absStack sigs none f = stackTyOf f.eval := rfl
+    rw [ha, h]; exact ht⟩
+
+/- ### Masters -/
+
+/-- Frame template: the step rewrites the head frame f to f' (same
+    tail, heap, region). Supplies: step equation, same destiny, the
+    new certificate, root coverage, continuation well-formedness. -/
+theorem subject_reduction_frame (sigs : SigTable) (reg : AOReg) (r : STy)
+    (f f' : Fr) (fs : List Fr) (heap : Heap) (nl : Nat)
+    (h : stateOk sigs r (FM.frames (f :: fs) heap nl))
+    (hstep : fstep reg (FM.frames (f :: fs) heap nl)
+      = FM.frames (f' :: fs) heap nl)
+    (hreq : f'.ret = f.ret)
+    (hcert : frameOk sigs none f')
+    (hroots : ∀ l ∈ (f'.eval.flatMap locsOf
+        ++ (f'.env.map Prod.snd).flatMap locsOf),
+      l < nl ∧ (heap l).isSome = Bool.true)
+    (hwfs : instrsWf heap nl f'.stmts) :
+    stateOk sigs r (fstep reg (FM.frames (f :: fs) heap nl)) := by
+  rw [hstep]
+  refine ⟨rfl, ?_, ?_, stateOk_heapTy h, ?_, ?_⟩
+  · exact And.intro hcert (by rw [hreq]; exact stateOk_tail_framesOkFrom h)
+  · exact And.intro hroots (stateOk_heap_tail h)
+  · exact (machineRet_cons_eq sigs f' f fs hreq).trans (stateOk_machineRet h)
+  · exact And.intro hwfs (stateOk_framesWf_tail h)
+
+/-- Terminal template: the absorbing answer state. -/
+theorem subject_reduction_fdone (sigs : SigTable) (reg : AOReg) (r : STy)
+    (v : JSValue) (fs : List Fr) (heap : Heap) (nl n : Nat)
+    (h : stateOk sigs r (FM.fdone v fs heap nl n)) :
+    stateOk sigs r (fstep reg (FM.fdone v fs heap nl n)) := by
+  show stateOk sigs r (FM.fdone v fs heap nl (n + 1))
+  exact h
+
+/-- Vacuous templates: states the invariant already rules out. -/
+theorem subject_reduction_absurd_fell (sigs : SigTable) (reg : AOReg) (r : STy)
+    (fs : List Fr) (heap : Heap) (nl n : Nat)
+    (h : stateOk sigs r (FM.fell fs heap nl n)) :
+    stateOk sigs r (fstep reg (FM.fell fs heap nl n)) :=
+  False.elim h
+
+theorem subject_reduction_absurd_nil (sigs : SigTable) (reg : AOReg) (r : STy)
+    (heap : Heap) (nl : Nat)
+    (h : stateOk sigs r (FM.frames [] heap nl)) :
+    stateOk sigs r (fstep reg (FM.frames [] heap nl)) := by
+  obtain ⟨hne, _⟩ := h
+  exact absurd hne (by simp)
+
+/- ### Instances -/
+
+/-- The const-literal push, through the template: the certificate
+    carries over the unfolding identity; nothing else remains. -/
+theorem subject_reduction_kEval_const (sigs : SigTable) (reg : AOReg) (r : STy)
     (env : Env) (eval : List JSValue) (ret : «String»)
     (fs : List Fr) (heap : Heap) (nl : Nat)
     (rest : List Instr) (v : JSValue)
@@ -1607,52 +1742,22 @@ theorem step_pres_kEval_const (sigs : SigTable) (reg : AOReg) (r : STy)
         (⟨.kEval (.const v) :: rest, env, eval, ret⟩ :: fs) heap nl)) :
     stateOk sigs r (fstep reg (FM.frames
         (⟨.kEval (.const v) :: rest, env, eval, ret⟩ :: fs) heap nl)) := by
-  have hstep : fstep reg (FM.frames
-      (⟨.kEval (.const v) :: rest, env, eval, ret⟩ :: fs) heap nl)
-      = FM.frames (⟨rest, env, v :: eval, ret⟩ :: fs) heap nl := rfl
-  rw [hstep]
-  obtain ⟨hne, hframes, hheap, hht, hret, hwf⟩ := h
-  simp only [framesOk, framesOkFrom] at hframes
-  obtain ⟨hf0, hft⟩ := hframes
-  simp only [frameOk] at hf0
-  obtain ⟨_, hcheck⟩ := hf0
-  simp only [absStack, inflight, List.nil_append] at hcheck
-  have hid : checkSeq sigs (sigRetTy sigs ret)
-      [{ Γ := envTyOf env, σ := stackTyOf eval }] (.kEval (.const v) :: rest)
-      = checkSeq sigs (sigRetTy sigs ret)
-        [{ Γ := envTyOf env, σ := typeOfV v :: stackTyOf eval }] rest :=
-    checkSeq_kEval_const _ _ _ _ v
-  cases hb : checkSeq sigs (sigRetTy sigs ret)
-      [{ Γ := envTyOf env, σ := stackTyOf eval }] (.kEval (.const v) :: rest) with
-  | flows fb =>
-      rw [hb] at hcheck
-      rw [hid] at hb
-      obtain ⟨hwf1, hwf2⟩ := hwf
-      obtain ⟨hhead, hrest⟩ := hwf1
-      have hmr := machineRet_cons_eq sigs
-        (⟨rest, env, v :: eval, ret⟩ : Fr)
-        (⟨.kEval (.const v) :: rest, env, eval, ret⟩ : Fr) fs rfl
-      exact ⟨rfl,
-        ⟨⟨Or.inl Option.isNone_none, by
-            show (match checkSeq sigs (sigRetTy sigs ret)
-              [{ Γ := envTyOf env, σ := typeOfV v :: stackTyOf eval }] rest with
-              | .flows fb => terminal fb = Bool.true
-              | _ => False)
-            rw [hb]
-            exact hcheck⟩, hft⟩,
-        ⟨by
-            intro l hl
-            simp only [List.flatMap_cons, List.append_assoc, List.mem_append] at hl
-            rcases hl with hl | hl
-            · exact hhead l hl
-            · exact hheap.1 l
-                ((List.mem_append.mpr hl) : l ∈ (List.flatMap locsOf eval
-                  ++ List.flatMap locsOf (List.map Prod.snd env))), hheap.2⟩,
-        hht,
-        ⟨hmr.trans hret, ⟨hrest, hwf2⟩⟩⟩
-  | reject s w' =>
-      rw [hb] at hcheck
-      exact False.elim hcheck
+  obtain ⟨fb, hb, ht⟩ := frameOk_flows_elim (stateOk_head_frameOk h)
+  have ha : absStack sigs none (⟨.kEval (.const v) :: rest, env, eval, ret⟩ : Fr)
+      = stackTyOf eval := rfl
+  rw [ha, checkSeq_kEval_const sigs (sigRetTy sigs ret)
+      { Γ := envTyOf env, σ := stackTyOf eval } rest v] at hb
+  obtain ⟨hhd, hrest⟩ := stateOk_framesWf_head h
+  exact subject_reduction_frame sigs reg r _ ⟨rest, env, v :: eval, ret⟩ fs heap nl
+    h rfl rfl (frameOk_none_flows _ _ fb hb ht)
+    (by intro l hl
+        simp only [List.flatMap_cons, List.append_assoc, List.mem_append] at hl
+        rcases hl with hl | hl
+        · exact hhd l hl
+        · exact (stateOk_heap_roots h) l
+            (List.mem_append.mpr hl : l ∈ (List.flatMap locsOf eval
+              ++ List.flatMap locsOf (List.map Prod.snd env))))
+    hrest
 
 /- ## Preservation status ledger.
 
