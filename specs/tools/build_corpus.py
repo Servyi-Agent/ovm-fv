@@ -160,7 +160,7 @@ def corpusSigs : SigTable := [
 def sigWf : SigTable → Bool := fun sigs =>
   sigs.all (fun (_, (ps, _)) =>
     (ps ++ []).all (fun t =>
-      (atoms t).all (fun a => match a with
+      (atoms t).all (fun ty => match ty with
         | .desc fs => wfFs fs
         | _ => Bool.true)))
 #eval sigWf corpusSigs
