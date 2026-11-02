@@ -1814,3 +1814,49 @@ theorem subject_reduction_kEval_const (sigs : SigTable) (reg : AOReg) (r : STy)
     Loop family (stack neutrality under refinement):
     * kRepeatWhile / kRepeatTest / kForStart / kForBody
 -/
+
+/- ## The per-state interface: "subject reduction holds at t".
+
+    Each machine arm is stated as SR applied to its concrete state
+    shape; the final theorem is then plain case analysis:
+
+      theorem subject_reduction (sigs reg r) : ∀ m, SR sigs reg r m := by
+        intro m
+        match m with
+        | .fdone v fs heap nl n        => exact sr_fdone …
+        | .fell fs heap nl n           => exact sr_fell …
+        | .frames [] heap nl           => exact sr_nil …
+        | .frames (f :: fs) heap nl    =>
+            match f.stmts, f.env, f.eval with
+            | .kEval (.const v) :: rest, env, eval =>
+                exact sr_kEval_const …
+            | …                         => exact sr_<arm> …
+-/
+
+/-- Subject reduction holds at t: the state typing is preserved by one
+    step FROM t. -/
+def SR (sigs : SigTable) (reg : AOReg) (r : STy) (m : FM) : Prop :=
+  stateOk sigs r m → stateOk sigs r (fstep reg m)
+
+theorem sr_fdone (sigs : SigTable) (reg : AOReg) (r : STy)
+    (v : JSValue) (fs : List Fr) (heap : Heap) (nl n : Nat) :
+    SR sigs reg r (FM.fdone v fs heap nl n) :=
+  subject_reduction_fdone sigs reg r v fs heap nl n
+
+theorem sr_fell (sigs : SigTable) (reg : AOReg) (r : STy)
+    (fs : List Fr) (heap : Heap) (nl n : Nat) :
+    SR sigs reg r (FM.fell fs heap nl n) :=
+  subject_reduction_absurd_fell sigs reg r fs heap nl n
+
+theorem sr_nil (sigs : SigTable) (reg : AOReg) (r : STy)
+    (heap : Heap) (nl : Nat) :
+    SR sigs reg r (FM.frames [] heap nl) :=
+  subject_reduction_absurd_nil sigs reg r heap nl
+
+theorem sr_kEval_const (sigs : SigTable) (reg : AOReg) (r : STy)
+    (env : Env) (eval : List JSValue) (ret : «String»)
+    (fs : List Fr) (heap : Heap) (nl : Nat)
+    (rest : List Instr) (v : JSValue) :
+    SR sigs reg r (FM.frames
+      (⟨.kEval (.const v) :: rest, env, eval, ret⟩ :: fs) heap nl) :=
+  subject_reduction_kEval_const sigs reg r env eval ret fs heap nl rest v
