@@ -1834,24 +1834,33 @@ theorem subject_reduction_kEval_const (sigs : SigTable) (reg : AOReg) (r : STy)
 -/
 
 /-- Subject reduction holds at t: the state typing is preserved by one
-    step FROM t. -/
+    step FROM t. The registry side conditions are part of the
+    predicate: reg must be certified (every entry's body typechecks at
+    its declared signature, for every argument typing below the
+    parameter types - this makes freshly pushed callee frames frameOk)
+    and closed (every name the signatures may call is answered by reg
+    or natively, and the MOP-Get dispatch target exists - this keeps
+    kCall/kIMeth steps from falling to the ill-typed fell state).
+    Without these, fstep's findAO lookups can fail and preservation is
+    false for a garbage registry. -/
 def SR (sigs : SigTable) (reg : AOReg) (r : STy) (m : FM) : Prop :=
-  stateOk sigs r m → stateOk sigs r (fstep reg m)
+  registryCertified sigs reg → closedRegistry sigs reg →
+    stateOk sigs r m → stateOk sigs r (fstep reg m)
 
 theorem sr_fdone (sigs : SigTable) (reg : AOReg) (r : STy)
     (v : JSValue) (fs : List Fr) (heap : Heap) (nl n : Nat) :
     SR sigs reg r (FM.fdone v fs heap nl n) :=
-  subject_reduction_fdone sigs reg r v fs heap nl n
+  fun _ _ h => subject_reduction_fdone sigs reg r v fs heap nl n h
 
 theorem sr_fell (sigs : SigTable) (reg : AOReg) (r : STy)
     (fs : List Fr) (heap : Heap) (nl n : Nat) :
     SR sigs reg r (FM.fell fs heap nl n) :=
-  subject_reduction_absurd_fell sigs reg r fs heap nl n
+  fun _ _ h => subject_reduction_absurd_fell sigs reg r fs heap nl n h
 
 theorem sr_nil (sigs : SigTable) (reg : AOReg) (r : STy)
     (heap : Heap) (nl : Nat) :
     SR sigs reg r (FM.frames [] heap nl) :=
-  subject_reduction_absurd_nil sigs reg r heap nl
+  fun _ _ h => subject_reduction_absurd_nil sigs reg r heap nl h
 
 theorem sr_kEval_const (sigs : SigTable) (reg : AOReg) (r : STy)
     (env : Env) (eval : List JSValue) (ret : «String»)
@@ -1859,4 +1868,5 @@ theorem sr_kEval_const (sigs : SigTable) (reg : AOReg) (r : STy)
     (rest : List Instr) (v : JSValue) :
     SR sigs reg r (FM.frames
       (⟨.kEval (.const v) :: rest, env, eval, ret⟩ :: fs) heap nl) :=
-  subject_reduction_kEval_const sigs reg r env eval ret fs heap nl rest v
+  fun _ _ h => subject_reduction_kEval_const sigs reg r env eval ret
+    fs heap nl rest v h
