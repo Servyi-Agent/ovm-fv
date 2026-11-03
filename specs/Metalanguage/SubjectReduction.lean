@@ -349,3 +349,88 @@ theorem tmoves_trans {t u v : Ty}
 
 theorem tyLe_of_eq {t u : Ty} (h : t = u) : tyLe t u := by
   rw [h]; exact tmoves_refl u
+
+/- ## Proof layer II: the abstraction commutes with machine pushes -/
+
+theorem splitStack_cons_val (v : JSValue) (σ : List Ty) (p : Option Pending)
+    (eval : List JSValue) (hv : isCompl v = Bool.false)
+    (h : splitStack eval = some (σ, p)) :
+    splitStack (v :: eval) = some ([typeOfV v] :: σ, p) := by
+  simp only [splitStack, h]
+  cases v with
+  | compl b pv => simp [isCompl] at hv
+  | undefined => rfl
+  | null => rfl
+  | boolean b => rfl
+  | number n => rfl
+  | str s => rfl
+  | obj l => rfl
+  | listV vs => rfl
+  | descV d => rfl
+
+theorem splitStack_cons_compl_normal (pv : JSValue) (σ : List Ty) (p : Option Pending)
+    (eval : List JSValue) (hp : p = none)
+    (h : splitStack eval = some (σ, p)) :
+    splitStack (.compl Bool.false pv :: eval)
+      = some (σ, some (.normal [typeOfV pv])) := by
+  simp only [splitStack, h, hp]
+  simp
+
+theorem splitStack_cons_compl_throw (pv : JSValue) (σ : List Ty) (p : Option Pending)
+    (eval : List JSValue) (hp : p = none)
+    (h : splitStack eval = some (σ, p)) :
+    splitStack (.compl Bool.true pv :: eval) = some (σ, some Pending.throw) := by
+  simp only [splitStack, h, hp]
+  simp
+
+theorem splitStack_cons_nil : splitStack [] = some ([], none) := rfl
+
+/-- kTest's peek: verdict above the parked completion. -/
+theorem splitStack_kTest (abrupt : Bool) (pv : JSValue) (σ : List Ty)
+    (p : Option Pending) (eval : List JSValue)
+    (h : splitStack (.compl abrupt pv :: eval) = some (σ, p)) :
+    splitStack (.boolean abrupt :: .compl abrupt pv :: eval)
+      = some ([.isValue (.boolean abrupt)] :: σ, p) := by
+  rw [splitStack_cons_val (.boolean abrupt) σ p (.compl abrupt pv :: eval)
+        (by simp [isCompl]) h]
+  rfl
+
+/-- kUnwrap: the payload takes the completion's place. -/
+
+
+/- ## Proof layer III: absorbing masters -/
+
+theorem type_safety_fdone {sigs : SigTable} {reg : AOReg} {r : Ty} {v : JSValue}
+    {fs heap nl n} (h : stateOk sigs r (.fdone v fs heap nl n)) :
+    stateOk sigs r (fstep reg (.fdone v fs heap nl n)) := h
+
+theorem type_safety_fell {sigs : SigTable} {reg : AOReg} {r : Ty} {fs heap nl n}
+    (h : stateOk sigs r (.fell fs heap nl n)) :
+    stateOk sigs r (fstep reg (.fell fs heap nl n)) := h.elim
+
+theorem type_safety_frames_nil {sigs : SigTable} {reg : AOReg} {r : Ty} {heap nl}
+    (h : stateOk sigs r (.frames [] heap nl)) :
+    stateOk sigs r (fstep reg (.frames [] heap nl)) := by
+  unfold stateOk at h
+  simp only at h
+  exact absurd h.1 (by simp)
+
+theorem type_safety_frames_nil_stmts {sigs : SigTable} {reg : AOReg} {r : Ty}
+    {f : Fr} {fs : List Fr} {heap nl}
+    (h : stateOk sigs r (.frames (f :: fs) heap nl))
+    (hnil : f.stmts = []) :
+    stateOk sigs r (fstep reg (.frames (f :: fs) heap nl)) := by
+  unfold stateOk at h
+  simp only at h
+  have hfr := h.2.1
+  unfold framesOk framesOkFrom at hfr
+  obtain ⟨hf, -⟩ := hfr
+  obtain ⟨-, -, hchk⟩ := hf
+  simp only [frameChecks] at hchk
+  rw [hnil] at hchk
+  cases hse : splitStack f.eval with
+  | none => rw [hse] at hchk; exact hchk.elim
+  | some sp =>
+      rw [hse] at hchk
+      simp only [frameChecks, normL, checkSeq, terminal] at hchk
+      exact absurd hchk (by simp)
