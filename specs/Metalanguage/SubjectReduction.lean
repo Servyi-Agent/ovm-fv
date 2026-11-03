@@ -2312,3 +2312,47 @@ theorem sr_kPop (sigs : SigTable) (reg : AOReg) (r : STy)
           exact List.mem_cons_of_mem _ hw
         · exact (stateOk_heap_roots hst) l (List.mem_append.mpr (Or.inr hl)))
     hrest
+
+theorem sr_kSet (sigs : SigTable) (reg : AOReg) (r : STy)
+    (env : Env) (eval : List JSValue) (ret : «String»)
+    (fs : List Fr) (heap : Heap) (nl : Nat)
+    (rest : List Instr) (x : «String») (v : JSValue)
+    (h : stateOk sigs r (FM.frames
+        (⟨.kSet x :: rest, env, v :: eval, ret⟩ :: fs) heap nl)) :
+    SR sigs reg r (FM.frames
+        (⟨.kSet x :: rest, env, v :: eval, ret⟩ :: fs) heap nl) := by
+  intro hreg _ hst
+  obtain ⟨fb, hb, ht⟩ := frameOk_flows_elim (stateOk_head_frameOk hst)
+  have ha : absStack sigs none
+      (⟨.kSet x :: rest, env, v :: eval, ret⟩ : Fr)
+      = typeOfV v :: stackTyOf eval := rfl
+  rw [ha, checkSeq_kSet sigs (sigRetTy sigs ret)
+      { Γ := envTyOf env, σ := typeOfV v :: stackTyOf eval } rest x
+      (typeOfV v) (stackTyOf eval)] at hb
+  simp only at hb
+  obtain ⟨hhd, hrest⟩ := stateOk_framesWf_head hst
+  have hcert2 : frameOk sigs none ⟨rest, (x, v) :: env, eval, ret⟩ := by
+    refine ⟨Or.inl Option.isNone_none, ?_⟩
+    show (match checkSeq sigs (sigRetTy sigs ret)
+        [{ Γ := envTyOf ((x, v) :: env), σ := stackTyOf eval }] rest with
+      | .flows fb => terminal fb = Bool.true
+      | _ => False)
+    have hE : ({ Γ := envTyOf ((x, v) :: env), σ := stackTyOf eval } : World)
+        = { Γ := (x, typeOfV v) :: envTyOf env,
+            σ := stackTyOf eval } := by
+      simp only [envTyOf_cons]
+    rw [hE, hb]
+    exact ht
+  refine subject_reduction_frame sigs reg r _ ⟨rest, (x, v) :: env, eval, ret⟩
+    fs heap nl hst rfl rfl hcert2 ?_ hrest
+  intro l hl
+  rcases List.mem_append.mp hl with hl | hl
+  · obtain ⟨w, hw, hlw⟩ := List.mem_flatMap.mp hl
+    have hw' : w ∈ eval := hw
+    refine (stateOk_heap_roots hst) l (List.mem_append.mpr (Or.inl
+      (List.mem_flatMap.mpr ⟨w, List.mem_cons_of_mem v hw', hlw⟩)))
+  · rw [List.map_cons, List.flatMap_cons] at hl
+    rcases List.mem_append.mp hl with hl | hl'
+    · exact (stateOk_heap_roots hst) l (List.mem_append.mpr (Or.inl
+        (List.mem_flatMap.mpr ⟨v, List.mem_cons_self .., hl⟩)))
+    · exact (stateOk_heap_roots hst) l (List.mem_append.mpr (Or.inr hl'))
