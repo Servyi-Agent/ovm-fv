@@ -732,15 +732,21 @@ def splitWorlds (x : «String») (T : Ty) (ws : Worlds) : Option Worlds :=
   | none => none
   | some wss => some (List.flatten wss)
 
-/- Loop join: every falls-world must come back to the loop-entry
-    stack with no parked completion (neutrality); the continuation
-    runs from those worlds. -/
+/- Loop join: every falls-world must come back to a REFINEMENT of
+    the loop-entry stack with no parked completion (neutrality);
+    the continuation runs from the entry stacks. Equality was too
+    strict: the runtime loop-exit stack refines the static entry
+    stack (canonical singletons below the static slots), never
+    equals it - the subject-reduction loop arms need ⊑. -/
 def checkLoopBody (rbody : TCResult) (site : Instr)
     (σ₀ : List Ty) (k : Worlds → TCResult) : TCResult :=
   match rbody with
   | .reject site' why => .reject site' why
   | .flows fb =>
-      let neutral := fb.falls.all (fun w => w.σ == σ₀ && w.pending.isNone)
+      let neutral := fb.falls.all (fun w =>
+        w.σ.length == σ₀.length
+          && (List.zip w.σ σ₀).all (fun (t, u) => tmoves t u)
+          && w.pending.isNone)
       if neutral then
         match k fb.falls with
         | .flows fr => .flows { exits := fb.exits || fr.exits, throws := fb.throws || fr.throws, falls := fr.falls, assumes := fb.assumes ++ fr.assumes }

@@ -1005,3 +1005,105 @@ theorem sr_pThrowC {sigs : SigTable} {v : JSValue} {rest : List Instr}
                   · rw [hpk]
                     simp only [frameChecks, hpk]
                     exact hchk
+
+/- ## Proof layer VIII: monotonicity of the flat lattice ops -/
+
+/-- Meet coverage: refining the left argument refines the meet. -/
+theorem tmovesV_meet_left {a a' b : VTy}
+    (hle : tmovesV a' a = Bool.true) (hm : meetAtom a' b = some m') :
+    ∃ m, meetAtom a b = some m ∧ tmovesV m' m = Bool.true := by
+  cases a' with
+  | anyValue c =>
+      cases a with
+      | anyValue c₂ =>
+          simp only [tmovesV, decide_eq_true_eq] at hle
+          subst hle
+          exact ⟨m', hm, tmovesV_refl m'⟩
+      | isValue w => exfalso; cases w <;> simp_all [tmovesV, tagOf]
+      | desc fs => simp [tmovesV] at hle
+      | notPresent => simp [tmovesV] at hle
+  | isValue w =>
+      cases a with
+      | anyValue c =>
+          simp only [tmovesV, decide_eq_true_eq] at hle
+          -- tagOf w = c; the meet keeps isValue-side witnesses
+          cases b with
+          | anyValue c₃ =>
+              simp only [meetAtom, decide_eq_true_eq] at hm
+              split at hm
+              · next htag =>
+                  have hcc : c = c₃ := by rw [← hle, htag]
+                  injection hm with hmi
+                  subst hmi
+                  exact ⟨.anyValue c, by simp [meetAtom, hcc],
+                    by simp [tmovesV, hle]⟩
+              · simp at hm
+          | isValue w₃ =>
+              simp only [meetAtom, beq_iff_eq] at hm
+              split at hm
+              · next hw =>
+                  have hw' : w = w₃ := by
+                    cases w <;> simp_all [beq_iff_eq]
+                  have htag : tagOf w₃ = c := by rw [← hw', hle]
+                  injection hm with hmi
+                  subst hmi
+                  exact ⟨.isValue w₃, by simp [meetAtom, htag],
+                    by simp [tmovesV, hw']⟩
+              · simp at hm
+          | desc fs => simp [meetAtom] at hm
+          | notPresent => simp [meetAtom] at hm
+      | isValue w₂ =>
+          simp only [tmovesV, beq_iff_eq] at hle
+          subst hle
+          exact ⟨m', hm, tmovesV_refl m'⟩
+      | desc fs => simp [tmovesV] at hle
+      | notPresent => simp [tmovesV] at hle
+  | desc fs =>
+      cases a with
+      | anyValue c =>
+          cases c with
+          | desc =>
+              cases b with
+              | anyValue c₃ =>
+                  cases c₃ with
+                  | desc =>
+                      injection hm with hmi
+                      subst hmi
+                      exact ⟨.anyValue .desc, by simp [meetAtom], by simp [tmovesV]⟩
+                  | undef => simp [meetAtom] at hm
+                  | null => simp [meetAtom] at hm
+                  | bool => simp [meetAtom] at hm
+                  | num => simp [meetAtom] at hm
+                  | str => simp [meetAtom] at hm
+                  | obj => simp [meetAtom] at hm
+                  | list => simp [meetAtom] at hm
+              | isValue w => simp [meetAtom] at hm
+              | desc fs₃ =>
+                  simp only [meetAtom, decide_eq_true_eq] at hm
+                  split at hm
+                  · next hfs =>
+                      injection hm with hmi
+                      subst hmi
+                      exact ⟨.desc fs₃, by simp [meetAtom, hfs],
+                        by simp [tmovesV, hfs]⟩
+                  · simp at hm
+              | notPresent => simp [meetAtom] at hm
+          | undef => simp [tmovesV] at hle
+          | null => simp [tmovesV] at hle
+          | bool => simp [tmovesV] at hle
+          | num => simp [tmovesV] at hle
+          | str => simp [tmovesV] at hle
+          | obj => simp [tmovesV] at hle
+          | list => simp [tmovesV] at hle
+      | isValue w => simp [tmovesV] at hle
+      | desc fs₂ =>
+          simp only [tmovesV, decide_eq_true_eq] at hle
+          subst hle
+          exact ⟨m', hm, tmovesV_refl m'⟩
+      | notPresent => simp [tmovesV] at hle
+  | notPresent =>
+      cases a with
+      | notPresent => exact ⟨m', hm, tmovesV_refl m'⟩
+      | anyValue c => simp [tmovesV] at hle
+      | isValue w => simp [tmovesV] at hle
+      | desc fs => simp [tmovesV] at hle
