@@ -130,24 +130,24 @@ def demoHeap : Heap :=
    Delivery is always a completion; the table types the payload.
    To be extracted from spec.html headers eventually (diff_spec-style). -/
 def corpusSigs : SigTable := [
-  -- set-typed signatures (params: language values unless noted)
-  ("IsCallable",          ([.anyValue langV], .anyValue boolV)),
-  ("IsConstructor",       ([.anyValue langV], .anyValue boolV)),
-  ("IsDataDescriptor",    ([.descAny], .anyValue boolV)),
-  ("IsAccessorDescriptor",([.descAny], .anyValue boolV)),
-  ("OrdinaryToPrimitive", ([.anyValue langV, .oneOf [.str "string", .str "number"]], .anyValue langV)),
-  ("ToPrimitive",         ([.anyValue langV, .union [.notPresent, .oneOf [.str "string", .str "number"]]], .anyValue langV)),
-  ("ToObject",            ([.anyValue langV], .anyValue cObj)),
-  ("GetV",                ([.anyValue langV, .anyValue cStr], .anyValue langV)),
-  ("GetMethod",           ([.anyValue langV, .anyValue cStr], .anyValue langV)),
-  ("OrdinaryGet",         ([.anyValue cObj, .anyValue langV, .anyValue langV], .anyValue langV)),
+  -- flat-lattice signatures: each slot is a flat disjunction of atoms
+  ("IsCallable",          ([langT], [.anyValue .bool])),
+  ("IsConstructor",       ([langT], [.anyValue .bool])),
+  ("IsDataDescriptor",    ([[.anyValue .desc]], [.anyValue .bool])),
+  ("IsAccessorDescriptor",([[.anyValue .desc]], [.anyValue .bool])),
+  ("OrdinaryToPrimitive", ([langT, [.isValue (.str "string"), .isValue (.str "number")]], langT)),
+  ("ToPrimitive",         ([langT, [.notPresent, .isValue (.str "string"), .isValue (.str "number")]], langT)),
+  ("ToObject",            ([langT], [.anyValue .obj])),
+  ("GetV",                ([langT, [.anyValue .str]], langT)),
+  ("GetMethod",           ([langT, [.anyValue .str]], langT)),
+  ("OrdinaryGet",         ([[.anyValue .obj], langT, langT], langT)),
   -- prim-named calls the machine handles natively on registry miss:
-  ("Get",                 ([.anyValue langV, .anyValue langV], .anyValue langV)),
-  ("Call",                ([.anyValue langV, .anyValue langV, .anyValue cList], .anyValue langV))
+  ("Get",                 ([langT, langT], langT)),
+  ("Call",                ([langT, langT, [.anyValue .list]], langT))
 ]
 
 /- the issue-#1 regression loop typechecks too: body neutral, cond boolean -/
-#eval typecheckSeq corpusSigs (.anyValue langV) []
+#eval typecheckSeq corpusSigs langT []
     (.kRepeatWhile (Expr.varNotPresent "done") loopBody :: loopRest)
 
 -- every registry body typechecks against its declared signature
@@ -159,22 +159,21 @@ def corpusSigs : SigTable := [
 -- disjointness invariant (no data field together with an accessor field)
 def sigWf : SigTable → Bool := fun sigs =>
   sigs.all (fun (_, (ps, _)) =>
-    (ps ++ []).all (fun t =>
-      (atoms t).all (fun ty => match ty with
-        | .desc fs => wfFs fs
+    ps.all (fun t =>
+      t.all (fun atm => match atm with
+        | .desc fs => wfFields fs
         | _ => Bool.true)))
 #eval sigWf corpusSigs
 
 -- per-AO: certificate AND assumption-freedom — a nonzero debt must
 -- fail the gate loudly, not just certify-with-debt invisibly.
--- OPEN: OrdinaryGet step 4 (Assert: IsAccessorDescriptor) records 1 —
--- the spec's own descriptor-disjointness invariant (data-ness is a
--- FIELD-level fact; the descV constructor bit cannot split it).
--- Dischargeable when descV splits by shape (same class as the obj
--- kind-split). Until then: 9/10 assumption-free.
+-- CLOSED (flat lattice): all 10/10 assumption-free. The exact desc
+-- field-set atoms (data-complete / accessor-complete) make the
+-- descriptor asserts decidable per atom — the old mask lattice could
+-- not split data-ness out of the desc constructor bit.
 def assumesOf (sigs : SigTable) (name : «String») (ps : List «String»)
     (body : List Instr) : Nat :=
-  match checkSeq sigs (sigRetTy sigs name) [{ Γ := zipTy ps (sigParams sigs name), σ := [] }] body with
+  match checkSeq sigs (sigRetTy sigs name) [{ Γ := zipTy ps (sigParams sigs name), σ := [], pending := none }] body with
   | .flows f => f.assumes.length
   | _ => 999
 #eval assumesOf corpusSigs "IsCallable" ["arg"] (compileSteps (build isCallable6_2_5_1))
@@ -188,35 +187,35 @@ def assumesOf (sigs : SigTable) (name : «String») (ps : List «String»)
 #eval assumesOf corpusSigs "GetMethod" ["value", "propertyKey"] (compileSteps (build getMethod7_3_10))
 #eval assumesOf corpusSigs "OrdinaryGet" ["obj", "propertyKey", "receiver"] (compileSteps (build ordinaryGet7_3_2))
 -- the demos typecheck as frames (Γ = params, or empty for top-level)
-#eval typecheckSeq corpusSigs (.anyValue langV) [("input", .anyValue langV), ("propertyKey", .anyValue cStr)] (compileSteps (build lookupDemoF))
-#eval typecheckSeq corpusSigs (.anyValue langV) [("input", .anyValue langV), ("propertyKey", .anyValue cStr)] (compileSteps (build getMethodDemoF))
+#eval typecheckSeq corpusSigs langT [("input", langT), ("propertyKey", [.anyValue .str])] (compileSteps (build lookupDemoF))
+#eval typecheckSeq corpusSigs langT [("input", langT), ("propertyKey", [.anyValue .str])] (compileSteps (build getMethodDemoF))
 
 /- negative tests: the two historical bugs must be REJECTED.
-   Bug 1 (missing rewrap): the Return-?-of-a-completion-variable shape:
-   kUnwrap leaves raw, kRet demands compl. -/
+   Bug 1 (missing rewrap): kUnwrap extracts the payload raw; kRet
+   demands a parked completion - reject. -/
 def bug1 : List Instr :=
-  [.kEval (Expr.nv "x"), .kTest,
+  [.kEval (.const (.compl Bool.false (JSValue.number 5))), .kTest,
    .kIte [.kRet] [.kUnwrap, .kRet]]
-#eval typecheckSeq corpusSigs (.anyValue langV) [("x", .complN (.anyValue anyV))] bug1
+#eval typecheckSeq corpusSigs langT [] bug1
 /- Bug 2 (double self-test): kEval of a call yields the payload type
    (raw), a stray kTest demands a completion. -/
 def bug2 : List Instr :=
   [.kEval (Expr.call "GetV" [Expr.nv "v", Expr.nv "p"]), .kTest,
    .kIte [.kRet] [.kUnwrap, .kPrim1 .pWrapC, .kRet]]
-#eval typecheckSeq corpusSigs (.anyValue langV) [("v", .anyValue langV), ("p", .anyValue langV)] bug2
-/- Signature-driven argument checking: IteratorClose-style param
-   (raw, compl). -/
-def closeSigs : SigTable := [("FakeClose", ([.anyValue langV, .complT], .anyValue langV))]
+#eval typecheckSeq corpusSigs langT [("v", langT), ("p", langT)] bug2
+/- Signature-driven argument checking: args must be BELOW the
+   callee's parameters (fit the contract), never supersets. -/
+def closeSigs : SigTable := [("FakeClose", ([langT, [.anyValue .desc]], langT))]
 def badArg : List Instr :=
   [.kEval (Expr.call "FakeClose" [Expr.nv "r", Expr.nv "c"]), .kPrim1 .pWrapC, .kRet]
 def goodArg : List Instr := badArg
-#eval typecheckSeq closeSigs (.anyValue langV) [("r", .anyValue langV), ("c", .anyValue langV)] badArg
-#eval typecheckSeq closeSigs (.anyValue langV) [("r", .anyValue langV), ("c", .complT)] goodArg
+#eval typecheckSeq closeSigs langT [("r", langT), ("c", [.anyValue .num])] badArg
+#eval typecheckSeq closeSigs langT [("r", langT), ("c", [.anyValue .desc])] goodArg
 /- Stricter typing: a number where kIte demands a boolean. This is the
    class of bug runtime smoke tests miss on dead paths. -/
 def bug3 : List Instr :=
   [.kEval (.const (JSValue.number 5)), .kIte [] []]
-#eval typecheckSeq corpusSigs (.anyValue langV) [] bug3
+#eval typecheckSeq corpusSigs langT [] bug3
 
 /- ## Reference machine equivalence (exit-checked).
     Reference.lean is re-exported by the root metalanguage module. -/
