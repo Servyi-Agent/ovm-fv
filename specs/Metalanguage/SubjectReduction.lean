@@ -2252,3 +2252,63 @@ theorem sr_kCall (sigs : SigTable) (reg : AOReg) (r : STy)
     · exact (stateOk_heap_roots h) l (List.mem_append.mpr (Or.inr hl))
   · obtain ⟨_, hr2⟩ := stateOk_framesWf_head h
     exact hr2
+
+/- ### More exact-match arms through the frame template. -/
+
+theorem sr_kEval_nat (sigs : SigTable) (reg : AOReg) (r : STy)
+    (env : Env) (eval : List JSValue) (ret : «String»)
+    (fs : List Fr) (heap : Heap) (nl : Nat)
+    (rest : List Instr) (n : Nat)
+    (h : stateOk sigs r (FM.frames
+        (⟨.kEval (.nat n) :: rest, env, eval, ret⟩ :: fs) heap nl)) :
+    SR sigs reg r (FM.frames
+        (⟨.kEval (.nat n) :: rest, env, eval, ret⟩ :: fs) heap nl) := by
+  intro hreg _ hst
+  obtain ⟨fb, hb, ht⟩ := frameOk_flows_elim (stateOk_head_frameOk hst)
+  have ha : absStack sigs none
+      (⟨.kEval (.nat n) :: rest, env, eval, ret⟩ : Fr) = stackTyOf eval := rfl
+  rw [ha, checkSeq_kEval_nat sigs (sigRetTy sigs ret)
+      { Γ := envTyOf env, σ := stackTyOf eval } rest n] at hb
+  obtain ⟨hhd, hrest⟩ := stateOk_framesWf_head hst
+  exact subject_reduction_frame sigs reg r _
+    ⟨rest, env, .number ↑n :: eval, ret⟩ fs heap nl hst rfl rfl
+    (frameOk_none_flows _ _ fb hb ht)
+    (by intro l hl
+        rcases List.mem_append.mp hl with hl | hl
+        · obtain ⟨w, hw, hlw⟩ := List.mem_flatMap.mp hl
+          refine (stateOk_heap_roots hst) l (List.mem_append.mpr (Or.inl ?_))
+          refine List.mem_flatMap.mpr ⟨w, ?_, hlw⟩
+          rcases List.mem_cons.mp hw with rfl | hw'
+          · exact absurd hlw (by simp [locsOf])
+          · exact hw'
+        · exact (stateOk_heap_roots hst) l (List.mem_append.mpr (Or.inr hl)))
+    hrest
+
+theorem sr_kPop (sigs : SigTable) (reg : AOReg) (r : STy)
+    (env : Env) (eval : List JSValue) (ret : «String»)
+    (fs : List Fr) (heap : Heap) (nl : Nat)
+    (rest : List Instr) (v : JSValue)
+    (h : stateOk sigs r (FM.frames
+        (⟨.kPop :: rest, env, v :: eval, ret⟩ :: fs) heap nl)) :
+    SR sigs reg r (FM.frames
+        (⟨.kPop :: rest, env, v :: eval, ret⟩ :: fs) heap nl) := by
+  intro hreg _ hst
+  obtain ⟨fb, hb, ht⟩ := frameOk_flows_elim (stateOk_head_frameOk hst)
+  have ha : absStack sigs none
+      (⟨.kPop :: rest, env, v :: eval, ret⟩ : Fr)
+      = typeOfV v :: stackTyOf eval := rfl
+  rw [ha, checkSeq_kPop sigs (sigRetTy sigs ret)
+      { Γ := envTyOf env, σ := typeOfV v :: stackTyOf eval } rest
+      (typeOfV v) (stackTyOf eval)] at hb
+  obtain ⟨hhd, hrest⟩ := stateOk_framesWf_head hst
+  exact subject_reduction_frame sigs reg r _
+    ⟨rest, env, eval, ret⟩ fs heap nl hst rfl rfl
+    (frameOk_none_flows _ _ fb hb ht)
+    (by intro l hl
+        rcases List.mem_append.mp hl with hl | hl
+        · obtain ⟨w, hw, hlw⟩ := List.mem_flatMap.mp hl
+          refine (stateOk_heap_roots hst) l (List.mem_append.mpr (Or.inl ?_))
+          refine List.mem_flatMap.mpr ⟨w, ?_, hlw⟩
+          exact List.mem_cons_of_mem _ hw
+        · exact (stateOk_heap_roots hst) l (List.mem_append.mpr (Or.inr hl)))
+    hrest
