@@ -585,16 +585,16 @@ def stepWorlds (sigs : SigTable) (ws : Worlds) (i : Instr) : Option Worlds :=
       -- and diverge from the abstraction (checker bug #10, found by
       -- the sr_kPop/sr_kSet assembly)
       ws.mapM (fun w =>
-        if w.pending.isSome then none
-        else match w.σ with
-          | t :: σ' => some { w with Γ := (x, t) :: w.Γ, σ := σ' }
-          | [] => none)
+        match w.pending, w.σ with
+        | some _, _ => none
+        | none, t :: σ' => some { w with Γ := (x, t) :: w.Γ, σ := σ' }
+        | none, [] => none)
   | .kPop =>
       ws.mapM (fun w =>
-        if w.pending.isSome then none
-        else match w.σ with
-          | _ :: σ' => some { w with σ := σ' }
-          | [] => none)
+        match w.pending, w.σ with
+        | some _, _ => none
+        | none, _ :: σ' => some { w with σ := σ' }
+        | none, [] => none)
   | .kPrim1 .pWrapC =>
       ws.mapM (fun w =>
         match w.σ with
@@ -609,10 +609,11 @@ def stepWorlds (sigs : SigTable) (ws : Worlds) (i : Instr) : Option Worlds :=
       match primTys p with
       | some (tin, tout) =>
           ws.mapM (fun w =>
-            if w.pending.isSome then none
-            else match popTy tin w.σ with
-              | some σ' => some { w with σ := tout :: σ' }
-              | none => none)
+            match w.pending with
+            | some _ => none
+            | none => match popTy tin w.σ with
+                | some σ' => some { w with σ := tout :: σ' }
+                | none => none)
       | none => some ws
   | .kTest =>
       -- TESTING OBSERVES: parking already split the deliveries into
@@ -653,17 +654,19 @@ def stepWorlds (sigs : SigTable) (ws : Worlds) (i : Instr) : Option Worlds :=
       else none
   | .kMkList n =>
       ws.mapM (fun w =>
-        if w.pending.isSome then none
-        else match popTyN n anyT w.σ with
-          | some σ' => some { w with σ := [.anyValue .list] :: σ' }
-          | none => none)
+        match w.pending with
+        | some _ => none
+        | none => match popTyN n anyT w.σ with
+            | some σ' => some { w with σ := [.anyValue .list] :: σ' }
+            | none => none)
   | .kNewSlot sn =>
       if (slotOfName sn).isSome then
         ws.mapM (fun w =>
-          if w.pending.isSome then none
-          else match popTy anyT w.σ with
-            | some σ' => some { w with σ := [.anyValue .obj] :: σ' }
-            | none => none)
+          match w.pending with
+          | some _ => none
+          | none => match popTy anyT w.σ with
+              | some σ' => some { w with σ := [.anyValue .obj] :: σ' }
+              | none => none)
       else none
   | _ => some ws
 

@@ -603,3 +603,146 @@ theorem sr_kEval_nv {sigs : SigTable} {x : «String»} {v : JSValue} {rest : Lis
         splitStack_cons_val v σ p eval hw hse
       rw [hss]
       simpa only [frameChecks, hss] using hchk
+
+/- ## Proof layer Vb: kPop / kSet (the parked-discipline arms) -/
+
+/-- A head value never parks: if the parked slot stayed none, the
+    head cannot be a completion. -/
+theorem isCompl_of_head {w : JSValue} {eval : List JSValue} {σ : List Ty}
+    (h : splitStack (w :: eval) = some (σ, none)) : isCompl w = Bool.false := by
+  cases w with
+  | compl b pv =>
+      cases hse : splitStack eval with
+      | none => simp only [splitStack, hse] at h; simp at h
+      | some sp =>
+          obtain ⟨σ₁, p₁⟩ := sp
+          simp only [splitStack, hse] at h
+          cases p₁ with
+          | none =>
+              cases b <;> simp_all
+          | some p' => cases b <;> simp_all
+  | undefined => rfl
+  | null => rfl
+  | boolean b => rfl
+  | number n => rfl
+  | str s => rfl
+  | obj o => rfl
+  | listV vs => rfl
+  | descV d => rfl
+
+/-- Uniform reject computation: a failed stepWorlds makes checkSeq
+    reject (the catch-all arm). -/
+theorem checkSeq_reject_kPop {sigs : SigTable} {r : Ty} {W : World}
+    {rest : List Instr} (hbad : stepWorlds sigs [W] .kPop = none) :
+    ∃ why, checkSeq sigs r [W] (normL (.kPop :: rest))
+      = TCResult.reject .kPop why := by
+  rw [normL_cons]
+  simp only [List.cons_append, List.nil_append, normI, checkSeq, hbad]
+  exact ⟨_, rfl⟩
+
+theorem checkSeq_reject_kSet {sigs : SigTable} {r : Ty} {W : World} {x : «String»}
+    {rest : List Instr} (hbad : stepWorlds sigs [W] (.kSet x) = none) :
+    ∃ why, checkSeq sigs r [W] (normL (.kSet x :: rest))
+      = TCResult.reject (.kSet x) why := by
+  rw [normL_cons]
+  simp only [List.cons_append, List.nil_append, normI, checkSeq, hbad]
+  exact ⟨_, rfl⟩
+
+theorem sr_kPop {sigs : SigTable} {w : JSValue} {rest : List Instr}
+    {env : Env} {eval : List JSValue} {ret : «String»}
+    (h : frameOk sigs none ⟨.kPop :: rest, env, w :: eval, ret⟩) :
+    frameOk sigs none ⟨rest, env, eval, ret⟩ := by
+  obtain ⟨-, henv, hchk⟩ := h
+  cases hs : splitStack (w :: eval) with
+  | none => rw [hs] at hchk; exact hchk.elim
+  | some sp =>
+      obtain ⟨σ₀, p₀⟩ := sp
+      simp only [hs] at hchk
+      cases p₀ with
+      | some p' =>
+          exfalso
+          rw [frameChecks] at hchk
+          simp only [hs, normL_cons, normI, List.cons_append, List.nil_append,
+                     checkSeq, stepWorlds, mapM_singleton, Option.map] at hchk
+      | none =>
+          cases σ₀ with
+          | nil =>
+              exfalso
+              rw [frameChecks] at hchk
+              simp only [hs, normL_cons, normI, List.cons_append, List.nil_append,
+                         checkSeq, stepWorlds, mapM_singleton, Option.map] at hchk
+          | cons ts σ' =>
+              have hw : isCompl w = Bool.false := isCompl_of_head hs
+              cases hse : splitStack eval with
+              | none =>
+                  have hn : splitStack (w :: eval) = none := by
+                    simp only [splitStack, hse]
+                  rw [hn] at hs
+                  cases hs
+              | some sp' =>
+                  obtain ⟨σ₁, p₁⟩ := sp'
+                  have hss := splitStack_cons_val w σ₁ p₁ eval hw hse
+                  rw [hss] at hs
+                  simp only [Option.some.injEq, Prod.mk.injEq, List.cons.injEq] at hs
+                  have hse' : splitStack eval = some (σ', none) := by
+                    rw [hse, hs.1.2, hs.2]
+                  have hwd : [typeOfV w] = ts := by rw [hs.1.1]
+                  rw [frameChecks] at hchk
+                  rw [hss] at hchk
+                  simp only [hwd, hs.1.2, hs.2] at hchk
+                  rw [checkSeq_kPop (σ' := σ') (ts := ts) rfl rfl] at hchk
+                  refine ⟨?_, henv, ?_⟩
+                  · left; decide
+                  · rw [hse']
+                    simp only [frameChecks, hse']
+                    exact hchk
+
+theorem sr_kSet {sigs : SigTable} {x : «String»} {w : JSValue} {rest : List Instr}
+    {env : Env} {eval : List JSValue} {ret : «String»}
+    (h : frameOk sigs none ⟨.kSet x :: rest, env, w :: eval, ret⟩) :
+    frameOk sigs none ⟨rest, (x, w) :: env, eval, ret⟩ := by
+  obtain ⟨-, henv, hchk⟩ := h
+  cases hs : splitStack (w :: eval) with
+  | none => rw [hs] at hchk; exact hchk.elim
+  | some sp =>
+      obtain ⟨σ₀, p₀⟩ := sp
+      simp only [hs] at hchk
+      cases p₀ with
+      | some p' =>
+          exfalso
+          rw [frameChecks] at hchk
+          simp only [hs, normL_cons, normI, List.cons_append, List.nil_append,
+                     checkSeq, stepWorlds, mapM_singleton, Option.map] at hchk
+      | none =>
+          cases σ₀ with
+          | nil =>
+              exfalso
+              rw [frameChecks] at hchk
+              simp only [hs, normL_cons, normI, List.cons_append, List.nil_append,
+                         checkSeq, stepWorlds, mapM_singleton, Option.map] at hchk
+          | cons ts σ' =>
+              have hw : isCompl w = Bool.false := isCompl_of_head hs
+              cases hse : splitStack eval with
+              | none =>
+                  have hn : splitStack (w :: eval) = none := by
+                    simp only [splitStack, hse]
+                  rw [hn] at hs
+                  cases hs
+              | some sp' =>
+                  obtain ⟨σ₁, p₁⟩ := sp'
+                  have hss := splitStack_cons_val w σ₁ p₁ eval hw hse
+                  rw [hss] at hs
+                  simp only [Option.some.injEq, Prod.mk.injEq, List.cons.injEq] at hs
+                  have hse' : splitStack eval = some (σ', none) := by
+                    rw [hse, hs.1.2, hs.2]
+                  have hwd : [typeOfV w] = ts := by rw [hs.1.1]
+                  rw [frameChecks] at hchk
+                  rw [hss] at hchk
+                  simp only [hwd, hs.1.2, hs.2] at hchk
+                  rw [checkSeq_kSet (σ' := σ') (ts := ts) rfl rfl] at hchk
+                  have henv' : ((x, w) :: env).all (fun (n, v) => !isCompl v) = Bool.true := by
+                    simp [hw, henv]
+                  refine ⟨?_, henv', ?_⟩
+                  · left; decide
+                  · simp only [frameChecks, hse', envTyOf, List.map_cons, hwd]
+                    exact hchk
