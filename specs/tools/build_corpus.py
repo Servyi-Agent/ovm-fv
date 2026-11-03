@@ -131,23 +131,23 @@ def demoHeap : Heap :=
    To be extracted from spec.html headers eventually (diff_spec-style). -/
 def corpusSigs : SigTable := [
   -- set-typed signatures (params: language values unless noted)
-  ("IsCallable",          ([.val langV], .val boolV)),
-  ("IsConstructor",       ([.val langV], .val boolV)),
-  ("IsDataDescriptor",    ([.descAny], .val boolV)),
-  ("IsAccessorDescriptor",([.descAny], .val boolV)),
-  ("OrdinaryToPrimitive", ([.val langV, .oneOf [.str "string", .str "number"]], .val langV)),
-  ("ToPrimitive",         ([.val langV, .union [.notPresent, .oneOf [.str "string", .str "number"]]], .val langV)),
-  ("ToObject",            ([.val langV], .val cObj)),
-  ("GetV",                ([.val langV, .val cStr], .val langV)),
-  ("GetMethod",           ([.val langV, .val cStr], .val langV)),
-  ("OrdinaryGet",         ([.val cObj, .val langV, .val langV], .val langV)),
+  ("IsCallable",          ([.anyValue langV], .anyValue boolV)),
+  ("IsConstructor",       ([.anyValue langV], .anyValue boolV)),
+  ("IsDataDescriptor",    ([.descAny], .anyValue boolV)),
+  ("IsAccessorDescriptor",([.descAny], .anyValue boolV)),
+  ("OrdinaryToPrimitive", ([.anyValue langV, .oneOf [.str "string", .str "number"]], .anyValue langV)),
+  ("ToPrimitive",         ([.anyValue langV, .union [.notPresent, .oneOf [.str "string", .str "number"]]], .anyValue langV)),
+  ("ToObject",            ([.anyValue langV], .anyValue cObj)),
+  ("GetV",                ([.anyValue langV, .anyValue cStr], .anyValue langV)),
+  ("GetMethod",           ([.anyValue langV, .anyValue cStr], .anyValue langV)),
+  ("OrdinaryGet",         ([.anyValue cObj, .anyValue langV, .anyValue langV], .anyValue langV)),
   -- prim-named calls the machine handles natively on registry miss:
-  ("Get",                 ([.val langV, .val langV], .val langV)),
-  ("Call",                ([.val langV, .val langV, .val cList], .val langV))
+  ("Get",                 ([.anyValue langV, .anyValue langV], .anyValue langV)),
+  ("Call",                ([.anyValue langV, .anyValue langV, .anyValue cList], .anyValue langV))
 ]
 
 /- the issue-#1 regression loop typechecks too: body neutral, cond boolean -/
-#eval typecheckSeq corpusSigs (.val langV) []
+#eval typecheckSeq corpusSigs (.anyValue langV) []
     (.kRepeatWhile (Expr.varNotPresent "done") loopBody :: loopRest)
 
 -- every registry body typechecks against its declared signature
@@ -188,8 +188,8 @@ def assumesOf (sigs : SigTable) (name : «String») (ps : List «String»)
 #eval assumesOf corpusSigs "GetMethod" ["value", "propertyKey"] (compileSteps (build getMethod7_3_10))
 #eval assumesOf corpusSigs "OrdinaryGet" ["obj", "propertyKey", "receiver"] (compileSteps (build ordinaryGet7_3_2))
 -- the demos typecheck as frames (Γ = params, or empty for top-level)
-#eval typecheckSeq corpusSigs (.val langV) [("input", .val langV), ("propertyKey", .val cStr)] (compileSteps (build lookupDemoF))
-#eval typecheckSeq corpusSigs (.val langV) [("input", .val langV), ("propertyKey", .val cStr)] (compileSteps (build getMethodDemoF))
+#eval typecheckSeq corpusSigs (.anyValue langV) [("input", .anyValue langV), ("propertyKey", .anyValue cStr)] (compileSteps (build lookupDemoF))
+#eval typecheckSeq corpusSigs (.anyValue langV) [("input", .anyValue langV), ("propertyKey", .anyValue cStr)] (compileSteps (build getMethodDemoF))
 
 /- negative tests: the two historical bugs must be REJECTED.
    Bug 1 (missing rewrap): the Return-?-of-a-completion-variable shape:
@@ -197,26 +197,26 @@ def assumesOf (sigs : SigTable) (name : «String») (ps : List «String»)
 def bug1 : List Instr :=
   [.kEval (Expr.nv "x"), .kTest,
    .kIte [.kRet] [.kUnwrap, .kRet]]
-#eval typecheckSeq corpusSigs (.val langV) [("x", .complN (.val anyV))] bug1
+#eval typecheckSeq corpusSigs (.anyValue langV) [("x", .complN (.anyValue anyV))] bug1
 /- Bug 2 (double self-test): kEval of a call yields the payload type
    (raw), a stray kTest demands a completion. -/
 def bug2 : List Instr :=
   [.kEval (Expr.call "GetV" [Expr.nv "v", Expr.nv "p"]), .kTest,
    .kIte [.kRet] [.kUnwrap, .kPrim1 .pWrapC, .kRet]]
-#eval typecheckSeq corpusSigs (.val langV) [("v", .val langV), ("p", .val langV)] bug2
+#eval typecheckSeq corpusSigs (.anyValue langV) [("v", .anyValue langV), ("p", .anyValue langV)] bug2
 /- Signature-driven argument checking: IteratorClose-style param
    (raw, compl). -/
-def closeSigs : SigTable := [("FakeClose", ([.val langV, .complT], .val langV))]
+def closeSigs : SigTable := [("FakeClose", ([.anyValue langV, .complT], .anyValue langV))]
 def badArg : List Instr :=
   [.kEval (Expr.call "FakeClose" [Expr.nv "r", Expr.nv "c"]), .kPrim1 .pWrapC, .kRet]
 def goodArg : List Instr := badArg
-#eval typecheckSeq closeSigs (.val langV) [("r", .val langV), ("c", .val langV)] badArg
-#eval typecheckSeq closeSigs (.val langV) [("r", .val langV), ("c", .complT)] goodArg
+#eval typecheckSeq closeSigs (.anyValue langV) [("r", .anyValue langV), ("c", .anyValue langV)] badArg
+#eval typecheckSeq closeSigs (.anyValue langV) [("r", .anyValue langV), ("c", .complT)] goodArg
 /- Stricter typing: a number where kIte demands a boolean. This is the
    class of bug runtime smoke tests miss on dead paths. -/
 def bug3 : List Instr :=
   [.kEval (.const (JSValue.number 5)), .kIte [] []]
-#eval typecheckSeq corpusSigs (.val langV) [] bug3
+#eval typecheckSeq corpusSigs (.anyValue langV) [] bug3
 
 /- ## Reference machine equivalence (exit-checked).
     Reference.lean is re-exported by the root metalanguage module. -/

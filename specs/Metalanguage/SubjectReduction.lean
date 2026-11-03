@@ -178,7 +178,7 @@ def heapTyOk (heap : Heap) (ht : HeapTy) (n : Nat) : Prop :=
 def machineRet (sigs : SigTable) (fs : List Fr) : STy :=
   match fs.getLast? with
   | some f => sigRetTy sigs f.ret
-  | none => .val anyV
+  | none => .anyValue anyV
 
 /- ## State typing, indexed by the machine's answer type r.
 
@@ -341,7 +341,7 @@ theorem maskSub_mem (x a b : Nat) (hmem : x &&& a ≠ 0)
     works.) -/
 def complDepth : STy → Nat
   | .complN t => 1 + complDepth t
-  | .val _ | .desc _ | .descAny | .isValue _ | .oneOf _ | .notPresent
+  | .anyValue _ | .desc _ | .descAny | .isValue _ | .oneOf _ | .notPresent
   | .union _ | .complT => 0
 
 theorem complDepth_lt (p : STy) : complDepth p < complDepth (STy.complN p) := by
@@ -389,11 +389,11 @@ theorem tmovesAtom_flat (b a c : STy) (hb : complDepth b = 0)
     (h₁ : tmovesAtom a b = Bool.true)
     (h₂ : tmovesAtom b c = Bool.true) : tmovesAtom a c = Bool.true := by
   cases b with
-  | val m =>
+  | anyValue m =>
       cases c with
-      | val k =>
+      | anyValue k =>
           cases a with
-          | val n =>
+          | anyValue n =>
               simp only [tmovesAtom, Bool.or_eq_true, beq_iff_eq] at h₁ h₂ ⊢
               rcases h₁ with h1a | h1b <;> rcases h₂ with h2a | h2b
               · exact Or.inl h1a
@@ -439,7 +439,7 @@ theorem tmovesAtom_flat (b a c : STy) (hb : complDepth b = 0)
           | oneOf xs =>
               simp only [tmovesAtom] at h₂ ⊢
               exact contains_transfer (beq_self_eq_true _) h₂
-          | val n => simpa only [tmovesAtom] using h₂
+          | anyValue n => simpa only [tmovesAtom] using h₂
           | desc _ | descAny | notPresent | union _ | complN _ | complT =>
               simp only [tmovesAtom] at h₂
               exact Bool.noConfusion h₂
@@ -451,13 +451,13 @@ theorem tmovesAtom_flat (b a c : STy) (hb : complDepth b = 0)
           | oneOf xs =>
               simp only [tmovesAtom] at h₁ h₂ ⊢
               exact all_imp (fun _ hv => contains_transfer hv h₂) h₁
-          | val n =>
+          | anyValue n =>
               simp only [tmovesAtom] at h₁ h₂ ⊢
               exact all_imp (fun _ hv => by rw [eq_of_beq hv]; exact h₂) h₁
           | desc _ | descAny | notPresent | union _ | complN _ | complT =>
               simp only [tmovesAtom] at h₂
               exact Bool.noConfusion h₂
-      | val _ | desc _ | descAny | notPresent | union _ | complN _ | complT =>
+      | anyValue _ | desc _ | descAny | notPresent | union _ | complN _ | complT =>
           simp only [tmovesAtom] at h₁
           exact Bool.noConfusion h₁
   | oneOf ws =>
@@ -470,7 +470,7 @@ theorem tmovesAtom_flat (b a c : STy) (hb : complDepth b = 0)
           | oneOf xs =>
               simp only [tmovesAtom] at h₁ h₂ ⊢
               exact all_mem ws xs.contains h₂ v (List.contains_iff_mem.mp h₁)
-          | val k =>
+          | anyValue k =>
               simp only [tmovesAtom] at h₁ h₂ ⊢
               exact all_mem ws (fun z => ctorBit z &&& k != 0) h₂ v
                 (List.contains_iff_mem.mp h₁)
@@ -482,7 +482,7 @@ theorem tmovesAtom_flat (b a c : STy) (hb : complDepth b = 0)
           | oneOf xs =>
               simp only [tmovesAtom] at h₁ h₂ ⊢
               exact all_contains_trans h₁ h₂
-          | val k =>
+          | anyValue k =>
               simp only [tmovesAtom] at h₁ h₂ ⊢
               exact all_imp (fun v hv =>
                 all_mem ws (fun z => ctorBit z &&& k != 0) h₂ v
@@ -494,7 +494,7 @@ theorem tmovesAtom_flat (b a c : STy) (hb : complDepth b = 0)
           | desc _ | descAny | notPresent | union _ | complN _ | complT =>
               simp only [tmovesAtom] at h₂
               exact Bool.noConfusion h₂
-      | val _ | desc _ | descAny | notPresent | union _ | complN _ | complT =>
+      | anyValue _ | desc _ | descAny | notPresent | union _ | complN _ | complT =>
           simp only [tmovesAtom] at h₁
           exact Bool.noConfusion h₁
   | desc m =>
@@ -515,10 +515,10 @@ theorem tmovesAtom_flat (b a c : STy) (hb : complDepth b = 0)
                     _ = n &&& m := by rw [h2b]
                     _ = n := h1b)
           | descAny => rfl
-          | val _ | isValue _ | oneOf _ | notPresent | union _ | complN _ | complT =>
+          | anyValue _ | isValue _ | oneOf _ | notPresent | union _ | complN _ | complT =>
               simp only [tmovesAtom] at h₂
               exact Bool.noConfusion h₂
-      | val _ | isValue _ | oneOf _ | descAny | notPresent | union _ | complN _ | complT =>
+      | anyValue _ | isValue _ | oneOf _ | descAny | notPresent | union _ | complN _ | complT =>
           simp only [tmovesAtom] at h₁
           exact Bool.noConfusion h₁
   | descAny =>
@@ -526,16 +526,16 @@ theorem tmovesAtom_flat (b a c : STy) (hb : complDepth b = 0)
       | desc n =>
           cases c with
           | descAny => rfl
-          | val _ | isValue _ | oneOf _ | desc _ | notPresent | union _ | complN _ | complT =>
+          | anyValue _ | isValue _ | oneOf _ | desc _ | notPresent | union _ | complN _ | complT =>
               simp only [tmovesAtom] at h₂
               exact Bool.noConfusion h₂
       | descAny =>
           cases c with
           | descAny => rfl
-          | val _ | isValue _ | oneOf _ | desc _ | notPresent | union _ | complN _ | complT =>
+          | anyValue _ | isValue _ | oneOf _ | desc _ | notPresent | union _ | complN _ | complT =>
               simp only [tmovesAtom] at h₂
               exact Bool.noConfusion h₂
-      | val _ | isValue _ | oneOf _ | notPresent | union _ | complN _ | complT =>
+      | anyValue _ | isValue _ | oneOf _ | notPresent | union _ | complN _ | complT =>
           simp only [tmovesAtom] at h₁
           exact Bool.noConfusion h₁
   | notPresent =>
@@ -543,10 +543,10 @@ theorem tmovesAtom_flat (b a c : STy) (hb : complDepth b = 0)
       | notPresent =>
           cases c with
           | notPresent => rfl
-          | val _ | isValue _ | oneOf _ | desc _ | descAny | union _ | complN _ | complT =>
+          | anyValue _ | isValue _ | oneOf _ | desc _ | descAny | union _ | complN _ | complT =>
               simp only [tmovesAtom] at h₂
               exact Bool.noConfusion h₂
-      | val _ | isValue _ | oneOf _ | desc _ | descAny | union _ | complN _ | complT =>
+      | anyValue _ | isValue _ | oneOf _ | desc _ | descAny | union _ | complN _ | complT =>
           simp only [tmovesAtom] at h₁
           exact Bool.noConfusion h₁
   | complT =>
@@ -554,15 +554,15 @@ theorem tmovesAtom_flat (b a c : STy) (hb : complDepth b = 0)
       | complT =>
           cases c with
           | complT => rfl
-          | val _ | isValue _ | oneOf _ | desc _ | descAny | notPresent | union _ | complN =>
+          | anyValue _ | isValue _ | oneOf _ | desc _ | descAny | notPresent | union _ | complN =>
               simp only [tmovesAtom] at h₂
               exact Bool.noConfusion h₂
-      | val _ | isValue _ | oneOf _ | desc _ | descAny | notPresent | union _ | complN =>
+      | anyValue _ | isValue _ | oneOf _ | desc _ | descAny | notPresent | union _ | complN =>
           simp only [tmovesAtom] at h₁
           exact Bool.noConfusion h₁
   | union ps =>
       cases a with
-      | val _ | isValue _ | oneOf _ | desc _ | descAny | notPresent | union _ | complN _ | complT =>
+      | anyValue _ | isValue _ | oneOf _ | desc _ | descAny | notPresent | union _ | complN _ | complT =>
           simp only [tmovesAtom] at h₁
           exact Bool.noConfusion h₁
   | complN p => rw [complDepth] at hb; omega
@@ -579,7 +579,7 @@ theorem tmovesAtom_trans_fuel : ∀ (n : Nat) (b a c : STy), complDepth b ≤ n 
       have hbd : complDepth b = 0 := Nat.le_zero.mp hb
       cases b with
       | complN p => rw [complDepth] at hbd; omega
-      | val _ | isValue _ | oneOf _ | desc _ | descAny | notPresent | union _ | complT =>
+      | anyValue _ | isValue _ | oneOf _ | desc _ | descAny | notPresent | union _ | complT =>
           exact tmovesAtom_flat _ a c (by simpa only [complDepth] using hbd) h₁ h₂
   | succ n ih =>
       intro b a c hb h₁ h₂
@@ -595,21 +595,21 @@ theorem tmovesAtom_trans_fuel : ∀ (n : Nat) (b a c : STy), complDepth b ≤ n 
               | complN n₂ =>
                   simp only [tmovesAtom] at h₁ h₂ ⊢
                   exact ih p n₂ q hlt h₁ h₂
-              | val _ | isValue _ | oneOf _ | desc _ | descAny | notPresent
+              | anyValue _ | isValue _ | oneOf _ | desc _ | descAny | notPresent
               | union _ | complT =>
                   simp only [tmovesAtom] at h₁
                   exact Bool.noConfusion h₁
-          | val _ | isValue _ | oneOf _ | desc _ | descAny | notPresent
+          | anyValue _ | isValue _ | oneOf _ | desc _ | descAny | notPresent
           | union _ | complT =>
               cases a with
               | complN n₂ =>
                   simp only [tmovesAtom] at h₂
                   exact Bool.noConfusion h₂
-              | val _ | isValue _ | oneOf _ | desc _ | descAny | notPresent
+              | anyValue _ | isValue _ | oneOf _ | desc _ | descAny | notPresent
               | union _ | complT =>
                   simp only [tmovesAtom] at h₁
                   exact Bool.noConfusion h₁
-      | val _ | isValue _ | oneOf _ | desc _ | descAny | notPresent | union _ | complT =>
+      | anyValue _ | isValue _ | oneOf _ | desc _ | descAny | notPresent | union _ | complT =>
           exact tmovesAtom_flat _ a c (by simp only [complDepth]) h₁ h₂
 
 theorem tmovesAtom_trans (b a c : STy) (h₁ : tmovesAtom a b = Bool.true)
@@ -729,7 +729,7 @@ theorem atoms_sh : ∀ (n : Nat) (t : STy), aDepth t ≤ n →
       | complN t' =>
           have h1 : 1 ≤ aDepth (STy.complN t') := by simp only [aDepth]; omega
           omega
-      | val _ | isValue _ | oneOf _ | desc _ | descAny | notPresent | complT =>
+      | anyValue _ | isValue _ | oneOf _ | desc _ | descAny | notPresent | complT =>
           simp only [atoms, atomSh, List.all_cons, List.all_nil, Bool.and_true]
   | succ n ih =>
       intro t ht
@@ -754,7 +754,7 @@ theorem atoms_sh : ∀ (n : Nat) (t : STy), aDepth t ≤ n →
           have := this a ha
           simp only [atomSh]
           exact this
-      | val _ | isValue _ | oneOf _ | desc _ | descAny | notPresent | complT =>
+      | anyValue _ | isValue _ | oneOf _ | desc _ | descAny | notPresent | complT =>
           simp only [atoms, atomSh, List.all_cons, List.all_nil, Bool.and_true]
 
 /-- Atom reflexivity for union-free spines, by spine fuel. -/
@@ -767,7 +767,7 @@ theorem tmovesAtom_refl_sh : ∀ (n : Nat) (a : STy), complDepth a ≤ n →
       cases a with
       | complN t => rw [complDepth] at ha; omega
       | union _ => simp only [atomSh] at hsh; exact Bool.noConfusion hsh
-      | val m =>
+      | anyValue m =>
           simp only [tmovesAtom, Bool.or_eq_true, beq_iff_eq, Nat.and_self, Nat.sub_self]
           exact Or.inr trivial
       | desc m =>
@@ -790,7 +790,7 @@ theorem tmovesAtom_refl_sh : ∀ (n : Nat) (a : STy), complDepth a ≤ n →
             omega
           exact ih t ht (by simp only [atomSh] at hsh; exact hsh)
       | union _ => simp only [atomSh] at hsh; exact Bool.noConfusion hsh
-      | val m =>
+      | anyValue m =>
           simp only [tmovesAtom, Bool.or_eq_true, beq_iff_eq, Nat.and_self, Nat.sub_self]
           exact Or.inr trivial
       | desc m =>
@@ -1089,7 +1089,7 @@ theorem tyNonempty_atom : ∀ (n : Nat) (t : STy), aDepth t ≤ n →
                     omega
       | complN t' => have h1 : 1 ≤ aDepth (STy.complN t') := by simp only [aDepth]; omega
                      omega
-      | val _ | isValue _ | oneOf _ | desc _ | descAny | notPresent | complT =>
+      | anyValue _ | isValue _ | oneOf _ | desc _ | descAny | notPresent | complT =>
           exact ⟨_, by simp [atoms], hne⟩
   | succ n ih =>
       intro t ht hne
@@ -1111,7 +1111,7 @@ theorem tyNonempty_atom : ∀ (n : Nat) (t : STy), aDepth t ≤ n →
           · simp only [atoms, List.mem_map]
             exact ⟨a₀, ha₀, rfl⟩
           · simpa only [tyNonempty] using hn₀
-      | val _ | isValue _ | oneOf _ | desc _ | descAny | notPresent | complT =>
+      | anyValue _ | isValue _ | oneOf _ | desc _ | descAny | notPresent | complT =>
           exact ⟨_, by simp [atoms], hne⟩
 
 theorem atom_ne_below_oneOf : ∀ (a₀ : STy) (vs : List JSValue),
@@ -1127,19 +1127,19 @@ theorem atom_ne_below_oneOf : ∀ (a₀ : STy) (vs : List JSValue),
       | nil => simp only [tyNonempty] at hne; exact Bool.noConfusion hne
       | cons u rest =>
           exact ⟨u, List.contains_iff_mem.mp (h u (by simp))⟩
-  | val _ | desc _ | descAny | notPresent | union _ | complN _ | complT =>
+  | anyValue _ | desc _ | descAny | notPresent | union _ | complN _ | complT =>
       simp only [tmovesAtom] at h; exact Bool.noConfusion h
 
 /-- Nonemptiness transfers up through atom-subtyping. -/
 theorem tmovesAtom_le_ne (a b : STy) (h : tmovesAtom a b = Bool.true)
     (hne : tyNonempty a = Bool.true) : tyNonempty b = Bool.true := by
   cases b with
-  | val m =>
+  | anyValue m =>
       simp only [tyNonempty, bne_iff_ne]
       intro hm0
       rw [hm0] at h
       cases a with
-      | val k =>
+      | anyValue k =>
           simp only [tmovesAtom, Bool.or_eq_true, beq_iff_eq] at h
           simp only [tyNonempty, bne_iff_ne] at hne
           rcases h with h1 | h1
@@ -1169,7 +1169,7 @@ theorem tmovesAtom_le_ne (a b : STy) (h : tmovesAtom a b = Bool.true)
         | oneOf us =>
             exact atom_ne_below_oneOf (.oneOf us) vs
               (by simpa only [tmovesAtom] using h) hne
-        | val _ | desc _ | descAny | notPresent | union _ | complN _ | complT =>
+        | anyValue _ | desc _ | descAny | notPresent | union _ | complN _ | complT =>
             simp only [tmovesAtom] at h; exact Bool.noConfusion h
       obtain ⟨v, hv⟩ := key
       cases vs with
@@ -1186,7 +1186,7 @@ theorem tmovesAtom_le_ne (a b : STy) (h : tmovesAtom a b = Bool.true)
           simp only [tyNonempty] at hne
           simp only [tyNonempty]
           exact tmovesAtom_le_ne a₂ t h hne
-      | val _ | isValue _ | oneOf _ | desc _ | descAny | notPresent | union _ | complT =>
+      | anyValue _ | isValue _ | oneOf _ | desc _ | descAny | notPresent | union _ | complT =>
           simp only [tmovesAtom] at h; exact Bool.noConfusion h
 
 /- ## Bit algebra + meet soundness. -/
@@ -1280,12 +1280,12 @@ theorem ctorBit_inter_ne (v : JSValue) (k m : Nat)
     below the computed meet (for mask tests). -/
 theorem tmovesAtom_meet_val (a₀ s₀ : STy) (m : Nat)
     (hle : tmovesAtom a₀ s₀ = Bool.true)
-    (hm : tmovesAtom a₀ (STy.val m) = Bool.true) :
-    tmovesAtom a₀ (tyMeetAtom s₀ (STy.val m)) = Bool.true := by
+    (hm : tmovesAtom a₀ (STy.anyValue m) = Bool.true) :
+    tmovesAtom a₀ (tyMeetAtom s₀ (STy.anyValue m)) = Bool.true := by
   cases s₀ with
-  | val k =>
+  | anyValue k =>
       cases a₀ with
-      | val j =>
+      | anyValue j =>
           simp only [tyMeetAtom, tmovesAtom, Bool.or_eq_true, beq_iff_eq] at hle hm ⊢
           rcases hle with h1 | h1 <;> rcases hm with h2 | h2
           · exact Or.inl h1
@@ -1335,7 +1335,7 @@ theorem tmovesAtom_meet_val (a₀ s₀ : STy) (m : Nat)
               have hcond : (((ctorBit v) &&& m) != 0) = Bool.true := bne_iff_ne.mpr hbm
               simp only [tyMeetAtom, if_pos hcond]
               simpa only [tmovesAtom] using hle
-      | val _ | desc _ | descAny | notPresent | union _ | complN _ | complT =>
+      | anyValue _ | desc _ | descAny | notPresent | union _ | complN _ | complT =>
           simp only [tmovesAtom] at hle; exact Bool.noConfusion hle
   | oneOf us =>
       cases a₀ with
@@ -1380,7 +1380,7 @@ theorem tmovesAtom_meet_val (a₀ s₀ : STy) (m : Nat)
                 List.mem_filter.mpr ⟨hwu, bne_iff_ne.mpr (hball w hw)⟩
               rw [hf] at hmem
               exact List.contains_iff_mem.mpr hmem
-      | val _ | desc _ | descAny | notPresent | union _ | complN _ | complT =>
+      | anyValue _ | desc _ | descAny | notPresent | union _ | complN _ | complT =>
           simp only [tmovesAtom] at hle; exact Bool.noConfusion hle
   | desc _ | descAny | notPresent | complN _ | complT =>
       cases a₀ <;> first
@@ -1433,8 +1433,8 @@ theorem ofAtoms_mem (L : List STy) (hL : ∀ k ∈ L, atoms k = [k]) :
 
 /-- Meet soundness, mask tests (full type level). -/
 theorem tmoves_meet_val (a S : STy) (m : Nat) (hne : atomsNE a = Bool.true)
-    (hS : tmoves a S = Bool.true) (hm : tmoves a (STy.val m) = Bool.true) :
-    tmoves a (tyMeet S (STy.val m)) = Bool.true := by
+    (hS : tmoves a S = Bool.true) (hm : tmoves a (STy.anyValue m) = Bool.true) :
+    tmoves a (tyMeet S (STy.anyValue m)) = Bool.true := by
   refine tmoves_intro a _ ?_
   intro a₀ ha₀
   have hn₀ : tyNonempty a₀ = Bool.true :=
@@ -1442,13 +1442,13 @@ theorem tmoves_meet_val (a S : STy) (m : Nat) (hne : atomsNE a = Bool.true)
   have hS' := (List.all_eq_true.mp hS) a₀ ha₀
   simp only [List.any_eq_true] at hS'
   obtain ⟨s₀, hs₀, hle₀⟩ := hS'
-  have hm₀ : tmovesAtom a₀ (STy.val m) = Bool.true := by
+  have hm₀ : tmovesAtom a₀ (STy.anyValue m) = Bool.true := by
     have hany := (List.all_eq_true.mp hm) a₀ ha₀
     simp only [List.any_eq_true] at hany
     obtain ⟨b, hb, hbe⟩ := hany
-    have hbv : b = STy.val m := by
+    have hbv : b = STy.anyValue m := by
       cases b with
-      | val n =>
+      | anyValue n =>
           exact List.mem_singleton.mp (by simpa only [atoms] using hb)
       | isValue _ | oneOf _ | desc _ | descAny | notPresent
       | union _ | complN _ | complT =>
@@ -1456,12 +1456,12 @@ theorem tmoves_meet_val (a S : STy) (m : Nat) (hne : atomsNE a = Bool.true)
     subst hbv
     exact hbe
   have hgrid := tmovesAtom_meet_val a₀ s₀ m hle₀ hm₀
-  have hkeep : tyNonempty (tyMeetAtom s₀ (STy.val m)) = Bool.true :=
+  have hkeep : tyNonempty (tyMeetAtom s₀ (STy.anyValue m)) = Bool.true :=
     tmovesAtom_le_ne _ _ hgrid hn₀
-  refine ⟨tyMeetAtom s₀ (STy.val m), ?_, hgrid⟩
-  have hself := meetAtom_atoms_self s₀ (STy.val m)
+  refine ⟨tyMeetAtom s₀ (STy.anyValue m), ?_, hgrid⟩
+  have hself := meetAtom_atoms_self s₀ (STy.anyValue m)
   have hLcond : ∀ k ∈ (atoms S).flatMap
-      (fun s => (atoms (STy.val m)).filterMap
+      (fun s => (atoms (STy.anyValue m)).filterMap
         (fun b => let mm := tyMeetAtom s b
                   if tyNonempty mm then some mm else none)),
       atoms k = [k] := by
@@ -1479,7 +1479,7 @@ theorem tmoves_meet_val (a S : STy) (m : Nat) (hne : atomsNE a = Bool.true)
     simp only [List.mem_flatMap]
     exact ⟨s₀, hs₀, by
       simp only [List.mem_filterMap]
-      exact ⟨STy.val m, by simp [atoms], by
+      exact ⟨STy.anyValue m, by simp [atoms], by
         rw [if_pos hkeep]⟩⟩)
 
 /-- Meet soundness for absent-variable tests. -/
@@ -1491,10 +1491,10 @@ theorem tmovesAtom_meet_notPresent (a₀ s₀ : STy)
   | notPresent =>
       cases s₀ with
       | notPresent => rfl
-      | val _ | isValue _ | oneOf _ | desc _ | descAny
+      | anyValue _ | isValue _ | oneOf _ | desc _ | descAny
       | union _ | complN _ | complT =>
           simp only [tmovesAtom] at hle; exact Bool.noConfusion hle
-  | val _ | isValue _ | oneOf _ | desc _ | descAny
+  | anyValue _ | isValue _ | oneOf _ | desc _ | descAny
   | union _ | complN _ | complT =>
       simp only [tmovesAtom] at hm; exact Bool.noConfusion hm
 
@@ -1529,11 +1529,11 @@ theorem tmovesAtom_meet_isValue (a₀ s₀ : STy) (w : JSValue)
               rw [hvw] at hle ⊢
               simp only [tyMeetAtom, beq_self_eq_true, if_true]
               simpa only [tmovesAtom] using hle
-      | val _ =>
+      | anyValue _ =>
           simp only [tmovesAtom] at hm; exact Bool.noConfusion hm
       | desc _ | descAny | notPresent | union _ | complN _ | complT =>
           simp only [tmovesAtom] at hle; exact Bool.noConfusion hle
-  | val k =>
+  | anyValue k =>
       cases a₀ with
       | isValue x =>
           have hxw : x = w := eq_of_beq (by simpa only [tmovesAtom] using hm)
@@ -1551,13 +1551,13 @@ theorem tmovesAtom_meet_isValue (a₀ s₀ : STy) (w : JSValue)
                 ((List.all_eq_true.mp (by simpa only [tmovesAtom] using hm)) x (by simp))
               rw [hxw] at hle hm ⊢
               have hcond : (((ctorBit w) &&& k) != 0) = Bool.true := by
-                have hlek : tmovesAtom (STy.isValue w) (STy.val k) = Bool.true :=
+                have hlek : tmovesAtom (STy.isValue w) (STy.anyValue k) = Bool.true :=
                   (List.all_eq_true.mp (by simpa only [tmovesAtom] using hle)) w
                     (by simp)
                 simpa only [tmovesAtom, bne_iff_ne] using hlek
               simp only [tyMeetAtom, hcond, if_pos]
               exact hm
-      | val _ =>
+      | anyValue _ =>
           simp only [tmovesAtom] at hm; exact Bool.noConfusion hm
       | desc _ | descAny | notPresent | union _ | complN _ | complT =>
           simp only [tmovesAtom] at hle; exact Bool.noConfusion hle
@@ -1584,7 +1584,7 @@ theorem tmovesAtom_meet_isValue (a₀ s₀ : STy) (w : JSValue)
                 exact hxu
               simp only [tyMeetAtom, hc, if_pos]
               exact hm
-      | val _ =>
+      | anyValue _ =>
           simp only [tmovesAtom] at hm; exact Bool.noConfusion hm
       | desc _ | descAny | notPresent | union _ | complN _ | complT =>
           simp only [tmovesAtom] at hle; exact Bool.noConfusion hle
@@ -1592,19 +1592,19 @@ theorem tmovesAtom_meet_isValue (a₀ s₀ : STy) (w : JSValue)
       cases a₀ with
       | desc _ | descAny =>
           simp only [tmovesAtom] at hm; exact Bool.noConfusion hm
-      | val _ | isValue _ | oneOf _ | notPresent | union _ | complN _ | complT =>
+      | anyValue _ | isValue _ | oneOf _ | notPresent | union _ | complN _ | complT =>
           simp only [tmovesAtom] at hle; exact Bool.noConfusion hle
   | notPresent =>
       cases a₀ with
       | notPresent =>
           simp only [tmovesAtom] at hm; exact Bool.noConfusion hm
-      | val _ | isValue _ | oneOf _ | desc _ | descAny | union _ | complN _ | complT =>
+      | anyValue _ | isValue _ | oneOf _ | desc _ | descAny | union _ | complN _ | complT =>
           simp only [tmovesAtom] at hle; exact Bool.noConfusion hle
   | complN _ | complT =>
       cases a₀ with
       | complN _ | complT =>
           simp only [tmovesAtom] at hm; exact Bool.noConfusion hm
-      | val _ | isValue _ | oneOf _ | desc _ | descAny | notPresent | union _ =>
+      | anyValue _ | isValue _ | oneOf _ | desc _ | descAny | notPresent | union _ =>
           simp only [tmovesAtom] at hle; exact Bool.noConfusion hle
   | union ps =>
       cases a₀ <;> simp only [tmovesAtom] at hle <;> exact Bool.noConfusion hle
@@ -2553,7 +2553,7 @@ theorem sr_kRet_bottom (sigs : SigTable) (reg : AOReg) (r : STy)
     cases hv : typeOfV v with
     | complN p => rw [hv, hr] at hcond; exact hcond
     | complT => exact trivial
-    | val _ => rw [hv] at hcond; exact absurd hcond (by simp)
+    | anyValue _ => rw [hv] at hcond; exact absurd hcond (by simp)
     | desc _ => rw [hv] at hcond; exact absurd hcond (by simp)
     | descAny => rw [hv] at hcond; exact absurd hcond (by simp)
     | isValue _ => rw [hv] at hcond; exact absurd hcond (by simp)
