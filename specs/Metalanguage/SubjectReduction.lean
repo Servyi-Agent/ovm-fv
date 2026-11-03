@@ -288,9 +288,12 @@ def registryCertified (sigs : SigTable) (reg : AOReg) : Prop :=
 /-- Pointwise refinement of flat types: every atom below some atom. -/
 def tyLe (t u : Ty) : Prop := tmoves t u = Bool.true
 
-/-- Pointwise refinement of type environments (first-match lookup). -/
+/-- Pointwise refinement of type environments: every refined atom is
+    covered by some coarse atom (the ∃-form gives existence
+    covariance: a nonempty refined lookup implies a nonempty coarse
+    lookup - needed by the split arms). -/
 def envLe (Γ Δ : TyEnv) : Prop :=
-  ∀ x, ∀ t ∈ tyLookup Γ x, ∀ u ∈ tyLookup Δ x, tyLe t u
+  ∀ (x : «String»), ∀ t ∈ tyLookup Γ x, ∃ u ∈ tyLookup Δ x, tyLe t u
 
 /-- Refinement of worlds: Γ and σ refine pointwise; the pending is
     equal (both sides describe the SAME parked delivery shape), or
@@ -1149,3 +1152,130 @@ theorem stackLe_cons {t u : Ty} {σ τ : List Ty}
   · intro i m hm n hn
     exact h (i + 1) m hm n (by simpa using hn)
   · exact h 0 t (by simp) u (by simp)
+
+/- ## Proof layer IX: split monotonicity -/
+
+/-- World coverage: every refined world is covered by a coarse one. -/
+def worldsLe (ws' ws : Worlds) : Prop :=
+  ∀ w' ∈ ws', ∃ w ∈ ws, worldLe w' w
+
+theorem tyLe_trans {t u v : Ty} (h₁ : tyLe t u) (h₂ : tyLe u v) : tyLe t v :=
+  tmoves_trans h₁ h₂
+
+theorem envLe_cons {x : «String»} {t u : Ty} {Γ Δ : TyEnv}
+    (h : tyLe t u) (hrest : envLe Γ Δ) : envLe ((x, t) :: Γ) ((x, u) :: Δ) := by
+  intro y s hs
+  by_cases hxy : x = y
+  · rw [hxy] at hs ⊢
+    simp only [tyLookup, beq_self_eq_true, if_true] at hs ⊢
+    cases hs
+    exact ⟨u, rfl, h⟩
+  · simp only [tyLookup, beq_iff_eq, hxy, if_false] at hs ⊢
+    exact hrest y s hs
+
+theorem meetTy_nil (T : Ty) : meetTy [] T = [] := rfl
+
+theorem removeTy_nil (T : Ty) : removeTy [] T = [] := rfl
+
+theorem tyLe_iff {t u : Ty} :
+    tyLe t u ↔ (∀ a ∈ t, ∃ b ∈ u, tmovesV a b = Bool.true) := by
+  unfold tyLe tmoves
+  rw [List.all_eq_true]
+  constructor
+  · intro h a ha
+    exact List.any_eq_true.mp (h a ha)
+  · intro h a ha
+    exact List.any_eq_true.mpr (h a ha)
+
+theorem stackLe_cons_same {t : Ty} {σ τ : List Ty}
+    (h : stackLe σ τ) : stackLe (t :: σ) (t :: τ) := by
+  intro i m hm u hu
+  cases i with
+  | zero =>
+      simp only [List.getElem?_cons_zero, Option.mem_some] at hm hu
+      subst hm; subst hu; exact tmoves_refl _
+  | succ j =>
+      simp only [List.getElem?_cons_succ] at hm hu
+      exact h j m hm u hu
+
+/-- Nonempty transfer under coverage. -/
+theorem cover_ne {l' l : List VTy}
+    (hc : ∀ m' ∈ l', ∃ m ∈ l, tmovesV m' m = Bool.true)
+    (hne' : l' ≠ []) : l ≠ [] := by
+  rintro rfl
+  obtain ⟨m₀, hm₀⟩ : ∃ m₀, m₀ ∈ l' := by
+    cases l' with
+    | nil => exact absurd rfl hne'
+    | cons m ms => exact ⟨m, List.Mem.head _⟩
+  obtain ⟨m, hm, -⟩ := hc m₀ hm₀
+  exact absurd hm (by simp)
+
+theorem split1_cov {x : «String»} {T : Ty} {w' w : World}
+    (hle : worldLe w' w) {u' : World} (hu' : u' ∈ split1 x T w') :
+    ∃ u ∈ split1 x T w, worldLe u' u := by
+  obtain ⟨hΓ, hσ, hp⟩ := hle
+  simp only [split1] at hu' ⊢
+  cases hlk' : tyLookup w'.Γ x with
+  | none => rw [hlk'] at hu'; exact absurd hu' (by simp)
+  | some S' =>
+      rw [hlk'] at hu'
+      obtain ⟨S, hSmem, hSle⟩ := hΓ x S' (by rw [hlk']; exact Option.mem_some_self _)
+      cases hlk : tyLookup w.Γ x with
+      | none => rw [hlk] at hSmem; exact absurd hSmem (by simp)
+      | some S₂ =>
+          rw [hlk] at hSmem
+          have hSlk : S = S₂ := Eq.symm (by simpa using hSmem)
+          rw [hSlk] at hSle
+          have hcover : ∀ a ∈ S', ∃ b ∈ S₂, tmovesV a b = Bool.true :=
+            tyLe_iff.mp hSle
+          have hmeetcov : ∀ m ∈ meetTy S' T, ∃ n ∈ meetTy S₂ T,
+              tmovesV m n = Bool.true := meetTy_cov hcover
+          have hremcov : ∀ m ∈ removeTy S' T, ∃ n ∈ removeTy S₂ T,
+              tmovesV m n = Bool.true := removeTy_cov hcover
+          simp only [List.mem_append] at hu' ⊢
+          cases hu' with
+          | inl hmem =>
+              cases hmeet' : meetTy S' T with
+              | nil => rw [hmeet'] at hmem; exact absurd hmem (by simp)
+              | cons m' ms' =>
+                  rw [hmeet'] at hmem hmeetcov
+                  simp only [List.mem_singleton] at hmem
+                  subst hmem
+                  have hneS : meetTy S₂ T ≠ [] :=
+                    cover_ne hmeetcov (List.cons_ne_nil m' ms')
+                  cases hmeet : meetTy S₂ T with
+                  | nil => rw [hmeet] at hneS; exact (hneS rfl).elim
+                  | cons m ms =>
+                      rw [hmeet] at hmeetcov
+                      exact ⟨{ Γ := (x, m :: ms) :: w.Γ,
+                               σ := [.isValue (.boolean Bool.true)] :: w.σ,
+                               pending := w.pending }, Or.inl (List.Mem.head _),
+                             ⟨envLe_cons (tyLe_iff.mpr hmeetcov) hΓ,
+                              stackLe_cons_same (t := [.isValue (.boolean Bool.true)]) hσ, hp⟩⟩
+          | inr hmem =>
+              cases hrem' : removeTy S' T with
+              | nil => rw [hrem'] at hmem; exact absurd hmem (by simp)
+              | cons m' ms' =>
+                  rw [hrem'] at hmem hremcov
+                  simp only [List.mem_singleton] at hmem
+                  subst hmem
+                  have hneS : removeTy S₂ T ≠ [] :=
+                    cover_ne hremcov (List.cons_ne_nil m' ms')
+                  cases hrem : removeTy S₂ T with
+                  | nil => rw [hrem] at hneS; exact (hneS rfl).elim
+                  | cons m ms =>
+                      rw [hrem] at hremcov
+                      exact ⟨{ Γ := (x, m :: ms) :: w.Γ,
+                               σ := [.isValue (.boolean Bool.false)] :: w.σ,
+                               pending := w.pending }, Or.inr (List.Mem.head _),
+                             ⟨envLe_cons (tyLe_iff.mpr hremcov) hΓ,
+                              stackLe_cons_same (t := [.isValue (.boolean Bool.false)]) hσ, hp⟩⟩
+
+theorem worldsLe_split {x : «String»} {T : Ty} {ws ws' : Worlds}
+    (hcov : worldsLe ws' ws) : worldsLe (splitWorlds x T ws') (splitWorlds x T ws) := by
+  intro u' hu'
+  simp only [splitWorlds, List.mem_flatMap] at hu' ⊢
+  obtain ⟨w', hw', hu'⟩ := hu'
+  obtain ⟨w, hw, hle⟩ := hcov w' hw'
+  obtain ⟨u, hu, hle'⟩ := split1_cov hle hu'
+  exact ⟨u, ⟨w, hw, hu⟩, hle'⟩

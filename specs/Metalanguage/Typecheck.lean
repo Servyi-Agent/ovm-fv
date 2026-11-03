@@ -716,21 +716,23 @@ def splitWorldsP (x : «String») (dec : VTy → Option Bool)
   | none => none
   | some wss => some (List.flatten wss)
 
+/-- Split ONE world at a test of x with then-type T. An unbound x
+    drops the world (its checkSeq continuation runs on no worlds and
+    so cannot be terminal - the rejection is structural). -/
+def split1 (x : «String») (T : Ty) (w : World) : Worlds :=
+  match tyLookup w.Γ x with
+  | none => []
+  | some S =>
+      (match meetTy S T with
+       | [] => []
+       | _ => [{ Γ := (x, meetTy S T) :: w.Γ, σ := [.isValue (.boolean Bool.true)] :: w.σ, pending := w.pending }])
+      ++ (match removeTy S T with
+       | [] => []
+       | _ => [{ Γ := (x, removeTy S T) :: w.Γ, σ := [.isValue (.boolean Bool.false)] :: w.σ, pending := w.pending }])
+
 /-- Split worlds at a test of x with then-type T. -/
-def splitWorlds (x : «String») (T : Ty) (ws : Worlds) : Option Worlds :=
-  match ws.mapM (fun (w : World) =>
-    match tyLookup w.Γ x with
-    | none => none
-    | some S =>
-        let thenS := meetTy S T
-        let elseS := removeTy S T
-        -- at least one side must be possible; emit verdict + refined Γ
-        let out : List World :=
-          (if !thenS.isEmpty then [{ Γ := (x, thenS) :: w.Γ, σ := [.isValue (.boolean Bool.true)] :: w.σ, pending := w.pending }] else [])
-          ++ (if !elseS.isEmpty then [{ Γ := (x, elseS) :: w.Γ, σ := [.isValue (.boolean Bool.false)] :: w.σ, pending := w.pending }] else [])
-        if out.isEmpty then none else (some out : Option Worlds)) with
-  | none => none
-  | some wss => some (List.flatten wss)
+def splitWorlds (x : «String») (T : Ty) (ws : Worlds) : Worlds :=
+  ws.flatMap (split1 x T)
 
 /- Loop join: every falls-world must come back to a REFINEMENT of
     the loop-entry stack with no parked completion (neutrality);
@@ -812,25 +814,20 @@ def checkSeq : SigTable → Ty → Worlds → List Instr → TCResult
   | sigs, r, ws, .kEval (.varNotPresent x) :: rest =>
       -- presence test: unbound means NOT present (verdict true);
       -- a binding splits (then: notPresent, else: the alternatives)
-      match ws.mapM (fun (w : World) =>
+      checkSeq sigs r (ws.flatMap (fun (w : World) =>
         match tyLookup w.Γ x with
-        | none =>
-            some [{ w with σ := [.isValue (.boolean Bool.true)] :: w.σ }]
+        | none => [{ w with σ := [.isValue (.boolean Bool.true)] :: w.σ }]
         | some S =>
-            let thenS := meetTy S [.notPresent]
-            let elseS := removeTy S [.notPresent]
-            let out : List World :=
-              (if !thenS.isEmpty then
-                [{ Γ := (x, thenS) :: w.Γ,
-                   σ := [.isValue (.boolean Bool.true)] :: w.σ,
-                   pending := w.pending }] else [])
-              ++ (if !elseS.isEmpty then
-                [{ Γ := (x, elseS) :: w.Γ,
-                   σ := [.isValue (.boolean Bool.false)] :: w.σ,
-                   pending := w.pending }] else [])
-            if out.isEmpty then none else (some out : Option Worlds)) with
-      | none => .reject (.kEval (.varNotPresent x)) "ill-typed presence test (empty split)"
-      | some wss => checkSeq sigs r (List.flatten wss) rest
+            (match meetTy S [.notPresent] with
+             | [] => []
+             | _ => [{ Γ := (x, meetTy S [.notPresent]) :: w.Γ,
+                       σ := [.isValue (.boolean Bool.true)] :: w.σ,
+                       pending := w.pending }])
+            ++ (match removeTy S [.notPresent] with
+             | [] => []
+             | _ => [{ Γ := (x, removeTy S [.notPresent]) :: w.Γ,
+                       σ := [.isValue (.boolean Bool.false)] :: w.σ,
+                       pending := w.pending }]))) rest
   | sigs, r, ws, .kEval ex :: rest =>
       -- post-normalization only atomic pushes reach here
       match ws.mapM (fun (w : World) =>
@@ -857,10 +854,7 @@ def checkSeq : SigTable → Ty → Worlds → List Instr → TCResult
               | some ws' => checkSeq sigs r ws' rest
       | _ =>
           match testTypeP p with
-          | some T =>
-              match splitWorlds x T ws with
-              | none => .reject (.kTestVar x p) "ill-typed test (unbound or empty split)"
-              | some ws' => checkSeq sigs r ws' rest
+          | some T => checkSeq sigs r (splitWorlds x T ws) rest
           | none =>
               match ws.mapM (fun (w : World) =>
                 match tyLookup w.Γ x with
