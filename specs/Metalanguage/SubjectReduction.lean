@@ -2517,3 +2517,48 @@ theorem sr_kEval_nv (sigs : SigTable) (reg : AOReg) (r : STy)
     · exact (stateOk_heap_roots hst) l (List.mem_append.mpr (Or.inl
         (List.mem_flatMap.mpr ⟨w, hw', hlw⟩)))
   · exact (stateOk_heap_roots hst) l (List.mem_append.mpr (Or.inr hl))
+
+/- ### The answer-producing arm: kRet at the bottom frame. -/
+
+theorem sr_kRet_bottom (sigs : SigTable) (reg : AOReg) (r : STy)
+    (env : Env) (eval : List JSValue) (ret : «String»)
+    (rs : List Instr) (heap : Heap) (nl : Nat) (v : JSValue)
+    (h : stateOk sigs r (FM.frames
+        (⟨.kRet :: rs, env, v :: eval, ret⟩ :: []) heap nl)) :
+    SR sigs reg r (FM.frames
+        (⟨.kRet :: rs, env, v :: eval, ret⟩ :: []) heap nl) := by
+  intro hreg _ hst
+  have hstep : fstep reg (FM.frames
+      (⟨.kRet :: rs, env, v :: eval, ret⟩ :: []) heap nl)
+      = FM.fdone v [] heap nl 0 := rfl
+  rw [hstep]
+  have hr : machineRet sigs [⟨.kRet :: rs, env, v :: eval, ret⟩] = r :=
+    stateOk_machineRet hst
+  simp only [machineRet, List.getLast?_singleton] at hr
+  obtain ⟨fb, hb, ht⟩ := frameOk_flows_elim (stateOk_head_frameOk hst)
+  have ha : absStack sigs none
+      (⟨.kRet :: rs, env, v :: eval, ret⟩ : Fr)
+      = typeOfV v :: stackTyOf eval := rfl
+  rw [ha] at hb
+  rw [checkSeq] at hb
+  split at hb
+  next hcond =>
+    injection hb with hfb
+    subst hfb
+    simp only [List.all_cons, List.all_nil, Bool.and_true] at hcond
+    show (match typeOfV v with
+      | .complN p => tmoves p r
+      | .complT => True
+      | _ => False)
+    cases hv : typeOfV v with
+    | complN p => rw [hv, hr] at hcond; exact hcond
+    | complT => exact trivial
+    | val _ => rw [hv] at hcond; exact absurd hcond (by simp)
+    | desc _ => rw [hv] at hcond; exact absurd hcond (by simp)
+    | descAny => rw [hv] at hcond; exact absurd hcond (by simp)
+    | isValue _ => rw [hv] at hcond; exact absurd hcond (by simp)
+    | oneOf _ => rw [hv] at hcond; exact absurd hcond (by simp)
+    | notPresent => rw [hv] at hcond; exact absurd hcond (by simp)
+    | union _ => rw [hv] at hcond; exact absurd hcond (by simp)
+  next hcond =>
+    exact absurd hb (by intro hc; exact TCResult.noConfusion hc)
