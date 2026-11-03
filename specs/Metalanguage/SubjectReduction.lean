@@ -1343,3 +1343,14 @@ theorem popTy_mono {T : Ty} {σ' σ : List Ty} {σ₂ : List Ty}
           exact ⟨σ₀', by
             simp only [popTy, hpass]
             rfl, hrest⟩
+
+/- ## Next (the monotonicity induction's remaining pieces):
+
+    step1_mono (per-world, ~12 arms: park/park/pop-push/split-over-
+    judgements/drops/Γ-ext; needs popTyN-mono, popA-mono, drop-
+    coverage, popArgs-mono), stepWorlds_mono (mapM lift), then the
+    checkSeq worldLe induction with the result-shape transfer
+    (exits/throws preserved, falls covered), then the remaining sr
+    arms (kTestVar exact+refined, kPrim1-generic via mono, kCall,
+    kRet delivery, loops, kMkList/kNewSlot/kIMeth), then the master
+    frames case and type_safety. -/
