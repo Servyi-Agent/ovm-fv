@@ -434,3 +434,80 @@ theorem type_safety_frames_nil_stmts {sigs : SigTable} {reg : AOReg} {r : Ty}
       rw [hse] at hchk
       simp only [frameChecks, normL, checkSeq, terminal] at hchk
       exact absurd hchk (by simp)
+
+/- ## Proof layer IV: checkSeq step identities (exact matches)
+
+    Each machine push lands EXACTLY on the static push: consuming
+    the instruction statically IS stepping the abstract world. -/
+
+theorem normL_cons (i : Instr) (rest : List Instr) :
+    normL (i :: rest) = normI i ++ normL rest := by rw [normL]
+
+theorem mapM_singleton {α β : Type} {f : α → Option β} (a : α) :
+    List.mapM f [a] = (f a).map (fun b => [b]) := by
+  simp only [List.mapM, List.mapM.loop]
+  cases f a <;> rfl
+
+/-- markThrow is the identity when the expression cannot throw. -/
+theorem markThrow_nothrow {sigs : SigTable} {ex : Expr}
+    (hex : exprCanThrow sigs ex = Bool.false)
+    (res : TCResult) : markThrow sigs ex res = res := by
+  cases res with
+  | flows fb => simp [markThrow, hex]
+  | reject s w => rfl
+
+/-- kEval of a non-completion const: push its canonical singleton. -/
+theorem checkSeq_kEval_const {sigs : SigTable} {r : Ty} {W : World} {v : JSValue}
+    {rest : List Instr} (hv : isCompl v = Bool.false) :
+    checkSeq sigs r [W] (normL (.kEval (.const v) :: rest))
+      = checkSeq sigs r [{ W with σ := [typeOfV v] :: W.σ }] (normL rest) := by
+  cases v with
+  | compl b pv => simp [isCompl] at hv
+  | undefined | null | boolean _ | number _ | str _ | obj _ | listV _ | descV _ =>
+      rw [normL_cons]
+      simp only [normI, checkSeq, typeOfE, typeOfV, mapM_singleton,
+                 List.cons_append, List.nil_append, Option.map]
+      rw [markThrow_nothrow (by simp [exprCanThrow])]
+
+/-- kEval of a nat literal: push the singleton number. -/
+theorem checkSeq_kEval_nat {sigs : SigTable} {r : Ty} {W : World} {n : Nat}
+    {rest : List Instr} :
+    checkSeq sigs r [W] (normL (.kEval (.nat n) :: rest))
+      = checkSeq sigs r
+          [{ W with σ := [VTy.isValue (.number (↑n : Int))] :: W.σ }]
+          (normL rest) := by
+  rw [normL_cons]
+  simp only [normI, checkSeq, typeOfE, mapM_singleton, Option.map,
+             List.cons_append, List.nil_append]
+  rw [markThrow_nothrow (by simp [exprCanThrow])]
+
+/-- kEval of a bound variable: push the looked-up (canonical) type. -/
+theorem checkSeq_kEval_nv {sigs : SigTable} {r : Ty} {W : World} {x : «String»}
+    {v : JSValue} {rest : List Instr}
+    (hΓ : tyLookup W.Γ x = some [typeOfV v]) :
+    checkSeq sigs r [W] (normL (.kEval (.nv x) :: rest))
+      = checkSeq sigs r [{ W with σ := [typeOfV v] :: W.σ }] (normL rest) := by
+  rw [normL_cons]
+  simp only [normI, checkSeq, typeOfE, hΓ, mapM_singleton, Option.map,
+             List.cons_append, List.nil_append]
+  rw [markThrow_nothrow (by simp [exprCanThrow])]
+
+/-- kPop: drop the top slot (the machine fells on an empty stack -
+    those states are ill-typed and never reach this lemma). -/
+theorem checkSeq_kPop {sigs : SigTable} {r : Ty} {W : World} {ts : Ty} {σ' : List Ty}
+    {rest : List Instr} (hσ : W.σ = ts :: σ') :
+    checkSeq sigs r [W] (normL (.kPop :: rest))
+      = checkSeq sigs r [{ W with σ := σ' }] (normL rest) := by
+  rw [normL_cons]
+  simp [normI, checkSeq, stepWorlds, hσ, mapM_singleton, Option.map,
+        List.cons_append, List.nil_append]
+
+/-- kSet: bind the top slot into Γ. -/
+theorem checkSeq_kSet {sigs : SigTable} {r : Ty} {W : World} {x : «String»}
+    {ts : Ty} {σ' : List Ty} {rest : List Instr} (hσ : W.σ = ts :: σ') :
+    checkSeq sigs r [W] (normL (.kSet x :: rest))
+      = checkSeq sigs r [{ Γ := (x, ts) :: W.Γ, σ := σ', pending := W.pending }]
+          (normL rest) := by
+  rw [normL_cons]
+  simp [normI, checkSeq, stepWorlds, hσ, mapM_singleton, Option.map,
+        List.cons_append, List.nil_append]
