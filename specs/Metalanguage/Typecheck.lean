@@ -558,23 +558,7 @@ def parkPending (p : Pending) (w : World) : Option World :=
     match. -/
 def stepWorlds (sigs : SigTable) (ws : Worlds) (i : Instr) : Option Worlds :=
   match i with
-  | .kPrim1 .pWrapC =>
-      ws.mapM (fun w =>
-        match w.σ with
-        | t :: σ' => parkPending (.normal t) { w with σ := σ' }
-        | [] => none)
-  | .kPrim1 .pThrowC =>
-      ws.mapM (fun w =>
-        match w.σ with
-        | _ :: σ' => parkPending .throw { w with σ := σ' }
-        | [] => none)
-  | .kPrim1 p =>
-      match primTys p with
-      | some (tin, tout) =>
-          ws.mapM (fun w => match popTy tin w.σ with
-            | some σ' => some { w with σ := tout :: σ' }
-            | none => none)
-      | none => some ws
+
   | .kCall f n =>
       -- PARKING SPLITS over the callee's COMPLETION JUDGEMENT: one
       -- world per listed alternative - each normal payload, and a
@@ -595,15 +579,41 @@ def stepWorlds (sigs : SigTable) (ws : Worlds) (i : Instr) : Option Worlds :=
           else none
       | none => none
   | .kSet x =>
+      -- PARKED DISCIPLINE: while a completion is parked, only the
+      -- self-test protocol (kTest/kIte/kUnwrap/kRet) may act; a σ-pop
+      -- with a parked pending would let the machine pop the COMPLETION
+      -- and diverge from the abstraction (checker bug #10, found by
+      -- the sr_kPop/sr_kSet assembly)
       ws.mapM (fun w =>
-        match w.σ with
-        | t :: σ' => some { w with Γ := (x, t) :: w.Γ, σ := σ' }
-        | [] => none)
+        if w.pending.isSome then none
+        else match w.σ with
+          | t :: σ' => some { w with Γ := (x, t) :: w.Γ, σ := σ' }
+          | [] => none)
   | .kPop =>
       ws.mapM (fun w =>
+        if w.pending.isSome then none
+        else match w.σ with
+          | _ :: σ' => some { w with σ := σ' }
+          | [] => none)
+  | .kPrim1 .pWrapC =>
+      ws.mapM (fun w =>
         match w.σ with
-        | _ :: σ' => some { w with σ := σ' }
+        | t :: σ' => parkPending (.normal t) { w with σ := σ' }
         | [] => none)
+  | .kPrim1 .pThrowC =>
+      ws.mapM (fun w =>
+        match w.σ with
+        | _ :: σ' => parkPending .throw { w with σ := σ' }
+        | [] => none)
+  | .kPrim1 p =>
+      match primTys p with
+      | some (tin, tout) =>
+          ws.mapM (fun w =>
+            if w.pending.isSome then none
+            else match popTy tin w.σ with
+              | some σ' => some { w with σ := tout :: σ' }
+              | none => none)
+      | none => some ws
   | .kTest =>
       -- TESTING OBSERVES: parking already split the deliveries into
       -- worlds; each world parks exactly one completion and gets its
@@ -643,15 +653,17 @@ def stepWorlds (sigs : SigTable) (ws : Worlds) (i : Instr) : Option Worlds :=
       else none
   | .kMkList n =>
       ws.mapM (fun w =>
-        match popTyN n anyT w.σ with
-        | some σ' => some { w with σ := [.anyValue .list] :: σ' }
-        | none => none)
+        if w.pending.isSome then none
+        else match popTyN n anyT w.σ with
+          | some σ' => some { w with σ := [.anyValue .list] :: σ' }
+          | none => none)
   | .kNewSlot sn =>
       if (slotOfName sn).isSome then
         ws.mapM (fun w =>
-          match popTy anyT w.σ with
-          | some σ' => some { w with σ := [.anyValue .obj] :: σ' }
-          | none => none)
+          if w.pending.isSome then none
+          else match popTy anyT w.σ with
+            | some σ' => some { w with σ := [.anyValue .obj] :: σ' }
+            | none => none)
       else none
   | _ => some ws
 

@@ -495,21 +495,22 @@ theorem checkSeq_kEval_nv {sigs : SigTable} {r : Ty} {W : World} {x : «String»
 /-- kPop: drop the top slot (the machine fells on an empty stack -
     those states are ill-typed and never reach this lemma). -/
 theorem checkSeq_kPop {sigs : SigTable} {r : Ty} {W : World} {ts : Ty} {σ' : List Ty}
-    {rest : List Instr} (hσ : W.σ = ts :: σ') :
+    {rest : List Instr} (hpn : W.pending = none) (hσ : W.σ = ts :: σ') :
     checkSeq sigs r [W] (normL (.kPop :: rest))
       = checkSeq sigs r [{ W with σ := σ' }] (normL rest) := by
   rw [normL_cons]
-  simp [normI, checkSeq, stepWorlds, hσ, mapM_singleton, Option.map,
+  simp [normI, checkSeq, stepWorlds, hσ, hpn, mapM_singleton, Option.map,
         List.cons_append, List.nil_append]
 
 /-- kSet: bind the top slot into Γ. -/
 theorem checkSeq_kSet {sigs : SigTable} {r : Ty} {W : World} {x : «String»}
-    {ts : Ty} {σ' : List Ty} {rest : List Instr} (hσ : W.σ = ts :: σ') :
+    {ts : Ty} {σ' : List Ty} {rest : List Instr}
+    (hpn : W.pending = none) (hσ : W.σ = ts :: σ') :
     checkSeq sigs r [W] (normL (.kSet x :: rest))
-      = checkSeq sigs r [{ Γ := (x, ts) :: W.Γ, σ := σ', pending := W.pending }]
+      = checkSeq sigs r [{ Γ := (x, ts) :: W.Γ, σ := σ', pending := none }]
           (normL rest) := by
   rw [normL_cons]
-  simp [normI, checkSeq, stepWorlds, hσ, mapM_singleton, Option.map,
+  simp [normI, checkSeq, stepWorlds, hσ, hpn, mapM_singleton, Option.map,
         List.cons_append, List.nil_append]
 
 /- ## Proof layer V: the exact-match sr arms (head frame, above = none) -/
