@@ -89,9 +89,10 @@ def anyT : Ty := anyOf anyTags
 /- ## Subtyping: a finite grid on atoms; forall-exists on flat types -/
 
 def tmovesV : VTy → VTy → Bool
-  | .anyValue c, .anyValue c' => c == c'
+  | .anyValue c, .anyValue c' => decide (c = c')
   | .isValue v, .isValue w => v == w
-  | .isValue v, .anyValue c => tagOf v == c
+  | .isValue v, .anyValue c => decide (tagOf v = c)
+  | .desc fs, .desc fs' => decide (fs = fs')
   | .desc _, .anyValue .desc => Bool.true
   | .notPresent, .notPresent => Bool.true
   | _, _ => Bool.false
@@ -108,13 +109,13 @@ def leTy : List Ty → List Ty → Bool
 
 /-- Atom meet; none = empty. -/
 def meetAtom : VTy → VTy → Option VTy
-  | .anyValue c, .anyValue c' => if c == c' then some (.anyValue c) else none
+  | .anyValue c, .anyValue c' => if c = c' then some (.anyValue c) else none
   | .isValue v, .isValue w => if v == w then some (.isValue v) else none
-  | .desc fs, .desc fs' => if fs == fs' then some (.desc fs) else none
+  | .desc fs, .desc fs' => if fs = fs' then some (.desc fs) else none
   | .desc fs, .anyValue .desc => some (.desc fs)
   | .anyValue .desc, .desc fs => some (.desc fs)
-  | .isValue v, .anyValue c => if tagOf v == c then some (.isValue v) else none
-  | .anyValue c, .isValue v => if tagOf v == c then some (.isValue v) else none
+  | .isValue v, .anyValue c => if tagOf v = c then some (.isValue v) else none
+  | .anyValue c, .isValue v => if tagOf v = c then some (.isValue v) else none
   | .notPresent, .notPresent => some .notPresent
   | _, _ => none
 

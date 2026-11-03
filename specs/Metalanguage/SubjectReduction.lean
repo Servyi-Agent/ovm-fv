@@ -285,3 +285,67 @@ def registryCertified (sigs : SigTable) (reg : AOReg) : Prop :=
     consumers — kIte, kMkList, kNewSlot, loops). -/
 
 /- ## Proof layer (flat lattice): in progress. -/
+
+/- ## Proof layer I: the flat refinement order -/
+
+/-- Pointwise refinement of flat types: every atom below some atom. -/
+def tyLe (t u : Ty) : Prop := tmoves t u = Bool.true
+
+/-- Pointwise refinement of type environments (first-match lookup). -/
+def envLe (Γ Δ : TyEnv) : Prop :=
+  ∀ x, ∀ t ∈ tyLookup Γ x, ∀ u ∈ tyLookup Δ x, tyLe t u
+
+/-- Refinement of worlds: Γ and σ refine pointwise; the pending is
+    equal (both sides describe the SAME parked delivery shape), or
+    the finer side is below on the payload. -/
+def pendLe (p q : Option Pending) : Prop :=
+  match p, q with
+  | none, none => True
+  | some (.normal t), some (.normal u) => tyLe t u
+  | some .throw, some .throw => True
+  | _, _ => False
+
+def stackLe (σ τ : List Ty) : Prop :=
+  ∀ (i : Nat), ∀ t ∈ σ[i]?, ∀ u ∈ τ[i]?, tyLe t u
+
+def worldLe (w u : World) : Prop :=
+  envLe w.Γ u.Γ ∧ stackLe w.σ u.σ ∧ pendLe w.pending u.pending
+
+/-- Subtyping is a preorder on the flat lattice (the atom grid is
+    essentially discrete: identity, singleton-into-class, and
+    desc-into-anyValue-desc). -/
+theorem tmovesV_refl (a : VTy) : tmovesV a a = Bool.true := by
+  cases a with
+  | anyValue c => simp [tmovesV]
+  | isValue v => simp [tmovesV]
+  | desc fs => exact decide_eq_true (rfl : fs = fs)
+  | notPresent => rfl
+
+theorem tmoves_refl (t : Ty) : tyLe t t := by
+  unfold tyLe tmoves
+  simp only [List.all_eq_true]
+  intro a ha
+  exact List.any_eq_true.mpr ⟨a, ha, tmovesV_refl a⟩
+
+theorem tmovesV_trans {a b c : VTy}
+    (h₁ : tmovesV a b = Bool.true) (h₂ : tmovesV b c = Bool.true) :
+    tmovesV a c = Bool.true := by
+  cases a <;> cases b <;> cases c <;>
+    simp_all [tmovesV, tagOf, decide_eq_true, beq_iff_eq] <;>
+  first
+    | rfl
+    | simp_all
+    | exact of_decide_eq_true (by assumption)
+    | (exfalso; simp_all)
+
+theorem tmoves_trans {t u v : Ty}
+    (h₁ : tyLe t u) (h₂ : tyLe u v) : tyLe t v := by
+  unfold tyLe tmoves at h₁ h₂ ⊢
+  simp only [List.all_eq_true, List.any_eq_true] at *
+  intro a ha
+  obtain ⟨b, hb, hab⟩ := h₁ a ha
+  obtain ⟨c, hc, hbc⟩ := h₂ b hb
+  exact ⟨c, hc, tmovesV_trans hab hbc⟩
+
+theorem tyLe_of_eq {t u : Ty} (h : t = u) : tyLe t u := by
+  rw [h]; exact tmoves_refl u
