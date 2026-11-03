@@ -554,122 +554,96 @@ def parkPending (p : Pending) (w : World) : Option World :=
   | some _ => none
   | none => some { w with pending := some p }
 
-/-- Step every world through one stack instruction (no control
-    flow). Fails (none) if any world's stack or pending does not
-    match. -/
-def stepWorlds (sigs : SigTable) (ws : Worlds) (i : Instr) : Option Worlds :=
+/-- Step ONE world through one stack instruction (no control flow).
+    Fails (none) if the world's stack or pending does not match;
+    may expand into several worlds (parking splits over completion
+    judgements). -/
+def step1 (sigs : SigTable) (i : Instr) (w : World) : Option Worlds :=
   match i with
-
+  | .kPrim1 .pWrapC =>
+      match w.σ with
+      | t :: σ' => (parkPending (.normal t) { w with σ := σ' }).map (fun w₂ => [w₂])
+      | [] => none
+  | .kPrim1 .pThrowC =>
+      match w.σ with
+      | _ :: σ' => (parkPending .throw { w with σ := σ' }).map (fun w₂ => [w₂])
+      | [] => none
+  | .kPrim1 p =>
+      match primTys p with
+      | some (tin, tout) =>
+          match w.pending, popTy tin w.σ with
+          | none, some σ' => some [{ w with σ := tout :: σ' }]
+          | _, _ => none
+      | none => some [w]
   | .kCall f n =>
       -- PARKING SPLITS over the callee's COMPLETION JUDGEMENT: one
       -- world per listed alternative - each normal payload, and a
       -- throw world only if the judgement says the callee can throw.
-      -- The throw world exits at the self-test's kRet (exempt); each
-      -- normal world continues through kUnwrap.
       match sigFind sigs f with
       | some (ps, retj) =>
-          -- optional last parameter: the callee may be invoked with
-          -- ps.length - 1 args (the missing binding is notPresent)
           if (ps.length == n || ps.length == n + 1)
-              && ws.all (fun w =>
-                  w.pending.isNone
-                    && popArgs (if ps.length == n then ps else ps.take n) w.σ) then
-            some (ws.flatMap (fun w =>
-              (sigCompls sigs f).map (fun c =>
-                { w with σ := w.σ.drop n, pending := some c })))
+              && w.pending.isNone
+                && popArgs (if ps.length == n then ps else ps.take n) w.σ then
+            some ((sigCompls sigs f).map (fun c =>
+              { w with σ := w.σ.drop n, pending := some c }))
           else none
       | none => none
   | .kSet x =>
       -- PARKED DISCIPLINE: while a completion is parked, only the
-      -- self-test protocol (kTest/kIte/kUnwrap/kRet) may act; a σ-pop
-      -- with a parked pending would let the machine pop the COMPLETION
-      -- and diverge from the abstraction (checker bug #10, found by
-      -- the sr_kPop/sr_kSet assembly)
-      ws.mapM (fun w =>
-        match w.pending, w.σ with
-        | some _, _ => none
-        | none, t :: σ' => some { w with Γ := (x, t) :: w.Γ, σ := σ' }
-        | none, [] => none)
+      -- self-test protocol may act
+      match w.pending, w.σ with
+      | none, t :: σ' => some [{ w with Γ := (x, t) :: w.Γ, σ := σ' }]
+      | _, _ => none
   | .kPop =>
-      ws.mapM (fun w =>
-        match w.pending, w.σ with
-        | some _, _ => none
-        | none, _ :: σ' => some { w with σ := σ' }
-        | none, [] => none)
-  | .kPrim1 .pWrapC =>
-      ws.mapM (fun w =>
-        match w.σ with
-        | t :: σ' => parkPending (.normal t) { w with σ := σ' }
-        | [] => none)
-  | .kPrim1 .pThrowC =>
-      ws.mapM (fun w =>
-        match w.σ with
-        | _ :: σ' => parkPending .throw { w with σ := σ' }
-        | [] => none)
-  | .kPrim1 p =>
-      match primTys p with
-      | some (tin, tout) =>
-          ws.mapM (fun w =>
-            match w.pending with
-            | some _ => none
-            | none => match popTy tin w.σ with
-                | some σ' => some { w with σ := tout :: σ' }
-                | none => none)
-      | none => some ws
+      match w.pending, w.σ with
+      | none, _ :: σ' => some [{ w with σ := σ' }]
+      | _, _ => none
   | .kTest =>
       -- TESTING OBSERVES: parking already split the deliveries into
       -- worlds; each world parks exactly one completion and gets its
-      -- EXACT verdict singleton (normal -> false, throw -> true). No
-      -- pending: the machine fells on a non-completion - reject.
-      ws.mapM (fun w =>
-        match w.pending with
-        | some (.normal _) =>
-            some { w with σ := [.isValue (.boolean Bool.false)] :: w.σ }
-        | some .throw =>
-            some { w with σ := [.isValue (.boolean Bool.true)] :: w.σ }
-        | none => none)
+      -- EXACT verdict singleton
+      match w.pending with
+      | some (.normal _) =>
+          some [{ w with σ := [.isValue (.boolean Bool.false)] :: w.σ }]
+      | some .throw =>
+          some [{ w with σ := [.isValue (.boolean Bool.true)] :: w.σ }]
+      | none => none
   | .kUnwrap =>
-      ws.mapM (fun w =>
-        match w.pending with
-        | some (.normal t) => some { w with σ := t :: w.σ, pending := none }
-        | some .throw =>
-            some { w with σ := anyT :: w.σ, pending := none }  -- dead path
-        | none => none)
+      match w.pending with
+      | some (.normal t) => some [{ w with σ := t :: w.σ, pending := none }]
+      | some .throw => some [{ w with σ := anyT :: w.σ, pending := none }]
+      | none => none
   | .kIMeth nm n =>
       -- PARKING SPLITS (same both-deliveries rule as kCall)
       if mopArity nm == some n
-          && ws.all (fun w =>
-            w.pending.isNone
-              && match popTyN n anyT w.σ with
-                 | some σ' => (popA (.anyValue .obj) σ').isSome
-                 | none => Bool.false) then
-        some (ws.flatMap (fun w =>
-          match popTyN n anyT w.σ with
-          | some σ' =>
-              match popA (.anyValue .obj) σ' with
-              | some σ'' =>
-                  (mopResult nm).map (fun c =>
-                    { w with σ := σ'', pending := some c })
-              | none => []
-          | none => []))
+          && w.pending.isNone
+          && (match popTyN n anyT w.σ with
+              | some σ' => (popA (.anyValue .obj) σ').isSome
+              | none => Bool.false) then
+        match popTyN n anyT w.σ with
+        | some σ' =>
+            match popA (.anyValue .obj) σ' with
+            | some σ'' =>
+                some ((mopResult nm).map (fun c =>
+                  { w with σ := σ'', pending := some c }))
+            | none => none
+        | none => none
       else none
   | .kMkList n =>
-      ws.mapM (fun w =>
-        match w.pending with
-        | some _ => none
-        | none => match popTyN n anyT w.σ with
-            | some σ' => some { w with σ := [.anyValue .list] :: σ' }
-            | none => none)
+      match w.pending, popTyN n anyT w.σ with
+      | none, some σ' => some [{ w with σ := [.anyValue .list] :: σ' }]
+      | _, _ => none
   | .kNewSlot sn =>
       if (slotOfName sn).isSome then
-        ws.mapM (fun w =>
-          match w.pending with
-          | some _ => none
-          | none => match popTy anyT w.σ with
-              | some σ' => some { w with σ := [.anyValue .obj] :: σ' }
-              | none => none)
+        match w.pending, popTy anyT w.σ with
+        | none, some σ' => some [{ w with σ := [.anyValue .obj] :: σ' }]
+        | _, _ => none
       else none
-  | _ => some ws
+  | _ => some [w]
+
+/-- Step every world through one stack instruction. -/
+def stepWorlds (sigs : SigTable) (ws : Worlds) (i : Instr) : Option Worlds :=
+  (ws.mapM (step1 sigs i)).map List.flatten
 
 /-- Correlated predicate tests: IsDataDescriptor(x) /
     IsAccessorDescriptor(x) are decidable per EXACT desc atom
