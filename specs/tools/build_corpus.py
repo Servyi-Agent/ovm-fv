@@ -146,9 +146,24 @@ def corpusSigs : SigTable := [
   ("Call",                ([langT, langT, [.anyValue .list]], langT))
 ]
 
+/- Gate helpers: the #evals are for humans; the examples below make
+    every load-bearing claim EXIT-CHECKED - a regression fails the
+    build, not the reading. -/
+def tcOk (sigs : SigTable) (r : Ty) (Γ : TyEnv) (seq : List Instr) : Bool :=
+  match typecheckSeq sigs r Γ seq with
+  | .flows f => terminal f && f.assumes.isEmpty
+  | _ => Bool.false
+
+def tcReject (sigs : SigTable) (r : Ty) (Γ : TyEnv) (seq : List Instr) : Bool :=
+  match typecheckSeq sigs r Γ seq with
+  | .reject _ _ => Bool.true
+  | _ => Bool.false
+
 /- the issue-#1 regression loop typechecks too: body neutral, cond boolean -/
 #eval typecheckSeq corpusSigs langT []
     (.kRepeatWhile (Expr.varNotPresent "done") loopBody :: loopRest)
+example : tcOk corpusSigs langT []
+    (.kRepeatWhile (Expr.varNotPresent "done") loopBody :: loopRest) = Bool.true := by native_decide
 
 -- every registry body typechecks against its declared signature
 -- (prints the first rejection with reason + stack, or none)
@@ -164,6 +179,8 @@ def sigWf : SigTable → Bool := fun sigs =>
         | .desc fs => wfFields fs
         | _ => Bool.true)))
 #eval sigWf corpusSigs
+example : sigWf corpusSigs = Bool.true := by native_decide
+example : typecheckRegOk corpusSigs theReg = Bool.true := by native_decide
 
 -- per-AO: certificate AND assumption-freedom — a nonzero debt must
 -- fail the gate loudly, not just certify-with-debt invisibly.
@@ -186,9 +203,35 @@ def assumesOf (sigs : SigTable) (name : «String») (ps : List «String»)
 #eval assumesOf corpusSigs "GetV" ["value", "propertyKey"] (compileSteps (build getV7_3_1))
 #eval assumesOf corpusSigs "GetMethod" ["value", "propertyKey"] (compileSteps (build getMethod7_3_10))
 #eval assumesOf corpusSigs "OrdinaryGet" ["obj", "propertyKey", "receiver"] (compileSteps (build ordinaryGet7_3_2))
+example : assumesOf corpusSigs "IsCallable" ["arg"]
+    (compileSteps (build isCallable6_2_5_1)) = 0 := by native_decide
+example : assumesOf corpusSigs "IsConstructor" ["arg"]
+    (compileSteps (build isConstructor6_2_5_2)) = 0 := by native_decide
+example : assumesOf corpusSigs "IsDataDescriptor" ["propertyDesc"]
+    (compileSteps (build isDataDescriptor6_2_6_2)) = 0 := by native_decide
+example : assumesOf corpusSigs "IsAccessorDescriptor" ["propertyDesc"]
+    (compileSteps (build isAccessorDescriptor6_2_6_3)) = 0 := by native_decide
+example : assumesOf corpusSigs "OrdinaryToPrimitive" ["obj", "hint"]
+    (compileSteps (build ordinaryToPrimitive7_1_1_1)) = 0 := by native_decide
+example : assumesOf corpusSigs "ToPrimitive" ["input", "preferredType"]
+    (compileSteps (build toPrimitive7_1_1)) = 0 := by native_decide
+example : assumesOf corpusSigs "ToObject" ["arg"]
+    (compileSteps (build toObject7_1_13)) = 0 := by native_decide
+example : assumesOf corpusSigs "GetV" ["value", "propertyKey"]
+    (compileSteps (build getV7_3_1)) = 0 := by native_decide
+example : assumesOf corpusSigs "GetMethod" ["value", "propertyKey"]
+    (compileSteps (build getMethod7_3_10)) = 0 := by native_decide
+example : assumesOf corpusSigs "OrdinaryGet" ["obj", "propertyKey", "receiver"]
+    (compileSteps (build ordinaryGet7_3_2)) = 0 := by native_decide
 -- the demos typecheck as frames (Γ = params, or empty for top-level)
 #eval typecheckSeq corpusSigs langT [("input", langT), ("propertyKey", [.anyValue .str])] (compileSteps (build lookupDemoF))
 #eval typecheckSeq corpusSigs langT [("input", langT), ("propertyKey", [.anyValue .str])] (compileSteps (build getMethodDemoF))
+example : tcOk corpusSigs langT
+    [("input", langT), ("propertyKey", [.anyValue .str])]
+    (compileSteps (build lookupDemoF)) = Bool.true := by native_decide
+example : tcOk corpusSigs langT
+    [("input", langT), ("propertyKey", [.anyValue .str])]
+    (compileSteps (build getMethodDemoF)) = Bool.true := by native_decide
 
 /- negative tests: the two historical bugs must be REJECTED.
    Bug 1 (missing rewrap): kUnwrap extracts the payload raw; kRet
@@ -197,12 +240,14 @@ def bug1 : List Instr :=
   [.kEval (.const (.compl Bool.false (JSValue.number 5))), .kTest,
    .kIte [.kRet] [.kUnwrap, .kRet]]
 #eval typecheckSeq corpusSigs langT [] bug1
+example : tcReject corpusSigs langT [] bug1 = Bool.true := by native_decide
 /- Bug 2 (double self-test): kEval of a call yields the payload type
    (raw), a stray kTest demands a completion. -/
 def bug2 : List Instr :=
   [.kEval (Expr.call "GetV" [Expr.nv "v", Expr.nv "p"]), .kTest,
    .kIte [.kRet] [.kUnwrap, .kPrim1 .pWrapC, .kRet]]
 #eval typecheckSeq corpusSigs langT [("v", langT), ("p", langT)] bug2
+example : tcReject corpusSigs langT [("v", langT), ("p", langT)] bug2 = Bool.true := by native_decide
 /- Signature-driven argument checking: args must be BELOW the
    callee's parameters (fit the contract), never supersets. -/
 def closeSigs : SigTable := [("FakeClose", ([langT, [.anyValue .desc]], langT))]
@@ -210,12 +255,17 @@ def badArg : List Instr :=
   [.kEval (Expr.call "FakeClose" [Expr.nv "r", Expr.nv "c"]), .kPrim1 .pWrapC, .kRet]
 def goodArg : List Instr := badArg
 #eval typecheckSeq closeSigs langT [("r", langT), ("c", [.anyValue .num])] badArg
+example : tcReject closeSigs langT [("r", langT), ("c", [.anyValue .num])] badArg
+    = Bool.true := by native_decide
 #eval typecheckSeq closeSigs langT [("r", langT), ("c", [.anyValue .desc])] goodArg
+example : tcOk closeSigs langT [("r", langT), ("c", [.anyValue .desc])] goodArg
+    = Bool.true := by native_decide
 /- Stricter typing: a number where kIte demands a boolean. This is the
    class of bug runtime smoke tests miss on dead paths. -/
 def bug3 : List Instr :=
   [.kEval (.const (JSValue.number 5)), .kIte [] []]
 #eval typecheckSeq corpusSigs langT [] bug3
+example : tcReject corpusSigs langT [] bug3 = Bool.true := by native_decide
 
 /- ## Reference machine equivalence (exit-checked).
     Reference.lean is re-exported by the root metalanguage module. -/
