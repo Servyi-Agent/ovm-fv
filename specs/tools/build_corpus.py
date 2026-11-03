@@ -299,6 +299,24 @@ def goodThrowSigs : SigTable := [("GoodThrow", ([langT], [.normal langT, .throw]
 #eval typecheckAO goodThrowSigs "GoodThrow" ["x"] badThrowBody
 example : (typecheckAO goodThrowSigs "GoodThrow" ["x"] badThrowBody).isNone
   = Bool.true := by native_decide
+/- Argument-position throws: FakeCall(ThrowingArg()) aborts before
+   the callee runs - the frame can throw even though FakeCall itself
+   is total. The judgement must say so. -/
+def argThrowSigs : SigTable :=
+  [("FakeCall", ([langT], [.normal langT])),
+   ("FakeThrow", ([], [.normal [.anyValue .bool], .throw]))]
+def argThrowGoodSigs : SigTable :=
+  [("FakeCall", ([langT], [.normal langT, .throw])),
+   ("FakeThrow", ([], [.normal [.anyValue .bool], .throw]))]
+def argThrowBody : List Instr :=
+  [.kEval (Expr.call "FakeCall" [Expr.call "FakeThrow" []]),
+   .kPrim1 .pWrapC, .kRet]
+#eval typecheckAO argThrowSigs "FakeCall" ["x"] argThrowBody
+#eval typecheckAO argThrowGoodSigs "FakeCall" ["x"] argThrowBody
+example : (typecheckAO argThrowSigs "FakeCall" ["x"] argThrowBody).isSome
+  = Bool.true := by native_decide
+example : (typecheckAO argThrowGoodSigs "FakeCall" ["x"] argThrowBody).isNone
+  = Bool.true := by native_decide
 #eval typecheckSeq closeSigs langT [("r", langT), ("c", [.anyValue .desc])] goodArg
 example : tcOk closeSigs langT [("r", langT), ("c", [.anyValue .desc])] goodArg
     = Bool.true := by native_decide

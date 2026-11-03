@@ -290,8 +290,12 @@ inductive TCResult where
     lists throw. -/
 mutual
 def exprCanThrow (sigs : SigTable) : Expr → Bool
-  | .call f _ => complCanThrow (sigCompls sigs f)
-  | .imeth nm _ _ => complCanThrow (mopResult nm)
+  -- arguments are ?-wrapped: a throwing ARG aborts the caller
+  -- before the callee is entered (ES never delivers throws as args)
+  | .call f as => complCanThrow (sigCompls sigs f) || exprsCanThrow sigs as
+  | .imeth nm recv args =>
+      complCanThrow (mopResult nm) || exprCanThrow sigs recv
+        || exprsCanThrow sigs args
   | .isObject e | .isNotObject e | .isNotUndefined e | .hasCall e
   | .hasCtor e | .isU e | .isBoolVal _ e | .isStrVal _ e
   | .isNullOrUnd e | .isNull e | .isType _ e | .hasField _ e =>
