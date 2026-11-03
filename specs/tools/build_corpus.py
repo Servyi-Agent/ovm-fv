@@ -130,20 +130,26 @@ def demoHeap : Heap :=
    Delivery is always a completion; the table types the payload.
    To be extracted from spec.html headers eventually (diff_spec-style). -/
 def corpusSigs : SigTable := [
-  -- flat-lattice signatures: each slot is a flat disjunction of atoms
-  ("IsCallable",          ([langT], [.anyValue .bool])),
-  ("IsConstructor",       ([langT], [.anyValue .bool])),
-  ("IsDataDescriptor",    ([[.anyValue .desc]], [.anyValue .bool])),
-  ("IsAccessorDescriptor",([[.anyValue .desc]], [.anyValue .bool])),
-  ("OrdinaryToPrimitive", ([langT, [.isValue (.str "string"), .isValue (.str "number")]], langT)),
-  ("ToPrimitive",         ([langT, [.notPresent, .isValue (.str "string"), .isValue (.str "number")]], langT)),
-  ("ToObject",            ([langT], [.anyValue .obj])),
-  ("GetV",                ([langT, [.anyValue .str]], langT)),
-  ("GetMethod",           ([langT, [.anyValue .str]], langT)),
-  ("OrdinaryGet",         ([[.anyValue .obj], langT, langT], langT)),
+  -- flat-lattice signatures: each slot is a flat disjunction of
+  -- atoms; returns are COMPLETION JUDGEMENTS. The corpus bodies are
+  -- total: single-normal judgements, no throw alternatives.
+  ("IsCallable",          ([langT], [.normal [.anyValue .bool]])),
+  ("IsConstructor",       ([langT], [.normal [.anyValue .bool]])),
+  ("IsDataDescriptor",    ([[.anyValue .desc]], [.normal [.anyValue .bool]])),
+  ("IsAccessorDescriptor",([[.anyValue .desc]], [.normal [.anyValue .bool]])),
+  -- the two AOs whose spec bodies genuinely throw (TypeError when
+  -- no conversion applies; the otp demo answers compl true):
+  ("OrdinaryToPrimitive", ([langT, [.isValue (.str "string"), .isValue (.str "number")]], [.normal langT, .throw])),
+  ("ToPrimitive",         ([langT, [.notPresent, .isValue (.str "string"), .isValue (.str "number")]], [.normal langT, .throw])),
+  -- ToObject throws TypeError on undefined/null (spec 7.1.13):
+  ("ToObject",            ([langT], [.normal [.anyValue .obj], .throw])),
+  -- GetV propagates ? ToObject(V); GetMethod propagates ? GetV:
+  ("GetV",                ([langT, [.anyValue .str]], [.normal langT, .throw])),
+  ("GetMethod",           ([langT, [.anyValue .str]], [.normal langT, .throw])),
+  ("OrdinaryGet",         ([[.anyValue .obj], langT, langT], [.normal langT])),
   -- prim-named calls the machine handles natively on registry miss:
-  ("Get",                 ([langT, langT], langT)),
-  ("Call",                ([langT, langT, [.anyValue .list]], langT))
+  ("Get",                 ([langT, langT], [.normal langT])),
+  ("Call",                ([langT, langT, [.anyValue .list]], [.normal langT]))
 ]
 
 /- Gate helpers: the #evals are for humans; the examples below make
@@ -250,7 +256,7 @@ def bug2 : List Instr :=
 example : tcReject corpusSigs langT [("v", langT), ("p", langT)] bug2 = Bool.true := by native_decide
 /- Signature-driven argument checking: args must be BELOW the
    callee's parameters (fit the contract), never supersets. -/
-def closeSigs : SigTable := [("FakeClose", ([langT, [.anyValue .desc]], langT))]
+def closeSigs : SigTable := [("FakeClose", ([langT, [.anyValue .desc]], [.normal langT]))]
 def badArg : List Instr :=
   [.kEval (Expr.call "FakeClose" [Expr.nv "r", Expr.nv "c"]), .kPrim1 .pWrapC, .kRet]
 def goodArg : List Instr := badArg
@@ -259,7 +265,7 @@ example : tcReject closeSigs langT [("r", langT), ("c", [.anyValue .num])] badAr
     = Bool.true := by native_decide
 /- kCall parks BOTH deliveries (normal payload + throw) as separate
    worlds: the self-test idiom must check in each. -/
-def callSigs : SigTable := [("FakeCall", ([langT], langT))]
+def callSigs : SigTable := [("FakeCall", ([langT], [.normal langT, .throw]))]
 def callBoth : List Instr :=
   [.kEval (.const (JSValue.number 5)), .kCall "FakeCall" 1,
    .kTest, .kIte [.kRet] [.kUnwrap, .kPrim1 .pWrapC, .kRet]]
@@ -273,6 +279,26 @@ def callThrowBlind : List Instr :=
    .kTest, .kIte [.kPop] [.kUnwrap, .kPrim1 .pWrapC, .kRet]]
 #eval typecheckSeq callSigs langT [] callThrowBlind
 example : tcOk callSigs langT [] callThrowBlind = Bool.false := by native_decide
+/- Dual control: a TOTAL callee ([normal t], no throw) parks no
+   throw world - the same blind then-branch certifies, proving no
+   spurious throw exploration. -/
+def neverSigs : SigTable := [("FakeTotal", ([langT], [.normal langT]))]
+def callNeverBlind : List Instr :=
+  [.kEval (.const (JSValue.number 5)), .kCall "FakeTotal" 1,
+   .kTest, .kIte [.kPop] [.kUnwrap, .kPrim1 .pWrapC, .kRet]]
+#eval typecheckSeq neverSigs langT [] callNeverBlind
+example : tcOk neverSigs langT [] callNeverBlind = Bool.true := by native_decide
+/- Judgement consistency: a body that CAN throw must declare it.
+   BadThrow's judgement omits throw - its pThrowC exit must fail
+   certification. -/
+def badThrowBody : List Instr :=
+  [.kEval (.const JSValue.undefined), .kPrim1 .pThrowC, .kRet]
+def badThrowSigs : SigTable := [("BadThrow", ([langT], [.normal langT]))]
+def goodThrowSigs : SigTable := [("GoodThrow", ([langT], [.normal langT, .throw]))]
+#eval typecheckAO badThrowSigs "BadThrow" ["x"] badThrowBody
+#eval typecheckAO goodThrowSigs "GoodThrow" ["x"] badThrowBody
+example : (typecheckAO goodThrowSigs "GoodThrow" ["x"] badThrowBody).isNone
+  = Bool.true := by native_decide
 #eval typecheckSeq closeSigs langT [("r", langT), ("c", [.anyValue .desc])] goodArg
 example : tcOk closeSigs langT [("r", langT), ("c", [.anyValue .desc])] goodArg
     = Bool.true := by native_decide

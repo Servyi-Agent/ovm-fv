@@ -93,12 +93,9 @@ def frameOk (sigs : SigTable) (above : Option «String») (f : Fr) : Prop :=
     ∧ (match splitStack f.eval with
        | none => False
        | some (σ, p) =>
-           -- a callee answers with a normal payload OR a throw: BOTH
-           -- deliveries are anticipated and must each check
+           -- anticipate exactly the callee's declared alternatives
            match above with
-           | some n =>
-               frameChecks sigs f (some (.normal (sigRetTy sigs n)))
-                 ∧ frameChecks sigs f (some Pending.throw)
+           | some n => ∀ c ∈ sigCompls sigs n, frameChecks sigs f (some c)
            | none => frameChecks sigs f p)
 
 /-- Each frame is checked at its own destiny (its AO's declared
@@ -242,7 +239,9 @@ def certifies (sigs : SigTable) (name : «String») (ps : List «String»)
     (ts : List Ty) (prog : Prog) : Prop :=
   match checkSeq sigs (sigRetTy sigs name)
       [{ Γ := zipTy ps ts, σ := [], pending := none }] (compileSteps prog) with
-  | .flows fb => terminal fb = Bool.true
+  | .flows fb =>
+      terminal fb = Bool.true
+        ∧ (fb.throws = Bool.true → complCanThrow (sigCompls sigs name) = Bool.true)
   | _ => False
 
 theorem certifies_flows_elim {sigs : SigTable} {name : «String»}
@@ -250,13 +249,15 @@ theorem certifies_flows_elim {sigs : SigTable} {name : «String»}
     (h : certifies sigs name ps ts prog) :
     ∃ fb, checkSeq sigs (sigRetTy sigs name)
         [{ Γ := zipTy ps ts, σ := [], pending := none }] (compileSteps prog)
-        = TCResult.flows fb ∧ terminal fb = Bool.true := by
+        = TCResult.flows fb ∧ terminal fb = Bool.true
+        ∧ (fb.throws = Bool.true
+            → complCanThrow (sigCompls sigs name) = Bool.true) := by
   cases hb : checkSeq sigs (sigRetTy sigs name)
       [{ Γ := zipTy ps ts, σ := [], pending := none }] (compileSteps prog) with
   | flows fb =>
       simp only [certifies] at h
       rw [hb] at h
-      exact ⟨fb, rfl, h⟩
+      exact ⟨fb, rfl, h.1, h.2⟩
   | reject s w =>
       simp only [certifies] at h
       rw [hb] at h

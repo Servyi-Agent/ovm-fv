@@ -130,11 +130,27 @@ def meetTy (S T : Ty) : Ty :=
 def removeTy (S T : Ty) : Ty :=
   S.filter (fun a => !T.any (fun b => tmovesV a b))
 
-/- ## Signature tables -/
+/- ## Signature tables
 
-abbrev SigTable := List («String» × (List Ty × Ty))
+    A signature's return is a COMPLETION JUDGEMENT: the list of
+    deliveries the function may produce - e.g. [normal t1, throw] or
+    just [normal t1] (total). Parking splits over exactly these
+    alternatives (one world each); a throw world exists only if the
+    judgement says so. Judgement soundness is enforced per body:
+    a certified body whose judgement omits throw must never exit
+    via a throw (Flows.throws). -/
 
-def sigFind : SigTable → «String» → Option (List Ty × Ty)
+abbrev SigTable := List («String» × (List Ty × List Pending))
+
+/-- The payload union of a completion judgement. -/
+def complPayload (cs : List Pending) : Ty :=
+  (cs.filterMap (fun c => match c with
+    | .normal t => some t | .throw => none)).flatten
+
+def complCanThrow (cs : List Pending) : Bool :=
+  cs.any (fun c => match c with | .throw => Bool.true | _ => Bool.false)
+
+def sigFind : SigTable → «String» → Option (List Ty × List Pending)
   | [], _ => none
   | (n, s) :: rest, f => if n == f then some s else sigFind rest f
 
@@ -143,10 +159,14 @@ def sigParams (sigs : SigTable) (name : «String») : List Ty :=
   | some (ps, _) => ps
   | none => []
 
-def sigRetTy (sigs : SigTable) (name : «String») : Ty :=
+/-- The callee's completion judgement (unknown callee: worst case). -/
+def sigCompls (sigs : SigTable) (name : «String») : List Pending :=
   match sigFind sigs name with
-  | some (_, ret) => ret
-  | none => [.anyValue .undef]  -- unknown callee: empty payload
+  | some (_, cs) => cs
+  | none => [.throw]
+
+def sigRetTy (sigs : SigTable) (name : «String») : Ty :=
+  complPayload (sigCompls sigs name)
 
 abbrev TyEnv := List («String» × Ty)
 
@@ -165,18 +185,20 @@ def mopArity : «String» → Option Nat
   | "GetPrototypeOf" => some 0
   | _ => none
 
-def mopResult : «String» → Ty
-  | "Get" => langT
-  | "GetPrototypeOf" => [.anyValue .null, .anyValue .obj]
-  | "Value" | "Getter" | "Setter" => langT
-  | "Writable" | "Enumerable" | "Configurable" => [.anyValue .bool]
+def mopResult : «String» → List Pending
+  | "Get" => [.normal langT]
+  | "GetPrototypeOf" => [.normal [.anyValue .null, .anyValue .obj]]
+  | "Value" | "Getter" | "Setter" => [.normal langT]
+  | "Writable" | "Enumerable" | "Configurable" => [.normal [.anyValue .bool]]
   | "GetOwnProperty" =>
       -- stored descriptors are completed at write time: data-complete
       -- or accessor-complete (the spec's disjointness invariant)
-      [.desc [.value, .writable, .enumerable, .configurable],
-       .desc [.getter, .setter, .enumerable, .configurable],
-       .anyValue .undef]
-  | _ => anyT
+      [.normal [.desc [.value, .writable, .enumerable, .configurable]],
+       .normal [.desc [.getter, .setter, .enumerable, .configurable]],
+       .normal [.anyValue .undef]]
+  | _ => [.normal anyT, .throw]
+
+def mopPayload («nm» : «String») : Ty := complPayload (mopResult nm)
 
 /- ## Worlds -/
 
@@ -208,13 +230,13 @@ def typeOfE (sigs : SigTable) (Γ : TyEnv) : Expr → Option Ty
   | .varNotPresent _ => some [.anyValue .bool]
   | .call f as =>
       match sigFind sigs f with
-      | some (ps, ret) =>
+      | some (ps, retj) =>
           match typesOf sigs Γ as with
           | some ts =>
               if leTy ts ps
                  || (as.length == ps.length - 1
                      && leTy ts (ps.dropLast))
-              then some ret else none
+              then some (complPayload retj) else none
           | none => none
       | none => none
   | .imeth nm recv args =>
@@ -222,12 +244,12 @@ def typeOfE (sigs : SigTable) (Γ : TyEnv) : Expr → Option Ty
       | some k =>
           if args.length == k && typeOfE sigs Γ recv == some [.anyValue .obj]
              && (typesOf sigs Γ args).isSome
-          then some (mopResult nm) else none
+          then some (mopPayload nm) else none
       | none => none
   | .ifield nm x =>
       -- the zero-arg-MOP deviation: o.[[GetPrototypeOf]] is
       -- semantically the call; other fields are dynamic guards
-      if (typeOfE sigs Γ x).isSome then some (mopResult nm) else none
+      if (typeOfE sigs Γ x).isSome then some (mopPayload nm) else none
   | .listE es =>
       if (typesOf sigs Γ es).isSome then some [.anyValue .list] else none
   | .isObject x | .isNotObject x | .isNotUndefined x | .hasCall x
@@ -241,6 +263,11 @@ end
 
 structure Flows where
   exits : Bool
+  /- Some world exited via kRet with a THROWN pending: the checked
+     body can produce an abrupt answer. Judgement soundness: if the
+     signature's completion judgement omits throw, this must be
+     false (typecheckAO enforces it). -/
+  throws : Bool
   falls : Worlds
   /- Assert obligations that could not be discharged by the splits:
      each recorded assumption is a proof debt (caller contracts, spec
@@ -257,6 +284,35 @@ inductive TCResult where
   | flows (f : Flows)
   | reject (site : Instr) (why : «String»)
   deriving Repr
+
+/- Can evaluating this expression exit the frame abruptly? True
+    exactly when it contains a call/imeth whose completion judgement
+    lists throw. -/
+mutual
+def exprCanThrow (sigs : SigTable) : Expr → Bool
+  | .call f _ => complCanThrow (sigCompls sigs f)
+  | .imeth nm _ _ => complCanThrow (mopResult nm)
+  | .isObject e | .isNotObject e | .isNotUndefined e | .hasCall e
+  | .hasCtor e | .isU e | .isBoolVal _ e | .isStrVal _ e
+  | .isNullOrUnd e | .isNull e | .isType _ e | .hasField _ e =>
+      exprCanThrow sigs e
+  | .listE es => exprsCanThrow sigs es
+  | _ => Bool.false
+termination_by e => sizeOf e
+
+def exprsCanThrow (sigs : SigTable) : List Expr → Bool
+  | [] => Bool.false
+  | e :: es => exprCanThrow sigs e || exprsCanThrow sigs es
+termination_by es => sizeOf es
+end
+
+/-- The kEval summary of a call skips the self-test dust; record the
+    abrupt exit the dust would take (for judgement consistency). -/
+def markThrow (sigs : SigTable) (ex : Expr) : TCResult → TCResult :=
+  fun res => match res with
+  | .flows fr =>
+      .flows { fr with throws := fr.throws || exprCanThrow sigs ex }
+  | r => r
 
 /- ## Stack operations -/
 
@@ -349,17 +405,18 @@ def stepWorlds (sigs : SigTable) (ws : Worlds) (i : Instr) : Option Worlds :=
             | none => none)
       | none => some ws
   | .kCall f n =>
-      -- PARKING SPLITS: a callee can answer with a normal payload
-      -- (typed by its signature) OR a throw - explore BOTH deliveries
-      -- as separate worlds. The throw world exits at the self-test's
-      -- kRet (exempt); the normal world continues through kUnwrap.
+      -- PARKING SPLITS over the callee's COMPLETION JUDGEMENT: one
+      -- world per listed alternative - each normal payload, and a
+      -- throw world only if the judgement says the callee can throw.
+      -- The throw world exits at the self-test's kRet (exempt); each
+      -- normal world continues through kUnwrap.
       match sigFind sigs f with
-      | some (ps, ret) =>
+      | some (ps, retj) =>
           if ps.length == n
               && ws.all (fun w => w.pending.isNone && popArgs ps w.σ) then
             some (ws.flatMap (fun w =>
-              [{ w with σ := w.σ.drop n, pending := some (.normal ret) },
-               { w with σ := w.σ.drop n, pending := some .throw }]))
+              (sigCompls sigs f).map (fun c =>
+                { w with σ := w.σ.drop n, pending := some c })))
           else none
       | none => none
   | .kSet x =>
@@ -404,8 +461,8 @@ def stepWorlds (sigs : SigTable) (ws : Worlds) (i : Instr) : Option Worlds :=
           | some σ' =>
               match popA (.anyValue .obj) σ' with
               | some σ'' =>
-                  [{ w with σ := σ'', pending := some (.normal (mopResult nm)) },
-                   { w with σ := σ'', pending := some .throw }]
+                  (mopResult nm).map (fun c =>
+                    { w with σ := σ'', pending := some c })
               | none => []
           | none => []))
       else none
@@ -495,12 +552,12 @@ def checkLoopBody (rbody : TCResult) (site : Instr)
       let neutral := fb.falls.all (fun w => w.σ == σ₀ && w.pending.isNone)
       if neutral then
         match k fb.falls with
-        | .flows fr => .flows { exits := fb.exits || fr.exits, falls := fr.falls, assumes := fb.assumes ++ fr.assumes }
+        | .flows fr => .flows { exits := fb.exits || fr.exits, throws := fb.throws || fr.throws, falls := fr.falls, assumes := fb.assumes ++ fr.assumes }
         | res => res
       else .reject site "loop body is not stack-neutral"
 
 def checkSeq : SigTable → Ty → Worlds → List Instr → TCResult
-  | _, _, ws, [] => .flows { exits := Bool.false, falls := ws, assumes := [] }
+  | _, _, ws, [] => .flows { exits := Bool.false, throws := Bool.false, falls := ws, assumes := [] }
   | _, r, ws, .kRet :: _ =>
       -- every world returns: pending payload ⊑ r, or a throw
       if ws.all (fun w =>
@@ -508,7 +565,12 @@ def checkSeq : SigTable → Ty → Worlds → List Instr → TCResult
         | some (.normal t) => tmoves t r
         | some .throw => Bool.true
         | none => Bool.false) then
-        .flows { exits := Bool.true, falls := [], assumes := [] }
+        .flows { exits := Bool.true
+               , throws := ws.any (fun w =>
+                   match w.pending with
+                   | some .throw => Bool.true
+                   | _ => Bool.false)
+               , falls := [], assumes := [] }
       else .reject .kRet "kRet: payload does not match the frame's destiny r"
   | sigs, r, ws, .kIte t e :: rest =>
       -- dispatch each world on its verdict; split both-verdict worlds
@@ -535,6 +597,7 @@ def checkSeq : SigTable → Ty → Worlds → List Instr → TCResult
               match checkSeq sigs r (f₁.falls ++ f₂.falls) rest with
               | .flows fr =>
                   .flows { exits := f₁.exits || f₂.exits || fr.exits
+                         , throws := f₁.throws || f₂.throws || fr.throws
                          , falls := fr.falls
                          , assumes := f₁.assumes ++ f₂.assumes ++ fr.assumes }
               | res => res
@@ -555,28 +618,28 @@ def checkSeq : SigTable → Ty → Worlds → List Instr → TCResult
       | .isBoolVal Bool.true (Expr.call f [Expr.nv x]), some dec =>
           match splitWorldsP x dec ws with
           | none => .reject (.kEval ex) "ill-typed predicate test (unbound or empty split)"
-          | some ws' => checkSeq sigs r ws' rest
+          | some ws' => markThrow sigs ex (checkSeq sigs r ws' rest)
       | _, _ =>
           if (testType ex).isSome then
             match testedVar ex with
             | some x =>
                 match splitWorlds x (testType ex).get! ws with
                 | none => .reject (.kEval ex) "ill-typed test (unbound or empty split)"
-                | some ws' => checkSeq sigs r ws' rest
+                | some ws' => markThrow sigs ex (checkSeq sigs r ws' rest)
             | none =>
                 match ws.mapM (fun (w : World) =>
                   match typeOfE sigs w.Γ ex with
                   | none => none
                   | some t => some { w with σ := t :: w.σ }) with
                 | none => .reject (.kEval ex) "ill-typed expression"
-                | some ws' => checkSeq sigs r ws' rest
+                | some ws' => markThrow sigs ex (checkSeq sigs r ws' rest)
           else
             match ws.mapM (fun (w : World) =>
               match typeOfE sigs w.Γ ex with
               | none => none
               | some t => some { w with σ := t :: w.σ }) with
             | none => .reject (.kEval ex) "ill-typed expression (unbound or bad args)"
-            | some ws' => checkSeq sigs r ws' rest
+            | some ws' => markThrow sigs ex (checkSeq sigs r ws' rest)
   | sigs, r, ws, .kRepeatWhile c body :: rest =>
       if ws.all (fun w =>
         match typeOfE sigs w.Γ c with
@@ -644,12 +707,16 @@ def typecheckAO (sigs : SigTable)
   | none =>
       some (.reject (body.head?.getD .kRet)
         (name ++ " has no entry in the signature table"))
-  | some (paramTys, ret) =>
+  | some (paramTys, retj) =>
       if params.length != paramTys.length then
         some (.reject (body.head?.getD .kRet)
           (name ++ ": registry arity/signature arity mismatch"))
-      else match typecheckSeq sigs ret (zipTy params paramTys) body with
-        | .flows f => if terminal f then none else some (.flows f)
+      else match typecheckSeq sigs (complPayload retj) (zipTy params paramTys) body with
+        | .flows f =>
+            -- JUDGEMENT CONSISTENCY: a body that can exit via a throw
+            -- must carry throw in its declared completion judgement
+            if terminal f && (!f.throws || complCanThrow retj) then none
+            else some (.flows f)
         | res => some res
 
 def typecheckReg (sigs : SigTable) (reg : AOReg) : Option («String» × TCResult) :=
