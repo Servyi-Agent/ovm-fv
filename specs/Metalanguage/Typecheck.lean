@@ -349,12 +349,17 @@ def stepWorlds (sigs : SigTable) (ws : Worlds) (i : Instr) : Option Worlds :=
             | none => none)
       | none => some ws
   | .kCall f n =>
+      -- PARKING SPLITS: a callee can answer with a normal payload
+      -- (typed by its signature) OR a throw - explore BOTH deliveries
+      -- as separate worlds. The throw world exits at the self-test's
+      -- kRet (exempt); the normal world continues through kUnwrap.
       match sigFind sigs f with
       | some (ps, ret) =>
           if ps.length == n
               && ws.all (fun w => w.pending.isNone && popArgs ps w.σ) then
-            some (ws.map (fun w =>
-              { w with σ := w.σ.drop n, pending := some (.normal ret) }))
+            some (ws.flatMap (fun w =>
+              [{ w with σ := w.σ.drop n, pending := some (.normal ret) },
+               { w with σ := w.σ.drop n, pending := some .throw }]))
           else none
       | none => none
   | .kSet x =>
@@ -368,9 +373,10 @@ def stepWorlds (sigs : SigTable) (ws : Worlds) (i : Instr) : Option Worlds :=
         | _ :: σ' => some { w with σ := σ' }
         | [] => none)
   | .kTest =>
-      -- verdict is EXACT: pending normal -> singleton false (not
-      -- abrupt), pending throw -> singleton true. No pending: the
-      -- machine fells on a non-completion - reject.
+      -- TESTING OBSERVES: parking already split the deliveries into
+      -- worlds; each world parks exactly one completion and gets its
+      -- EXACT verdict singleton (normal -> false, throw -> true). No
+      -- pending: the machine fells on a non-completion - reject.
       ws.mapM (fun w =>
         match w.pending with
         | some (.normal _) =>
@@ -386,14 +392,22 @@ def stepWorlds (sigs : SigTable) (ws : Worlds) (i : Instr) : Option Worlds :=
             some { w with σ := anyT :: w.σ, pending := none }  -- dead path
         | none => none)
   | .kIMeth nm n =>
-      if mopArity nm == some n then
-        ws.mapM (fun w =>
+      -- PARKING SPLITS (same both-deliveries rule as kCall)
+      if mopArity nm == some n
+          && ws.all (fun w =>
+            w.pending.isNone
+              && match popTyN n anyT w.σ with
+                 | some σ' => (popA (.anyValue .obj) σ').isSome
+                 | none => Bool.false) then
+        some (ws.flatMap (fun w =>
           match popTyN n anyT w.σ with
           | some σ' =>
               match popA (.anyValue .obj) σ' with
-              | some σ'' => parkPending (.normal (mopResult nm)) { w with σ := σ'' }
-              | none => none
-          | none => none)
+              | some σ'' =>
+                  [{ w with σ := σ'', pending := some (.normal (mopResult nm)) },
+                   { w with σ := σ'', pending := some .throw }]
+              | none => []
+          | none => []))
       else none
   | .kMkList n =>
       ws.mapM (fun w =>

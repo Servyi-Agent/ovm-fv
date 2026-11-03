@@ -257,6 +257,22 @@ def goodArg : List Instr := badArg
 #eval typecheckSeq closeSigs langT [("r", langT), ("c", [.anyValue .num])] badArg
 example : tcReject closeSigs langT [("r", langT), ("c", [.anyValue .num])] badArg
     = Bool.true := by native_decide
+/- kCall parks BOTH deliveries (normal payload + throw) as separate
+   worlds: the self-test idiom must check in each. -/
+def callSigs : SigTable := [("FakeCall", ([langT], langT))]
+def callBoth : List Instr :=
+  [.kEval (.const (JSValue.number 5)), .kCall "FakeCall" 1,
+   .kTest, .kIte [.kRet] [.kUnwrap, .kPrim1 .pWrapC, .kRet]]
+#eval typecheckSeq callSigs langT [] callBoth
+example : tcOk callSigs langT [] callBoth = Bool.true := by native_decide
+/- Negative control: the throw delivery is REALLY explored - a
+   then-branch that falls through (kPop, then end) must fail
+   terminality. If parking were normal-only, this would certify. -/
+def callThrowBlind : List Instr :=
+  [.kEval (.const (JSValue.number 5)), .kCall "FakeCall" 1,
+   .kTest, .kIte [.kPop] [.kUnwrap, .kPrim1 .pWrapC, .kRet]]
+#eval typecheckSeq callSigs langT [] callThrowBlind
+example : tcOk callSigs langT [] callThrowBlind = Bool.false := by native_decide
 #eval typecheckSeq closeSigs langT [("r", langT), ("c", [.anyValue .desc])] goodArg
 example : tcOk closeSigs langT [("r", langT), ("c", [.anyValue .desc])] goodArg
     = Bool.true := by native_decide

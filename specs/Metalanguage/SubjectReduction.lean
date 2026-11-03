@@ -62,15 +62,28 @@ theorem envTyOf_cons (n : «String») (v : JSValue) (env : Env) :
     After kCall / kIMeth fire, the caller's instructions are
     `kTest :: kIte [kRet] [kUnwrap] :: rest` and the completion it
     will test does not exist yet: it is inside the callee frame
-    above. The judgment anticipates exactly one delivery — TYPED by
-    the callee's destiny: the frame above knows its AO name, hence
-    its declared return type. -/
+    above. The judgment anticipates BOTH deliveries — a normal
+    payload TYPED by the callee's destiny (the frame above knows its
+    AO name, hence its declared return type), and a throw. Each
+    delivery must check; the throw side exits at the self-test's
+    kRet (exempt), the normal side continues through kUnwrap. -/
 
 def selfTestHead : List Instr → Bool
   | .kTest :: .kIte [.kRet] [.kUnwrap] :: _ => Bool.true
   | _ => Bool.false
 
 /- ## Frame and state typing -/
+
+/-- The frame's check from a given abstract stack + parked
+    (or anticipated) completion. -/
+def frameChecks (sigs : SigTable) (f : Fr) (p : Option Pending) : Prop :=
+  match splitStack f.eval with
+  | none => True   -- guarded by the outer conjunct
+  | some (σ, _) =>
+      match checkSeq sigs (sigRetTy sigs f.ret)
+        [{ Γ := envTyOf f.env, σ := σ, pending := p }] f.stmts with
+      | .flows fb => terminal fb = Bool.true  -- every world returns
+      | _ => False
 
 def frameOk (sigs : SigTable) (above : Option «String») (f : Fr) : Prop :=
   -- a frame under a callee MUST be waiting at the self-test idiom:
@@ -80,13 +93,13 @@ def frameOk (sigs : SigTable) (above : Option «String») (f : Fr) : Prop :=
     ∧ (match splitStack f.eval with
        | none => False
        | some (σ, p) =>
-           match checkSeq sigs (sigRetTy sigs f.ret)
-             [{ Γ := envTyOf f.env, σ := σ,
-                pending := match above with
-                           | some n => some (.normal (sigRetTy sigs n))
-                           | none => p }] f.stmts with
-           | .flows fb => terminal fb = Bool.true  -- every world returns
-           | _ => False)
+           -- a callee answers with a normal payload OR a throw: BOTH
+           -- deliveries are anticipated and must each check
+           match above with
+           | some n =>
+               frameChecks sigs f (some (.normal (sigRetTy sigs n)))
+                 ∧ frameChecks sigs f (some Pending.throw)
+           | none => frameChecks sigs f p)
 
 /-- Each frame is checked at its own destiny (its AO's declared
     return type), anticipating a delivery TYPED by the frame directly
