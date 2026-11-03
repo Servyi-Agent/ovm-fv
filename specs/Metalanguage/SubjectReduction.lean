@@ -1107,3 +1107,45 @@ theorem tmovesV_meet_left {a a' b : VTy}
       | anyValue c => simp [tmovesV] at hle
       | isValue w => simp [tmovesV] at hle
       | desc fs => simp [tmovesV] at hle
+
+/-- Removal covariance: a kept refined atom is covered by a kept
+    coarse atom. -/
+theorem removeTy_cov {S S' T : Ty}
+    (h : ∀ a' ∈ S', ∃ a ∈ S, tmovesV a' a = Bool.true) :
+    ∀ m' ∈ removeTy S' T, ∃ m ∈ removeTy S T, tmovesV m' m = Bool.true := by
+  intro m' hm'
+  simp only [removeTy, List.mem_filter, Bool.and_eq_true, Bool.not_eq_true] at hm' ⊢
+  obtain ⟨ha', hkeep⟩ := hm'
+  obtain ⟨a, ha, hle⟩ := h m' ha'
+  refine ⟨a, ⟨ha, ?_⟩, hle⟩
+  cases hany : (T.any fun b => tmovesV a b) with
+  | false => rfl
+  | true =>
+      obtain ⟨b, hb, hba⟩ := List.any_eq_true.mp hany
+      rw [List.any_eq_true.mpr ⟨b, hb, tmovesV_trans hle hba⟩] at hkeep
+      exact Bool.noConfusion hkeep
+
+/-- Meet covariance at the flat-type level. -/
+theorem meetTy_cov {S S' T : Ty}
+    (h : ∀ a' ∈ S', ∃ a ∈ S, tmovesV a' a = Bool.true) :
+    ∀ m' ∈ meetTy S' T, ∃ m ∈ meetTy S T, tmovesV m' m = Bool.true := by
+  intro m' hm'
+  simp only [meetTy, List.mem_flatMap] at hm' ⊢
+  obtain ⟨a', ha', b, hb, hma⟩ := hm'
+  obtain ⟨a, ha, hle⟩ := h a' ha'
+  cases hma2 : meetAtom a' b with
+  | none => rw [hma2] at hma; cases hma
+  | some mm =>
+      rw [hma2, List.mem_singleton] at hma
+      obtain ⟨m, hm2, hmm⟩ := tmovesV_meet_left hle hma2
+      subst hma
+      refine ⟨m, ⟨a, ha, b, hb, ?_⟩, hmm⟩
+      simp only [hm2, List.mem_singleton]
+
+/-- Stack coverage: cons projection. -/
+theorem stackLe_cons {t u : Ty} {σ τ : List Ty}
+    (h : stackLe (t :: σ) (u :: τ)) : stackLe σ τ ∧ tyLe t u := by
+  constructor
+  · intro i m hm n hn
+    exact h (i + 1) m hm n (by simpa using hn)
+  · exact h 0 t (by simp) u (by simp)
