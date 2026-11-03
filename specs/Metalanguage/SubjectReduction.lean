@@ -2562,3 +2562,89 @@ theorem sr_kRet_bottom (sigs : SigTable) (reg : AOReg) (r : STy)
     | union _ => rw [hv] at hcond; exact absurd hcond (by simp)
   next hcond =>
     exact absurd hb (by intro hc; exact TCResult.noConfusion hc)
+
+/- ### kTest: verdict arms (canonical singleton, exact). -/
+
+theorem checkSeq_kTest (sigs : SigTable) (rr : STy) (w : World)
+    (rest : List Instr) (t : STy) (σ : List STy) :
+    checkSeq sigs rr [{ w with σ := .complN t :: σ }] (.kTest :: rest)
+      = checkSeq sigs rr
+        [{ w with σ := .isValue (.boolean Bool.false) :: .complN t :: σ }]
+        rest := by
+  simp [checkSeq, stepWorlds]
+
+theorem checkSeq_kTestT (sigs : SigTable) (rr : STy) (w : World)
+    (rest : List Instr) (σ : List STy) :
+    checkSeq sigs rr [{ w with σ := .complT :: σ }] (.kTest :: rest)
+      = checkSeq sigs rr
+        [{ w with σ := .isValue (.boolean Bool.true) :: .complT :: σ }]
+        rest := by
+  simp [checkSeq, stepWorlds]
+
+theorem sr_kTest (sigs : SigTable) (reg : AOReg) (r : STy)
+    (env : Env) (eval : List JSValue) (ret : «String»)
+    (fs : List Fr) (heap : Heap) (nl : Nat)
+    (rest : List Instr) (v : JSValue)
+    (h : stateOk sigs r (FM.frames
+        (⟨.kTest :: rest, env, .compl Bool.false v :: eval, ret⟩ :: fs)
+        heap nl)) :
+    SR sigs reg r (FM.frames
+        (⟨.kTest :: rest, env, .compl Bool.false v :: eval, ret⟩ :: fs)
+        heap nl) := by
+  intro hreg _ hst
+  obtain ⟨fb, hb, ht⟩ := frameOk_flows_elim (stateOk_head_frameOk hst)
+  have ha : absStack sigs none
+      (⟨.kTest :: rest, env, .compl Bool.false v :: eval, ret⟩ : Fr)
+      = .complN (typeOfV v) :: stackTyOf eval := rfl
+  rw [ha, checkSeq_kTest sigs (sigRetTy sigs ret)
+      { Γ := envTyOf env, σ := stackTyOf eval } rest (typeOfV v)
+      (stackTyOf eval)] at hb
+  obtain ⟨hhd, hrest⟩ := stateOk_framesWf_head hst
+  refine subject_reduction_frame sigs reg r _
+    ⟨rest, env, .boolean Bool.false :: .compl Bool.false v :: eval, ret⟩
+    fs heap nl hst rfl rfl (frameOk_none_flows _ _ fb hb ht) ?_ hrest
+  intro l hl
+  rcases List.mem_append.mp hl with hl | hl
+  · obtain ⟨w, hw, hlw⟩ := List.mem_flatMap.mp hl
+    have hw0 : w ∈ (.boolean Bool.false :: .compl Bool.false v :: eval : List JSValue) :=
+      (show w ∈ (.boolean Bool.false :: .compl Bool.false v :: eval : List JSValue) from hw)
+    rcases List.mem_cons.mp hw0 with heq | hw'
+    · rw [heq] at hlw
+      exact absurd hlw (by simp [locsOf])
+    · exact (stateOk_heap_roots hst) l (List.mem_append.mpr (Or.inl
+        (List.mem_flatMap.mpr ⟨w, hw', hlw⟩)))
+  · exact (stateOk_heap_roots hst) l (List.mem_append.mpr (Or.inr hl))
+
+theorem sr_kTestT (sigs : SigTable) (reg : AOReg) (r : STy)
+    (env : Env) (eval : List JSValue) (ret : «String»)
+    (fs : List Fr) (heap : Heap) (nl : Nat)
+    (rest : List Instr) (v : JSValue)
+    (h : stateOk sigs r (FM.frames
+        (⟨.kTest :: rest, env, .compl Bool.true v :: eval, ret⟩ :: fs)
+        heap nl)) :
+    SR sigs reg r (FM.frames
+        (⟨.kTest :: rest, env, .compl Bool.true v :: eval, ret⟩ :: fs)
+        heap nl) := by
+  intro hreg _ hst
+  obtain ⟨fb, hb, ht⟩ := frameOk_flows_elim (stateOk_head_frameOk hst)
+  have ha : absStack sigs none
+      (⟨.kTest :: rest, env, .compl Bool.true v :: eval, ret⟩ : Fr)
+      = .complT :: stackTyOf eval := rfl
+  rw [ha, checkSeq_kTestT sigs (sigRetTy sigs ret)
+      { Γ := envTyOf env, σ := stackTyOf eval } rest (stackTyOf eval)]
+    at hb
+  obtain ⟨hhd, hrest⟩ := stateOk_framesWf_head hst
+  refine subject_reduction_frame sigs reg r _
+    ⟨rest, env, .boolean Bool.true :: .compl Bool.true v :: eval, ret⟩
+    fs heap nl hst rfl rfl (frameOk_none_flows _ _ fb hb ht) ?_ hrest
+  intro l hl
+  rcases List.mem_append.mp hl with hl | hl
+  · obtain ⟨w, hw, hlw⟩ := List.mem_flatMap.mp hl
+    have hw0 : w ∈ (.boolean Bool.true :: .compl Bool.true v :: eval : List JSValue) :=
+      (show w ∈ (.boolean Bool.true :: .compl Bool.true v :: eval : List JSValue) from hw)
+    rcases List.mem_cons.mp hw0 with heq | hw'
+    · rw [heq] at hlw
+      exact absurd hlw (by simp [locsOf])
+    · exact (stateOk_heap_roots hst) l (List.mem_append.mpr (Or.inl
+        (List.mem_flatMap.mpr ⟨w, hw', hlw⟩)))
+  · exact (stateOk_heap_roots hst) l (List.mem_append.mpr (Or.inr hl))

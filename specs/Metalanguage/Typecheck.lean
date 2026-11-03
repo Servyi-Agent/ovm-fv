@@ -450,11 +450,16 @@ def stepWorlds (sigs : SigTable) (ws : Worlds) (i : Instr) : Option Worlds :=
         | _ :: σ' => some { w with σ := σ' }
         | [] => none)
   | .kTest =>
-      -- verdict is EXACT: complN -> falseVal (not abrupt), complT -> trueVal
+      -- verdict is EXACT: complN -> falseVal (not abrupt), complT -> trueVal.
+      -- CANONICAL abstraction: the machine pushes `.boolean abrupt`,
+      -- so the checker pushes its canonical type (the singleton) -
+      -- the same alignment as typeOfE (const v) := typeOfV v
       ws.mapM (fun w =>
         match w.σ with
-        | .complN t :: σ' => some { w with σ := .val cFalse :: .complN t :: σ' }
-        | .complT :: σ' => some { w with σ := .val cTrue :: .complT :: σ' }
+        | .complN t :: σ' =>
+            some { w with σ := .isValue (.boolean Bool.false) :: .complN t :: σ' }
+        | .complT :: σ' =>
+            some { w with σ := .isValue (.boolean Bool.true) :: .complT :: σ' }
         | _ => none)
   | .kUnwrap =>
       ws.mapM (fun w =>
