@@ -511,3 +511,94 @@ theorem checkSeq_kSet {sigs : SigTable} {r : Ty} {W : World} {x : «String»}
   rw [normL_cons]
   simp [normI, checkSeq, stepWorlds, hσ, mapM_singleton, Option.map,
         List.cons_append, List.nil_append]
+
+/- ## Proof layer V: the exact-match sr arms (head frame, above = none) -/
+
+theorem splitStack_cons_val_inv (w : JSValue) (σ : List Ty) (p : Option Pending)
+    (eval : List JSValue) (hw : isCompl w = Bool.false)
+    (h : splitStack (w :: eval) = some ([typeOfV w] :: σ, p)) :
+    splitStack eval = some (σ, p) := by
+  cases hse : splitStack eval with
+  | none =>
+      simp only [splitStack, hse] at h
+      simp at h
+  | some sp =>
+      obtain ⟨σ₁, p₁⟩ := sp
+      rw [splitStack_cons_val w σ₁ p₁ eval hw hse] at h
+      simp only [Option.some.injEq, Prod.mk.injEq, List.cons.injEq] at h
+      rw [h.1.2, h.2]
+
+theorem sr_kEval_const {sigs : SigTable} {v : JSValue} {rest : List Instr}
+    {env : Env} {eval : List JSValue} {ret : «String»}
+    (hv : isCompl v = Bool.false)
+    (h : frameOk sigs none ⟨.kEval (.const v) :: rest, env, eval, ret⟩) :
+    frameOk sigs none ⟨rest, env, v :: eval, ret⟩ := by
+  obtain ⟨-, henv, hchk⟩ := h
+  cases hse : splitStack eval with
+  | none => simp only [hse] at hchk
+  | some sp =>
+      obtain ⟨σ, p⟩ := sp
+      simp only [hse, frameChecks] at hchk
+      rw [checkSeq_kEval_const hv] at hchk
+      refine ⟨by simp, henv, ?_⟩
+      have hss : splitStack (v :: eval) = some ([typeOfV v] :: σ, p) :=
+        splitStack_cons_val v σ p eval hv hse
+      rw [hss]
+      simpa only [frameChecks, hss] using hchk
+
+theorem sr_kEval_nat {sigs : SigTable} {n : Nat} {rest : List Instr}
+    {env : Env} {eval : List JSValue} {ret : «String»}
+    (h : frameOk sigs none ⟨.kEval (.nat n) :: rest, env, eval, ret⟩) :
+    frameOk sigs none ⟨rest, env, .number (↑n : Int) :: eval, ret⟩ := by
+  obtain ⟨-, henv, hchk⟩ := h
+  cases hse : splitStack eval with
+  | none => simp only [hse] at hchk
+  | some sp =>
+      obtain ⟨σ, p⟩ := sp
+      simp only [hse, frameChecks] at hchk
+      rw [checkSeq_kEval_nat] at hchk
+      refine ⟨by simp, henv, ?_⟩
+      have hw : isCompl (JSValue.number (↑n : Int)) = Bool.false := by
+        cases n <;> simp [isCompl]
+      have hss : splitStack (.number (↑n : Int) :: eval)
+          = some ([VTy.isValue (.number (↑n : Int))] :: σ, p) :=
+        splitStack_cons_val _ σ p eval hw hse
+      rw [hss]
+      simpa only [frameChecks, hss] using hchk
+
+theorem lookup_mem {x : «String»} {v : JSValue} {env : Env}
+    (h : lookup env x = some v) : (x, v) ∈ env := by
+  induction env with
+  | nil => simp [lookup] at h
+  | cons hd tl ih =>
+      obtain ⟨n, w⟩ := hd
+      by_cases hx : n == x
+      · simp only [lookup, hx, if_true, Option.some.injEq] at h
+        rw [← h, beq_iff_eq.mp hx]
+        exact List.Mem.head _
+      · simp [lookup, hx] at h
+        exact List.Mem.tail _ (ih h)
+
+theorem sr_kEval_nv {sigs : SigTable} {x : «String»} {v : JSValue} {rest : List Instr}
+    {env : Env} {eval : List JSValue} {ret : «String»}
+    (hlk : lookup env x = some v)
+    (h : frameOk sigs none ⟨.kEval (.nv x) :: rest, env, eval, ret⟩) :
+    frameOk sigs none ⟨rest, env, v :: eval, ret⟩ := by
+  obtain ⟨-, henv, hchk⟩ := h
+  cases hse : splitStack eval with
+  | none => simp only [hse] at hchk
+  | some sp =>
+      obtain ⟨σ, p⟩ := sp
+      simp only [hse, frameChecks] at hchk
+      have hw : isCompl v = Bool.false := by
+        have h₁ := List.all_eq_true.mp henv (x, v) (lookup_mem hlk)
+        simpa using h₁
+      have hΓ : tyLookup (envTyOf env) x = some [typeOfV v] := by
+        rw [← envTyOf_lookup, hlk]
+        rfl
+      rw [checkSeq_kEval_nv hΓ] at hchk
+      refine ⟨by simp, henv, ?_⟩
+      have hss : splitStack (v :: eval) = some ([typeOfV v] :: σ, p) :=
+        splitStack_cons_val v σ p eval hw hse
+      rw [hss]
+      simpa only [frameChecks, hss] using hchk
