@@ -701,6 +701,7 @@ inductive Prim where              -- bedrock predicates (the axiom stratum)
   | pHasField (s : «String»)
   | pDescField (s : «String»)
   | pIsStr (s : «String»)
+  | pPred (f : «String») (b : Bool)   -- correlated AO predicate (IsDataDescriptor(x) is b)
   deriving Repr
 
 
@@ -790,6 +791,7 @@ inductive Instr where
   | kRepeatTest (c : Expr) (body : List Instr)
   | kForStart (x : «String») (body : List Instr)
   | kForBody (x : «String») (elems : List JSValue) (body : List Instr)
+  | kTestVar (x : «String») (p : Prim)  -- fused variable test: push p(env x), no expansion
   deriving Repr
 
 
@@ -801,7 +803,10 @@ def compileSteps : List Step → List Instr
       -- self-tests (propagating abrupt / unwrapping normal), so the value
       -- arrives raw and we just wrap it. Any other shape: test here.
       ((match e with
-        | .call _ _ | .imeth _ _ _ =>
+        | .call _ _ | .imeth _ _ _ | .ifield _ _ =>
+            -- the dust of calls, imeths, and field reads yields a RAW
+            -- value (the field read is a pure record projection);
+            -- just wrap it. Any other shape: test here.
             [.kEval e, .kPrim1 .pWrapC, .kRet]
         | _ =>
             [.kEval e, .kTest, .kIte [.kRet] [.kUnwrap, .kPrim1 .pWrapC, .kRet]])

@@ -81,7 +81,7 @@ def frameChecks (sigs : SigTable) (f : Fr) (p : Option Pending) : Prop :=
   | none => True   -- guarded by the outer conjunct
   | some (σ, _) =>
       match checkSeq sigs (sigRetTy sigs f.ret)
-        [{ Γ := envTyOf f.env, σ := σ, pending := p }] f.stmts with
+        [{ Γ := envTyOf f.env, σ := σ, pending := p }] (normL f.stmts) with
       | .flows fb => terminal fb = Bool.true  -- every world returns
       | _ => False
 
@@ -238,7 +238,7 @@ def closedRegistry (sigs : SigTable) (reg : AOReg) : Prop :=
 def certifies (sigs : SigTable) (name : «String») (ps : List «String»)
     (ts : List Ty) (prog : Prog) : Prop :=
   match checkSeq sigs (sigRetTy sigs name)
-      [{ Γ := zipTy ps ts, σ := [], pending := none }] (compileSteps prog) with
+      [{ Γ := zipTy ps ts, σ := [], pending := none }] (normL (compileSteps prog)) with
   | .flows fb =>
       terminal fb = Bool.true
         ∧ (fb.throws = Bool.true → complCanThrow (sigCompls sigs name) = Bool.true)
@@ -248,12 +248,12 @@ theorem certifies_flows_elim {sigs : SigTable} {name : «String»}
     {ps : List «String»} {ts : List Ty} {prog : Prog}
     (h : certifies sigs name ps ts prog) :
     ∃ fb, checkSeq sigs (sigRetTy sigs name)
-        [{ Γ := zipTy ps ts, σ := [], pending := none }] (compileSteps prog)
+        [{ Γ := zipTy ps ts, σ := [], pending := none }] (normL (compileSteps prog))
         = TCResult.flows fb ∧ terminal fb = Bool.true
         ∧ (fb.throws = Bool.true
             → complCanThrow (sigCompls sigs name) = Bool.true) := by
   cases hb : checkSeq sigs (sigRetTy sigs name)
-      [{ Γ := zipTy ps ts, σ := [], pending := none }] (compileSteps prog) with
+      [{ Γ := zipTy ps ts, σ := [], pending := none }] (normL (compileSteps prog)) with
   | flows fb =>
       simp only [certifies] at h
       rw [hb] at h

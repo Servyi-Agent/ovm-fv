@@ -196,7 +196,7 @@ example : typecheckRegOk corpusSigs theReg = Bool.true := by native_decide
 -- not split data-ness out of the desc constructor bit.
 def assumesOf (sigs : SigTable) (name : «String») (ps : List «String»)
     (body : List Instr) : Nat :=
-  match checkSeq sigs (sigRetTy sigs name) [{ Γ := zipTy ps (sigParams sigs name), σ := [], pending := none }] body with
+  match typecheckSeq sigs (sigRetTy sigs name) (zipTy ps (sigParams sigs name)) body with
   | .flows f => f.assumes.length
   | _ => 999
 #eval assumesOf corpusSigs "IsCallable" ["arg"] (compileSteps (build isCallable6_2_5_1))

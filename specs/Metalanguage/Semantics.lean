@@ -103,6 +103,19 @@ def applyPrim (h : Heap) : Prim → JSValue → JSValue
   | .pWrapC, v => .compl Bool.false v
   | .pThrowC, v => .compl Bool.true v
   | .pIsNull, v => .boolean (isNullV v)
+  | .pPred f b, v =>
+      -- native correlated predicates (the predDecide stratum)
+      .boolean (b ==
+        match f with
+        | "IsDataDescriptor" =>
+            match v with
+            | .descV ⟨v', w', _, _, _, _⟩ => v'.isSome || w'.isSome
+            | _ => Bool.false
+        | "IsAccessorDescriptor" =>
+            match v with
+            | .descV ⟨_, _, g', s', _, _⟩ => g'.isSome || s'.isSome
+            | _ => Bool.false
+        | _ => Bool.false)
   | .pIsType s, v =>
       .boolean (
         match s with
@@ -125,7 +138,19 @@ def applyPrim (h : Heap) : Prim → JSValue → JSValue
             else Bool.false
         | _ => Bool.false)
   | .pDescField s, v =>
-      -- record field read on a descriptor value (undefined if absent)
+      -- record field read on a descriptor value (undefined if absent);
+      -- the GetPrototypeOf deviation: the zero-arg MOP, written in
+      -- field-read form, actually dispatches (the heap is in scope)
+      if s == "GetPrototypeOf" then
+        match v with
+        | .obj l =>
+            match h l with
+            | some o => match o.proto with
+              | some p => .obj p
+              | none => JSValue.null
+            | none => JSValue.undefined
+        | _ => JSValue.undefined
+      else
       match v with
       | .descV (.mk value writable getter setter enumerable configurable) =>
           let natToObj (o : Option Nat) : JSValue :=
@@ -372,23 +397,51 @@ def fstep (reg : AOReg) : FM → FM
         | none => .fell (f :: fs) heap nl 0     -- unbound: stuck, loudly
     | .kEval (.varNotPresent x) :: rest, env, eval =>
         done (⟨rest, env, .boolean (lookup env x).isNone :: eval, f.ret⟩ :: fs)
+    | .kEval (.isObject (.nv x)) :: rest, env, _ =>
+        -- FUSED variable test: one step, no expansion - the static
+        -- split keeps its Γ-correlation through the machine step
+        done (⟨.kTestVar x .pIsObj :: rest, env, f.eval, f.ret⟩ :: fs)
     | .kEval (.isObject e) :: _rest, _, _ =>
         done (⟨.kEval e :: .kPrim1 .pIsObj :: f.stmts.tail!, f.env, f.eval, f.ret⟩ :: fs)
+    | .kEval (.isNotObject (.nv x)) :: rest, env, _ =>
+        done (⟨.kTestVar x .pIsNotObj :: rest, env, f.eval, f.ret⟩ :: fs)
     | .kEval (.isNotObject e) :: _rest, _, _ =>
         done (⟨.kEval e :: .kPrim1 .pIsNotObj :: f.stmts.tail!, f.env, f.eval, f.ret⟩ :: fs)
+    | .kEval (.isNotUndefined (.nv x)) :: rest, env, _ =>
+        done (⟨.kTestVar x .pIsNotU :: rest, env, f.eval, f.ret⟩ :: fs)
     | .kEval (.isNotUndefined e) :: _rest, _, _ =>
         done (⟨.kEval e :: .kPrim1 .pIsNotU :: f.stmts.tail!, f.env, f.eval, f.ret⟩ :: fs)
+    | .kEval (.isU (.nv x)) :: rest, env, _ =>
+        done (⟨.kTestVar x .pIsU :: rest, env, f.eval, f.ret⟩ :: fs)
     | .kEval (.isU e) :: _rest, _, _ =>
         done (⟨.kEval e :: .kPrim1 .pIsU :: f.stmts.tail!, f.env, f.eval, f.ret⟩ :: fs)
+    | .kEval (.hasCall (.nv x)) :: rest, env, _ =>
+        done (⟨.kTestVar x .pHasCall :: rest, env, f.eval, f.ret⟩ :: fs)
     | .kEval (.hasCall e) :: _rest, _, _ =>
         done (⟨.kEval e :: .kPrim1 .pHasCall :: f.stmts.tail!, f.env, f.eval, f.ret⟩ :: fs)
+    | .kEval (.hasCtor (.nv x)) :: rest, env, _ =>
+        done (⟨.kTestVar x .pHasCtor :: rest, env, f.eval, f.ret⟩ :: fs)
     | .kEval (.hasCtor e) :: _rest, _, _ =>
         done (⟨.kEval e :: .kPrim1 .pHasCtor :: f.stmts.tail!, f.env, f.eval, f.ret⟩ :: fs)
+    | .kEval (.isBoolVal b (.call fname [.nv x])) :: rest, env, _ =>
+        -- correlated AO predicate of a variable: the descriptor
+        -- predicates fuse natively (the predDecide stratum); other
+        -- callees expand through the general call dust
+        if fname == "IsDataDescriptor" || fname == "IsAccessorDescriptor"
+        then done (⟨.kTestVar x (.pPred fname b) :: rest, env, f.eval, f.ret⟩ :: fs)
+        else done (⟨.kEval (.call fname [.nv x]) :: .kPrim1 (if b then .pIsTrue else .pIsFalse)
+                        :: rest, env, f.eval, f.ret⟩ :: fs)
+    | .kEval (.isBoolVal b (.nv x)) :: rest, env, _ =>
+        done (⟨.kTestVar x (if b then .pIsTrue else .pIsFalse) :: rest, env, f.eval, f.ret⟩ :: fs)
     | .kEval (.isBoolVal b e) :: _rest, _, _ =>
         done (⟨.kEval e :: .kPrim1 (if b then .pIsTrue else .pIsFalse)
                     :: f.stmts.tail!, f.env, f.eval, f.ret⟩ :: fs)
-    | .kEval (.isStrVal s e) :: _rest, _, _ =>
-        done (⟨.kEval e :: .kPrim1 (.pIsStr s) :: f.stmts.tail!, f.env, f.eval, f.ret⟩ :: fs)
+    | .kEval (.isStrVal sv (.nv x)) :: rest, env, _ =>
+        done (⟨.kTestVar x (.pIsStr sv) :: rest, env, f.eval, f.ret⟩ :: fs)
+    | .kEval (.isStrVal sv e) :: _rest, _, _ =>
+        done (⟨.kEval e :: .kPrim1 (.pIsStr sv) :: f.stmts.tail!, f.env, f.eval, f.ret⟩ :: fs)
+    | .kEval (.hasField nm (.nv x)) :: rest, env, _ =>
+        done (⟨.kTestVar x (.pHasField nm) :: rest, env, f.eval, f.ret⟩ :: fs)
     | .kEval (.hasField nm e) :: rest, _, _ =>
         done (⟨.kEval e :: .kPrim1 (.pHasField nm) :: rest, f.env, f.eval, f.ret⟩ :: fs)
     | .kEval (.isType ty e) :: rest, _, _ =>
@@ -402,6 +455,8 @@ def fstep (reg : AOReg) : FM → FM
                     f.env, f.eval, f.ret⟩ :: fs)
     | .kEval (.ifield nm e) :: rest, _, _ =>
         done (⟨.kEval e :: .kPrim1 (.pDescField nm) :: rest, f.env, f.eval, f.ret⟩ :: fs)
+    | .kEval (.isNullOrUnd (.nv x)) :: rest, env, _ =>
+        done (⟨.kTestVar x .pNullOrUnd :: rest, env, f.eval, f.ret⟩ :: fs)
     | .kEval (.isNullOrUnd e) :: _rest, _, _ =>
         done (⟨.kEval e :: .kPrim1 .pNullOrUnd :: f.stmts.tail!, f.env, f.eval, f.ret⟩ :: fs)
     | .kEval (.call fname args) :: rest, env, eval =>
@@ -432,6 +487,10 @@ def fstep (reg : AOReg) : FM → FM
               else .fell (f :: fs) heap nl 0
     | .kSet x :: rest, env, v :: eval => done (⟨rest, (x, v) :: env, eval, f.ret⟩ :: fs)
     | .kSet _ :: _, _, [] => .fell (f :: fs) heap nl 0
+    | .kTestVar x p :: rest, env, eval =>
+        match lookup env x with
+        | some v => done (⟨rest, env, applyPrim heap p v :: eval, f.ret⟩ :: fs)
+        | none => .fell (f :: fs) heap nl 0      -- unbound: stuck, loudly
     | .kPop :: rest, env, _ :: eval => done (⟨rest, env, eval, f.ret⟩ :: fs)
     | .kPop :: _, _, [] => .fell (f :: fs) heap nl 0
     | .kIte t e :: rest, env, .boolean b :: eval =>
