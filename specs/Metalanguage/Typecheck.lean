@@ -550,8 +550,9 @@ end
 
 /-- Park a completion in a world; refuses double parking. -/
 def parkPending (p : Pending) (w : World) : Option World :=
-  if w.pending.isSome then none
-  else some { w with pending := some p }
+  match w.pending with
+  | some _ => none
+  | none => some { w with pending := some p }
 
 /-- Step every world through one stack instruction (no control
     flow). Fails (none) if any world's stack or pending does not

@@ -35,14 +35,11 @@ def splitStack : List JSValue → Option (List Ty × Option Pending)
       match splitStack rest with
       | none => none
       | some (σ, p) =>
-          match v with
-          | .compl Bool.false pv =>
-              if p.isSome then none
-              else some (σ, some (.normal [typeOfV pv]))
-          | .compl Bool.true _ =>
-              if p.isSome then none
-              else some (σ, some .throw)
-          | _ => some ([typeOfV v] :: σ, p)
+          match v, p with
+          | .compl Bool.false pv, none => some (σ, some (.normal [typeOfV pv]))
+          | .compl Bool.true _, none => some (σ, some .throw)
+          | .compl _ _, some _ => none
+          | _, _ => some ([typeOfV v] :: σ, p)
 
 theorem envTyOf_lookup (env : Env) (x : «String») :
     (lookup env x).map (fun v => [typeOfV v]) = tyLookup (envTyOf env) x := by
@@ -373,15 +370,13 @@ theorem splitStack_cons_compl_normal (pv : JSValue) (σ : List Ty) (p : Option P
     (h : splitStack eval = some (σ, p)) :
     splitStack (.compl Bool.false pv :: eval)
       = some (σ, some (.normal [typeOfV pv])) := by
-  simp only [splitStack, h, hp]
-  simp
+  rw [splitStack, h, hp]
 
 theorem splitStack_cons_compl_throw (pv : JSValue) (σ : List Ty) (p : Option Pending)
     (eval : List JSValue) (hp : p = none)
     (h : splitStack eval = some (σ, p)) :
     splitStack (.compl Bool.true pv :: eval) = some (σ, some Pending.throw) := by
-  simp only [splitStack, h, hp]
-  simp
+  rw [splitStack, h, hp]
 
 theorem splitStack_cons_nil : splitStack [] = some ([], none) := rfl
 
@@ -745,4 +740,268 @@ theorem sr_kSet {sigs : SigTable} {x : «String»} {w : JSValue} {rest : List In
                   refine ⟨?_, henv', ?_⟩
                   · left; decide
                   · simp only [frameChecks, hse', envTyOf, List.map_cons, hwd]
+                    exact hchk
+
+/- ## Proof layer VI: the pending-protocol identities -/
+
+theorem checkSeq_kTest_normal {sigs : SigTable} {r : Ty} {W : World} {t : Ty}
+    {rest : List Instr} (hpn : W.pending = some (.normal t)) :
+    checkSeq sigs r [W] (normL (.kTest :: rest))
+      = checkSeq sigs r [{ W with σ := [.isValue (.boolean Bool.false)] :: W.σ }]
+          (normL rest) := by
+  rw [normL_cons]
+  simp only [List.cons_append, List.nil_append, normI, checkSeq, stepWorlds,
+             mapM_singleton, Option.map, hpn]
+
+theorem checkSeq_kTest_throw {sigs : SigTable} {r : Ty} {W : World}
+    {rest : List Instr} (hpn : W.pending = some Pending.throw) :
+    checkSeq sigs r [W] (normL (.kTest :: rest))
+      = checkSeq sigs r [{ W with σ := [.isValue (.boolean Bool.true)] :: W.σ }]
+          (normL rest) := by
+  rw [normL_cons]
+  simp only [List.cons_append, List.nil_append, normI, checkSeq, stepWorlds,
+             mapM_singleton, Option.map, hpn]
+
+theorem checkSeq_kUnwrap_normal {sigs : SigTable} {r : Ty} {W : World} {t : Ty}
+    {rest : List Instr} (hpn : W.pending = some (.normal t)) :
+    checkSeq sigs r [W] (normL (.kUnwrap :: rest))
+      = checkSeq sigs r [{ W with σ := t :: W.σ, pending := none }] (normL rest) := by
+  rw [normL_cons]
+  simp only [List.cons_append, List.nil_append, normI, checkSeq, stepWorlds,
+             mapM_singleton, Option.map, hpn]
+
+theorem checkSeq_pWrapC {sigs : SigTable} {r : Ty} {W : World} {ts : Ty} {σ' : List Ty}
+    {rest : List Instr} (hpn : W.pending = none) (hσ : W.σ = ts :: σ') :
+    checkSeq sigs r [W] (normL (.kPrim1 .pWrapC :: rest))
+      = checkSeq sigs r [{ W with σ := σ', pending := some (.normal ts) }]
+          (normL rest) := by
+  rw [normL_cons]
+  simp only [List.cons_append, List.nil_append, normI, checkSeq, stepWorlds,
+             mapM_singleton, Option.map, parkPending, hpn, hσ]
+
+theorem checkSeq_pThrowC {sigs : SigTable} {r : Ty} {W : World} {ts : Ty} {σ' : List Ty}
+    {rest : List Instr} (hpn : W.pending = none) (hσ : W.σ = ts :: σ') :
+    checkSeq sigs r [W] (normL (.kPrim1 .pThrowC :: rest))
+      = checkSeq sigs r [{ W with σ := σ', pending := some Pending.throw }]
+          (normL rest) := by
+  rw [normL_cons]
+  simp only [List.cons_append, List.nil_append, normI, checkSeq, stepWorlds,
+             mapM_singleton, Option.map, parkPending, hpn, hσ]
+
+/- ## Proof layer VII: the pending-protocol sr arms -/
+
+theorem sr_kTest {sigs : SigTable} {abrupt : Bool} {pv : JSValue} {rest : List Instr}
+    {env : Env} {eval : List JSValue} {ret : «String»}
+    (h : frameOk sigs none ⟨.kTest :: rest, env, .compl abrupt pv :: eval, ret⟩) :
+    frameOk sigs none
+      ⟨rest, env, .boolean abrupt :: .compl abrupt pv :: eval, ret⟩ := by
+  obtain ⟨-, henv, hchk⟩ := h
+  simp only [Fr.eval] at hchk
+  cases abrupt with
+  | false =>
+      cases hse : splitStack eval with
+      | none =>
+          exfalso
+          have hn : splitStack (.compl Bool.false pv :: eval) = none := by
+            rw [splitStack, hse]
+          rw [hn] at hchk
+          exact hchk.elim
+      | some sp =>
+          obtain ⟨σ, p⟩ := sp
+          cases p with
+          | some p' =>
+              exfalso
+              have hn : splitStack (.compl Bool.false pv :: eval) = none := by
+                rw [splitStack, hse]
+              rw [hn] at hchk
+              exact hchk.elim
+          | none =>
+              have hpk : splitStack (.compl Bool.false pv :: eval)
+                  = some (σ, some (.normal [typeOfV pv])) :=
+                splitStack_cons_compl_normal pv σ none eval rfl hse
+              simp only [hpk] at hchk
+              have hss : splitStack (.boolean Bool.false :: .compl Bool.false pv :: eval)
+                  = some ([.isValue (.boolean Bool.false)] :: σ,
+                          some (.normal [typeOfV pv])) :=
+                splitStack_kTest Bool.false pv σ (some (.normal [typeOfV pv])) eval hpk
+              rw [frameChecks] at hchk
+              simp only [hpk] at hchk
+              rw [checkSeq_kTest_normal rfl] at hchk
+              refine ⟨?_, henv, ?_⟩
+              · left; decide
+              · rw [hss]
+                simp only [frameChecks, hss]
+                exact hchk
+  | true =>
+      cases hse : splitStack eval with
+      | none =>
+          exfalso
+          have hn : splitStack (.compl Bool.true pv :: eval) = none := by
+            rw [splitStack, hse]
+          rw [hn] at hchk
+          exact hchk.elim
+      | some sp =>
+          obtain ⟨σ, p⟩ := sp
+          cases p with
+          | some p' =>
+              exfalso
+              have hn : splitStack (.compl Bool.true pv :: eval) = none := by
+                rw [splitStack, hse]
+              rw [hn] at hchk
+              exact hchk.elim
+          | none =>
+              have hpk : splitStack (.compl Bool.true pv :: eval)
+                  = some (σ, some Pending.throw) :=
+                splitStack_cons_compl_throw pv σ none eval rfl hse
+              simp only [hpk] at hchk
+              have hss : splitStack (.boolean Bool.true :: .compl Bool.true pv :: eval)
+                  = some ([.isValue (.boolean Bool.true)] :: σ, some Pending.throw) :=
+                splitStack_kTest Bool.true pv σ (some Pending.throw) eval hpk
+              rw [frameChecks] at hchk
+              simp only [hpk] at hchk
+              rw [checkSeq_kTest_throw rfl] at hchk
+              refine ⟨?_, henv, ?_⟩
+              · left; decide
+              · rw [hss]
+                simp only [frameChecks, hss]
+                exact hchk
+
+theorem sr_kUnwrap {sigs : SigTable} {pv : JSValue} {rest : List Instr}
+    {env : Env} {eval : List JSValue} {ret : «String»}
+    (hpv : isCompl pv = Bool.false)
+    (h : frameOk sigs none ⟨.kUnwrap :: rest, env, .compl Bool.false pv :: eval, ret⟩) :
+    frameOk sigs none ⟨rest, env, pv :: eval, ret⟩ := by
+  obtain ⟨-, henv, hchk⟩ := h
+  simp only [Fr.eval] at hchk
+  cases hse : splitStack eval with
+  | none =>
+      exfalso
+      have hn : splitStack (.compl Bool.false pv :: eval) = none := by
+        rw [splitStack, hse]
+      rw [hn] at hchk
+      exact hchk.elim
+  | some sp =>
+      obtain ⟨σ, p⟩ := sp
+      cases p with
+      | some p' =>
+          exfalso
+          have hn : splitStack (.compl Bool.false pv :: eval) = none := by
+            rw [splitStack, hse]
+          rw [hn] at hchk
+          exact hchk.elim
+      | none =>
+          have hpk : splitStack (.compl Bool.false pv :: eval)
+              = some (σ, some (.normal [typeOfV pv])) :=
+            splitStack_cons_compl_normal pv σ none eval rfl hse
+          simp only [hpk] at hchk
+          have hss : splitStack (pv :: eval) = some ([typeOfV pv] :: σ, none) :=
+            splitStack_cons_val pv σ none eval hpv hse
+          rw [frameChecks] at hchk
+          simp only [hpk] at hchk
+          rw [checkSeq_kUnwrap_normal rfl] at hchk
+          refine ⟨?_, henv, ?_⟩
+          · left; decide
+          · rw [hss]
+            simp only [frameChecks, hss]
+            exact hchk
+
+theorem sr_pWrapC {sigs : SigTable} {v : JSValue} {rest : List Instr}
+    {env : Env} {eval : List JSValue} {ret : «String»}
+    (h : frameOk sigs none ⟨.kPrim1 .pWrapC :: rest, env, v :: eval, ret⟩) :
+    frameOk sigs none ⟨rest, env, .compl Bool.false v :: eval, ret⟩ := by
+  obtain ⟨-, henv, hchk⟩ := h
+  simp only [Fr.eval] at hchk
+  cases hs : splitStack (v :: eval) with
+  | none => rw [hs] at hchk; exact hchk.elim
+  | some sp =>
+      obtain ⟨σ₀, p₀⟩ := sp
+      simp only [hs] at hchk
+      cases σ₀ with
+      | nil =>
+          exfalso
+          rw [frameChecks] at hchk
+          simp only [hs, normL_cons, normI, List.cons_append, List.nil_append,
+                     checkSeq, stepWorlds, mapM_singleton, Option.map, parkPending] at hchk
+      | cons ts σ'' =>
+          cases p₀ with
+          | some p' =>
+              exfalso
+              rw [frameChecks] at hchk
+              simp only [hs, normL_cons, normI, List.cons_append, List.nil_append,
+                         checkSeq, stepWorlds, mapM_singleton, Option.map, parkPending] at hchk
+          | none =>
+              have hw : isCompl v = Bool.false := isCompl_of_head hs
+              cases hse : splitStack eval with
+              | none =>
+                  have hn : splitStack (v :: eval) = none := by rw [splitStack, hse]
+                  rw [hn] at hs; cases hs
+              | some sp' =>
+                  obtain ⟨σ₁, p₁⟩ := sp'
+                  have hss := splitStack_cons_val v σ₁ p₁ eval hw hse
+                  rw [hss] at hs
+                  simp only [Option.some.injEq, Prod.mk.injEq, List.cons.injEq] at hs
+                  have hse' : splitStack eval = some (σ'', none) := by rw [hse, hs.1.2, hs.2]
+                  have hwd : [typeOfV v] = ts := by rw [hs.1.1]
+                  have hpk : splitStack (.compl Bool.false v :: eval)
+                      = some (σ'', some (.normal [typeOfV v])) :=
+                    splitStack_cons_compl_normal v σ'' none eval rfl hse'
+                  rw [frameChecks] at hchk
+                  rw [hss] at hchk
+                  simp only [hwd, hs.1.2, hs.2] at hchk
+                  rw [checkSeq_pWrapC rfl rfl] at hchk
+                  refine ⟨?_, henv, ?_⟩
+                  · left; decide
+                  · rw [hpk]
+                    simp only [frameChecks, hpk]
+                    rw [← hwd] at hchk
+                    exact hchk
+
+theorem sr_pThrowC {sigs : SigTable} {v : JSValue} {rest : List Instr}
+    {env : Env} {eval : List JSValue} {ret : «String»}
+    (h : frameOk sigs none ⟨.kPrim1 .pThrowC :: rest, env, v :: eval, ret⟩) :
+    frameOk sigs none ⟨rest, env, .compl Bool.true v :: eval, ret⟩ := by
+  obtain ⟨-, henv, hchk⟩ := h
+  simp only [Fr.eval] at hchk
+  cases hs : splitStack (v :: eval) with
+  | none => rw [hs] at hchk; exact hchk.elim
+  | some sp =>
+      obtain ⟨σ₀, p₀⟩ := sp
+      simp only [hs] at hchk
+      cases σ₀ with
+      | nil =>
+          exfalso
+          rw [frameChecks] at hchk
+          simp only [hs, normL_cons, normI, List.cons_append, List.nil_append,
+                     checkSeq, stepWorlds, mapM_singleton, Option.map, parkPending] at hchk
+      | cons ts σ'' =>
+          cases p₀ with
+          | some p' =>
+              exfalso
+              rw [frameChecks] at hchk
+              simp only [hs, normL_cons, normI, List.cons_append, List.nil_append,
+                         checkSeq, stepWorlds, mapM_singleton, Option.map, parkPending] at hchk
+          | none =>
+              have hw : isCompl v = Bool.false := isCompl_of_head hs
+              cases hse : splitStack eval with
+              | none =>
+                  have hn : splitStack (v :: eval) = none := by rw [splitStack, hse]
+                  rw [hn] at hs; cases hs
+              | some sp' =>
+                  obtain ⟨σ₁, p₁⟩ := sp'
+                  have hss := splitStack_cons_val v σ₁ p₁ eval hw hse
+                  rw [hss] at hs
+                  simp only [Option.some.injEq, Prod.mk.injEq, List.cons.injEq] at hs
+                  have hse' : splitStack eval = some (σ'', none) := by rw [hse, hs.1.2, hs.2]
+                  have hwd : [typeOfV v] = ts := by rw [hs.1.1]
+                  have hpk : splitStack (.compl Bool.true v :: eval)
+                      = some (σ'', some Pending.throw) :=
+                    splitStack_cons_compl_throw v σ'' none eval rfl hse'
+                  rw [frameChecks] at hchk
+                  rw [hss] at hchk
+                  simp only [hwd, hs.1.2, hs.2] at hchk
+                  rw [checkSeq_pThrowC rfl rfl] at hchk
+                  refine ⟨?_, henv, ?_⟩
+                  · left; decide
+                  · rw [hpk]
+                    simp only [frameChecks, hpk]
                     exact hchk
