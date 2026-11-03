@@ -118,6 +118,9 @@ termination_by v => sizeOf v
 decreasing_by all_goals simp_wf <;> omega
 end
 
+theorem locsOf_compl (b : Bool) (v : JSValue) :
+    locsOf (.compl b v) = locsOf v := by rw [locsOf]
+
 /- References out of an allocated object: property descriptor
    payloads. -/
 def objRefs (o : JsObj) : List Nat :=
@@ -2356,3 +2359,161 @@ theorem sr_kSet (sigs : SigTable) (reg : AOReg) (r : STy)
     · exact (stateOk_heap_roots hst) l (List.mem_append.mpr (Or.inl
         (List.mem_flatMap.mpr ⟨v, List.mem_cons_self .., hl⟩)))
     · exact (stateOk_heap_roots hst) l (List.mem_append.mpr (Or.inr hl'))
+
+/- ### Remaining exact-match arms. -/
+
+theorem checkSeq_kPrim1_pWrapC (sigs : SigTable) (rr : STy) (w : World)
+    (rest : List Instr) (t : STy) (σ : List STy) :
+    checkSeq sigs rr [{ w with σ := t :: σ }] (.kPrim1 .pWrapC :: rest)
+      = checkSeq sigs rr [{ w with σ := .complN t :: σ }] rest := by
+  simp [checkSeq, stepWorlds]
+
+theorem checkSeq_kUnwrap (sigs : SigTable) (rr : STy) (w : World)
+    (rest : List Instr) (t : STy) (σ : List STy) :
+    checkSeq sigs rr [{ w with σ := .complN t :: σ }] (.kUnwrap :: rest)
+      = checkSeq sigs rr [{ w with σ := t :: σ }] rest := by
+  simp [checkSeq, stepWorlds]
+
+theorem checkSeq_kEval_nv (sigs : SigTable) (rr : STy) (env : Env)
+    (eval : List JSValue) (rest : List Instr) (x : «String») (v : JSValue)
+    (hl : lookup env x = some v) :
+    checkSeq sigs rr [{ Γ := envTyOf env, σ := stackTyOf eval }]
+        (.kEval (.nv x) :: rest)
+      = checkSeq sigs rr
+        [{ Γ := envTyOf env, σ := typeOfV v :: stackTyOf eval }] rest := by
+  simp only [checkSeq, testType, typeOfE]
+  rw [if_neg (by simp)]
+  simp only [List.mapM_cons]
+  have hty : tyLookup (envTyOf env) x = some (typeOfV v) := by
+    rw [← envTyOf_lookup, hl]
+    rfl
+  rw [hty]
+  rfl
+
+theorem sr_kPrim1_pWrapC (sigs : SigTable) (reg : AOReg) (r : STy)
+    (env : Env) (eval : List JSValue) (ret : «String»)
+    (fs : List Fr) (heap : Heap) (nl : Nat)
+    (rest : List Instr) (v : JSValue)
+    (h : stateOk sigs r (FM.frames
+        (⟨.kPrim1 .pWrapC :: rest, env, v :: eval, ret⟩ :: fs) heap nl)) :
+    SR sigs reg r (FM.frames
+        (⟨.kPrim1 .pWrapC :: rest, env, v :: eval, ret⟩ :: fs) heap nl) := by
+  intro hreg _ hst
+  obtain ⟨fb, hb, ht⟩ := frameOk_flows_elim (stateOk_head_frameOk hst)
+  have ha : absStack sigs none
+      (⟨.kPrim1 .pWrapC :: rest, env, v :: eval, ret⟩ : Fr)
+      = typeOfV v :: stackTyOf eval := rfl
+  rw [ha, checkSeq_kPrim1_pWrapC sigs (sigRetTy sigs ret)
+      { Γ := envTyOf env, σ := stackTyOf eval } rest (typeOfV v)
+      (stackTyOf eval)] at hb
+  obtain ⟨hhd, hrest⟩ := stateOk_framesWf_head hst
+  refine subject_reduction_frame sigs reg r _
+    ⟨rest, env, .compl Bool.false v :: eval, ret⟩
+    fs heap nl hst rfl rfl (frameOk_none_flows _ _ fb hb ht) ?_ hrest
+  intro l hl
+  rcases List.mem_append.mp hl with hl | hl
+  · obtain ⟨w, hw, hlw⟩ := List.mem_flatMap.mp hl
+    have hw0 : w ∈ (.compl Bool.false v :: eval : List JSValue) :=
+      (show w ∈ (.compl Bool.false v :: eval : List JSValue) from hw)
+    rcases List.mem_cons.mp hw0 with heq | hw'
+    · rw [heq, locsOf_compl] at hlw
+      exact (stateOk_heap_roots hst) l (List.mem_append.mpr (Or.inl
+        (List.mem_flatMap.mpr ⟨v, List.mem_cons_self .., hlw⟩)))
+    · refine (stateOk_heap_roots hst) l (List.mem_append.mpr (Or.inl
+        (List.mem_flatMap.mpr ⟨w, ?_, hlw⟩)))
+      exact List.mem_cons_of_mem v hw'
+  · exact (stateOk_heap_roots hst) l (List.mem_append.mpr (Or.inr hl))
+
+theorem sr_kUnwrap (sigs : SigTable) (reg : AOReg) (r : STy)
+    (env : Env) (eval : List JSValue) (ret : «String»)
+    (fs : List Fr) (heap : Heap) (nl : Nat)
+    (rest : List Instr) (v : JSValue)
+    (h : stateOk sigs r (FM.frames
+        (⟨.kUnwrap :: rest, env, .compl Bool.false v :: eval, ret⟩ :: fs)
+        heap nl)) :
+    SR sigs reg r (FM.frames
+        (⟨.kUnwrap :: rest, env, .compl Bool.false v :: eval, ret⟩ :: fs)
+        heap nl) := by
+  intro hreg _ hst
+  obtain ⟨fb, hb, ht⟩ := frameOk_flows_elim (stateOk_head_frameOk hst)
+  have ha : absStack sigs none
+      (⟨.kUnwrap :: rest, env, .compl Bool.false v :: eval, ret⟩ : Fr)
+      = .complN (typeOfV v) :: stackTyOf eval := rfl
+  rw [ha, checkSeq_kUnwrap sigs (sigRetTy sigs ret)
+      { Γ := envTyOf env, σ := stackTyOf eval } rest (typeOfV v)
+      (stackTyOf eval)] at hb
+  obtain ⟨hhd, hrest⟩ := stateOk_framesWf_head hst
+  refine subject_reduction_frame sigs reg r _
+    ⟨rest, env, v :: eval, ret⟩
+    fs heap nl hst rfl rfl (frameOk_none_flows _ _ fb hb ht) ?_ hrest
+  intro l hl
+  rcases List.mem_append.mp hl with hl | hl
+  · obtain ⟨w, hw, hlw⟩ := List.mem_flatMap.mp hl
+    have hw0 : w ∈ (v :: eval : List JSValue) :=
+      (show w ∈ (v :: eval : List JSValue) from hw)
+    rcases List.mem_cons.mp hw0 with heq | hw'
+    · have hlw2 : l ∈ locsOf (JSValue.compl Bool.false v) := by
+        rw [locsOf_compl]
+        rw [← heq]
+        exact hlw
+      exact (stateOk_heap_roots hst) l (List.mem_append.mpr (Or.inl
+        (List.mem_flatMap.mpr ⟨.compl Bool.false v, List.mem_cons_self .., hlw2⟩)))
+    · refine (stateOk_heap_roots hst) l (List.mem_append.mpr (Or.inl
+        (List.mem_flatMap.mpr ⟨w, ?_, hlw⟩)))
+      exact List.mem_cons_of_mem _ hw'
+  · exact (stateOk_heap_roots hst) l (List.mem_append.mpr (Or.inr hl))
+
+theorem lookup_mem : ∀ (env : Env) (x : «String») (v : JSValue),
+    lookup env x = some v → v ∈ env.map Prod.snd := by
+  intro env x v h
+  induction env with
+  | nil => simp only [lookup] at h; exact absurd h (by simp)
+  | cons pv rest ih =>
+      simp only [lookup] at h
+      by_cases hn : (pv.fst == x) = Bool.true
+      · rw [if_pos hn] at h
+        injection h with hv
+        have hmap : (pv :: rest : Env).map Prod.snd
+            = Prod.snd pv :: rest.map Prod.snd := rfl
+        rw [hmap, ← hv]
+        exact List.mem_cons_self ..
+      · rw [if_neg hn] at h
+        right
+        exact ih h
+
+theorem sr_kEval_nv (sigs : SigTable) (reg : AOReg) (r : STy)
+    (env : Env) (eval : List JSValue) (ret : «String»)
+    (fs : List Fr) (heap : Heap) (nl : Nat)
+    (rest : List Instr) (x : «String») (v : JSValue)
+    (hlb : lookup env x = some v)
+    (h : stateOk sigs r (FM.frames
+        (⟨.kEval (.nv x) :: rest, env, eval, ret⟩ :: fs) heap nl)) :
+    SR sigs reg r (FM.frames
+        (⟨.kEval (.nv x) :: rest, env, eval, ret⟩ :: fs) heap nl) := by
+  intro hreg _ hst
+  obtain ⟨fb, hb, ht⟩ := frameOk_flows_elim (stateOk_head_frameOk hst)
+  have ha : absStack sigs none
+      (⟨.kEval (.nv x) :: rest, env, eval, ret⟩ : Fr)
+      = stackTyOf eval := rfl
+  rw [ha, checkSeq_kEval_nv sigs (sigRetTy sigs ret) env eval rest x v hlb]
+    at hb
+  obtain ⟨hhd, hrest⟩ := stateOk_framesWf_head hst
+  refine subject_reduction_frame sigs reg r _
+    ⟨rest, env, v :: eval, ret⟩
+    fs heap nl hst (by simp [fstep, hlb]) rfl (frameOk_none_flows _ _ fb hb ht) ?_ hrest
+  intro l hl
+  rcases List.mem_append.mp hl with hl | hl
+  · obtain ⟨w, hw, hlw⟩ := List.mem_flatMap.mp hl
+    have hw0 : w ∈ (v :: eval : List JSValue) :=
+      (show w ∈ (v :: eval : List JSValue) from hw)
+    rcases List.mem_cons.mp hw0 with heq | hw'
+    · have hmem : v ∈ env.map Prod.snd := lookup_mem env x v hlb
+      have hlw2 : l ∈ locsOf v := by
+          have h5 := hlw
+          rw [show w = v from heq] at h5
+          exact h5
+      exact (stateOk_heap_roots hst) l (List.mem_append.mpr (Or.inr
+        (List.mem_flatMap.mpr ⟨v, hmem, hlw2⟩)))
+    · exact (stateOk_heap_roots hst) l (List.mem_append.mpr (Or.inl
+        (List.mem_flatMap.mpr ⟨w, hw', hlw⟩)))
+  · exact (stateOk_heap_roots hst) l (List.mem_append.mpr (Or.inr hl))
