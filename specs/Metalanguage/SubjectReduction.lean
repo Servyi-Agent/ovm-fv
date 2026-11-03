@@ -306,7 +306,8 @@ def pendLe (p q : Option Pending) : Prop :=
   | _, _ => False
 
 def stackLe (σ τ : List Ty) : Prop :=
-  ∀ (i : Nat), ∀ t ∈ σ[i]?, ∀ u ∈ τ[i]?, tyLe t u
+  σ.length = τ.length ∧
+    ∀ (i : Nat), ∀ t ∈ σ[i]?, ∀ u ∈ τ[i]?, tyLe t u
 
 def worldLe (w u : World) : Prop :=
   envLe w.Γ u.Γ ∧ stackLe w.σ u.σ ∧ pendLe w.pending u.pending
@@ -1148,10 +1149,12 @@ theorem meetTy_cov {S S' T : Ty}
 /-- Stack coverage: cons projection. -/
 theorem stackLe_cons {t u : Ty} {σ τ : List Ty}
     (h : stackLe (t :: σ) (u :: τ)) : stackLe σ τ ∧ tyLe t u := by
+  obtain ⟨hlen, hcov⟩ := h
   constructor
-  · intro i m hm n hn
-    exact h (i + 1) m hm n (by simpa using hn)
-  · exact h 0 t (by simp) u (by simp)
+  · refine ⟨by simpa using hlen, ?_⟩
+    intro i m hm n hn
+    exact hcov (i + 1) m hm n (by simpa using hn)
+  · exact hcov 0 t (by simp) u (by simp)
 
 /- ## Proof layer IX: split monotonicity -/
 
@@ -1189,6 +1192,8 @@ theorem tyLe_iff {t u : Ty} :
 
 theorem stackLe_cons_same {t : Ty} {σ τ : List Ty}
     (h : stackLe σ τ) : stackLe (t :: σ) (t :: τ) := by
+  obtain ⟨hlen, hcov⟩ := h
+  refine ⟨by simpa using hlen, ?_⟩
   intro i m hm u hu
   cases i with
   | zero =>
@@ -1196,7 +1201,7 @@ theorem stackLe_cons_same {t : Ty} {σ τ : List Ty}
       subst hm; subst hu; exact tmoves_refl _
   | succ j =>
       simp only [List.getElem?_cons_succ] at hm hu
-      exact h j m hm u hu
+      exact hcov j m hm u hu
 
 /-- Nonempty transfer under coverage. -/
 theorem cover_ne {l' l : List VTy}
@@ -1279,3 +1284,62 @@ theorem worldsLe_split {x : «String»} {T : Ty} {ws ws' : Worlds}
   obtain ⟨w, hw, hle⟩ := hcov w' hw'
   obtain ⟨u, hu, hle'⟩ := split1_cov hle hu'
   exact ⟨u, ⟨w, hw, hu⟩, hle'⟩
+
+/- ## Proof layer X: the per-world static step is monotone -/
+
+/-- Subject-weakening: a refined slot satisfies every demand the
+    coarse slot satisfies. -/
+theorem tmoves_subj_mono {t u T : Ty}
+    (hle : tyLe t u) (hpop : tmoves u T = Bool.true) :
+    tmoves t T = Bool.true := by
+  rw [tyLe_iff] at hle
+  have hu := tyLe_iff.mp hpop
+  show tyLe t T
+  rw [tyLe_iff]
+  intro a ha
+  obtain ⟨b, hb, hab⟩ := hle a ha
+  obtain ⟨c, hc, hcb⟩ := hu b hb
+  exact ⟨c, hc, tmovesV_trans hab hcb⟩
+
+theorem popTy_mono {T : Ty} {σ' σ : List Ty} {σ₂ : List Ty}
+    (hcov : stackLe σ' σ) (hpop : popTy T σ = some σ₂) :
+    ∃ σ₂', popTy T σ' = some σ₂' ∧ stackLe σ₂' σ₂ := by
+  cases hσ : σ with
+  | nil =>
+      exfalso
+      have hnone : popTy T [] = none := rfl
+      rw [hσ, hnone] at hpop
+      cases hpop
+  | cons ts σ₀ =>
+      rw [hσ] at hpop hcov
+      cases hσ' : σ' with
+      | nil =>
+          exfalso
+          rw [hσ'] at hcov
+          exact absurd hcov.1 (by simp)
+      | cons ts' σ₀' =>
+          rw [hσ'] at hcov
+          obtain ⟨hrest, hhd⟩ := stackLe_cons hcov
+          have hpass : tmoves ts' T = Bool.true :=
+            tmoves_subj_mono hhd (by
+              simp only [popTy] at hpop
+              cases hif : tmoves ts T with
+              | true => rfl
+              | false =>
+                  rw [hif] at hpop
+                  cases hpop)
+          -- σ₂ = σ₀ (the coarse pop returned the tail)
+          have hσ₂ : σ₂ = σ₀ := by
+            simp only [popTy] at hpop
+            cases hif : tmoves ts T with
+            | true =>
+                rw [hif] at hpop
+                rw [if_pos rfl] at hpop
+                exact Option.some.inj hpop.symm
+            | false =>
+                rw [hif] at hpop
+                cases hpop
+          subst hσ₂
+          exact ⟨σ₀', by
+            simp only [popTy, hpass]
+            rfl, hrest⟩
