@@ -704,18 +704,28 @@ def checkSeq : SigTable → Ty → World → List Instr → TCResult
           .reject .kRet ("kRet: payload does not match the frame's destiny r: "
             ++ toString (toString (repr w.pending) ++ toString (repr w.σ)))
   | sigs, r, w, .kIte t e :: rest =>
-      -- dispatch THE world on its verdict; fork a both-verdict world
+      -- dispatch per VERDICT ATOM of the top slot: true checks a
+      -- then-world, false an else-world, a bool-union spawns both
+      -- (fork), any other atom rejects. All atom judgements must be
+      -- OK — mergeTC is reject-dominating, so the fold IS the
+      -- conjunction. (An empty slot — the bottom type — is vacuous:
+      -- the then-world, as List.all was vacuously true.)
       match w.σ with
-      | ts :: σ' =>
-          if ts.all (fun a => tmovesV a (.isValue (.boolean Bool.true))) then
-            checkSeq sigs r { w with σ := σ' } (t ++ rest)
-          else if ts.all (fun a => tmovesV a (.isValue (.boolean Bool.false))) then
-            checkSeq sigs r { w with σ := σ' } (e ++ rest)
-          else if ts.all (fun a => tmovesV a (.anyValue .bool)) then
-            mergeTC (checkSeq sigs r { w with σ := σ' } (t ++ rest))
-              (checkSeq sigs r { w with σ := σ' } (e ++ rest))
-          else .reject (.kIte t e) "kIte: verdict is not boolean"
       | [] => .reject (.kIte t e) "kIte: verdict is not boolean"
+      | [] :: σ' => checkSeq sigs r { w with σ := σ' } (t ++ rest)
+      | ts :: σ' =>
+          ts.foldl (fun acc a =>
+            mergeTC acc
+              (match a with
+               | .isValue (.boolean Bool.true) =>
+                   checkSeq sigs r { w with σ := σ' } (t ++ rest)
+               | .isValue (.boolean Bool.false) =>
+                   checkSeq sigs r { w with σ := σ' } (e ++ rest)
+               | .anyValue .bool =>
+                   mergeTC (checkSeq sigs r { w with σ := σ' } (t ++ rest))
+                     (checkSeq sigs r { w with σ := σ' } (e ++ rest))
+               | _ => .reject (.kIte t e) "kIte: verdict is not boolean"))
+            noFlows
   | sigs, r, w, .kEval (.const (.compl Bool.false pv)) :: rest =>
       -- a completion literal parks itself (never a stack atom)
       match parkPending (.normal [typeOfV pv]) w with
