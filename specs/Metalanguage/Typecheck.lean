@@ -838,20 +838,28 @@ def checkSeq : SigTable → Ty → World → List Instr → TCResult
         (.kForBody x [] body)
         w.σ (fun wsf => wsf.foldl (fun acc u => mergeTC acc (checkSeq sigs r u rest)) noFlows)
   | sigs, r, w, .kAssert :: rest =>
-      -- assert: a true verdict discharges; an undecided boolean or a
-      -- non-boolean verdict continues with the debt recorded
+      -- assert, per VERDICT ATOM, machine-aligned (the machine
+      -- continues ONLY on .boolean true; false, non-boolean and
+      -- empty are LOUD): true discharges (pop, clean); a genuinely
+      -- undecided bool pops with the debt recorded; everything
+      -- else — statically false, or not boolean at all — is a path
+      -- the machine is loud on and rejects. The fold is the
+      -- conjunction; the bottom slot is the vacuous fold
+      -- (discharged), exactly as in kIte.
       match w.σ with
+      | [] => .reject .kAssert "assert: verdict is not boolean"
       | ts :: σ' =>
-          if ts.all (fun a => tmovesV a (.isValue (.boolean Bool.true))) then
-            checkSeq sigs r { w with σ := σ' } rest
-          else if ts.all (fun a => tmovesV a (.anyValue .bool)) then
-            markDebt "assert obligation not discharged"
-              (checkSeq sigs r { w with σ := σ' } rest)
-          else
-            markDebt "assert obligation not discharged"
-              (checkSeq sigs r w rest)
-      | [] =>
-          markDebt "assert obligation not discharged" (checkSeq sigs r w rest)
+          ts.foldl (fun acc a =>
+            mergeTC acc
+              (match a with
+               | .isValue (.boolean Bool.true) =>
+                   checkSeq sigs r { w with σ := σ' } rest
+               | .anyValue .bool =>
+                   markDebt "assert obligation not discharged"
+                     (checkSeq sigs r { w with σ := σ' } rest)
+               | _ => .reject .kAssert "assert: verdict is not boolean"))
+            (TCResult.flows
+              { exits := Bool.true, throws := Bool.false, falls := [], assumes := [] })
   | sigs, r, w, i :: rest =>
       match step1 sigs i w with
       | none =>
