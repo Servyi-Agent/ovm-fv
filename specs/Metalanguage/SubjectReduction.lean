@@ -1328,3 +1328,152 @@ theorem popTy_mono {T : Ty} {σ' σ : List Ty} {σ₂ : List Ty}
     arms (kTestVar exact+refined, kPrim1-generic via mono, kCall,
     kRet delivery, loops, kMkList/kNewSlot/kIMeth), then the master
     frames case and type_safety. -/
+
+/- ## Proof layer XI: monotonicity plumbing (drops, pops, args) -/
+
+theorem stackLe_drop {σ' σ : List Ty} (h : stackLe σ' σ) (n : Nat) :
+    stackLe (σ'.drop n) (σ.drop n) := by
+  obtain ⟨hlen, hcov⟩ := h
+  refine ⟨by simp [hlen], ?_⟩
+  intro i t ht u hu
+  have h1 : t ∈ σ'[n + i]? := by
+    have := ht
+    rw [List.getElem?_drop] at this
+    exact this
+  have h2 : u ∈ σ[n + i]? := by
+    have := hu
+    rw [List.getElem?_drop] at this
+    exact this
+  exact hcov (n + i) t h1 u h2
+
+theorem stackLe_cons_le {t u : Ty} {σ' σ : List Ty}
+    (h : stackLe σ' σ) (htu : tyLe t u) : stackLe (t :: σ') (u :: σ) := by
+  obtain ⟨hlen, hcov⟩ := h
+  refine ⟨by simp [hlen], ?_⟩
+  intro i m hm n hn
+  cases i with
+  | zero =>
+      simp only [List.getElem?_cons_zero, Option.mem_some] at hm hn
+      subst hm; subst hn; exact htu
+  | succ j =>
+      simp only [List.getElem?_cons_succ] at hm hn
+      exact hcov j m hm n hn
+
+theorem popTyN_mono {T : Ty} : ∀ (n : Nat) {σ' σ σ₂ : List Ty},
+    stackLe σ' σ → popTyN n T σ = some σ₂ →
+    ∃ σ₂', popTyN n T σ' = some σ₂' ∧ stackLe σ₂' σ₂ := by
+  intro n
+  induction n with
+  | zero =>
+      intro σ' σ σ₂ hcov h
+      cases h
+      exact ⟨σ', rfl, hcov⟩
+  | succ n ih =>
+      intro σ' σ σ₂ hcov h
+      rw [popTyN] at h
+      cases hpop : popTy T σ with
+      | none => rw [hpop] at h; cases h
+      | some σ₁ =>
+          rw [hpop] at h
+          obtain ⟨σ₁', hp₁, hc₁⟩ := popTy_mono hcov hpop
+          obtain ⟨σ₂', hp₂, hc₂⟩ := ih hc₁ h
+          refine ⟨σ₂', ?_, hc₂⟩
+          simp only [popTyN, hp₁, hp₂]
+
+theorem popA_mono {t : VTy} {σ' σ σ₂ : List Ty}
+    (hcov : stackLe σ' σ) (h : popA t σ = some σ₂) :
+    ∃ σ₂', popA t σ' = some σ₂' ∧ stackLe σ₂' σ₂ := popTy_mono hcov h
+
+theorem stackLe_take {σ' σ : List Ty} (h : stackLe σ' σ) (k : Nat) :
+    stackLe (σ'.take k) (σ.take k) := by
+  induction k generalizing σ' σ with
+  | zero =>
+      refine ⟨rfl, ?_⟩
+      intro i t ht
+      exact absurd ht (by simp [List.getElem?_nil])
+  | succ k ih =>
+      cases σ' with
+      | nil =>
+          cases σ with
+          | nil =>
+              refine ⟨rfl, ?_⟩
+              intro i t ht
+              exact absurd ht (by simp [List.getElem?_nil])
+          | cons b m => exact absurd h.1 (by simp)
+      | cons a t' =>
+          cases σ with
+          | nil => exact absurd h.1 (by simp)
+          | cons b m =>
+              simp only [List.take]
+              exact stackLe_cons_le (ih (stackLe_cons h).1) (stackLe_cons h).2
+
+theorem mem_getElem?_lt {l : List Ty} {i : Nat} {a : Ty} (h : a ∈ l[i]?) :
+    i < l.length := by
+  by_cases hlt : i < l.length
+  · exact hlt
+  · exfalso
+    have hn : l[i]? = none := List.getElem?_eq_none_iff.mpr (by omega)
+    rw [hn] at h
+    exact absurd h (by simp)
+
+theorem stackLe_reverse {σ' σ : List Ty} (h : stackLe σ' σ) :
+    stackLe σ'.reverse σ.reverse := by
+  obtain ⟨hlen, hcov⟩ := h
+  refine ⟨by simp [hlen], ?_⟩
+  intro i t ht u hu
+  have hb : i < σ'.length := by
+    have := mem_getElem?_lt (l := σ'.reverse) ht
+    simpa using this
+  have ht2 : t ∈ σ'[σ'.length - 1 - i]? := by
+    rw [← List.getElem?_reverse hb]
+    exact ht
+  have hu2 : u ∈ σ[σ'.length - 1 - i]? := by
+    rw [hlen]
+    have hbs : i < σ.length := by omega
+    rw [← List.getElem?_reverse hbs]
+    exact hu
+  exact hcov _ t ht2 u hu2
+
+theorem leTy_of_stackLe {l₁ l₂ : List Ty} (h : stackLe l₁ l₂) : leTy l₁ l₂ := by
+  induction l₁ generalizing l₂ with
+  | nil =>
+      cases l₂ with
+      | nil => rfl
+      | cons b m => exact absurd h.1 (by simp)
+  | cons a t ih =>
+      cases l₂ with
+      | nil => exact absurd h.1 (by simp)
+      | cons b m =>
+          rw [leTy, Bool.and_eq_true]
+          exact ⟨(stackLe_cons h).2, ih (stackLe_cons h).1⟩
+
+theorem leTy_mono {ts' ts ps : List Ty} (h₁ : leTy ts' ts) (h₂ : leTy ts ps) :
+    leTy ts' ps := by
+  induction ts' generalizing ts ps with
+  | nil =>
+      cases ts with
+      | nil => cases ps with
+        | nil => rfl
+        | cons p ps' => simp [leTy] at h₂
+      | cons t ts' => simp [leTy] at h₁
+  | cons a t' ih =>
+      cases ts with
+      | nil => simp [leTy] at h₁
+      | cons b ts' =>
+          cases ps with
+          | nil => simp [leTy] at h₂
+          | cons p ps' =>
+              simp only [leTy, Bool.and_eq_true, decide_eq_true_eq] at h₁ h₂ ⊢
+              refine ⟨tmoves_subj_mono h₁.1 h₂.1, ih h₁.2 h₂.2⟩
+
+theorem popArgs_mono {ps σ' σ : List Ty}
+    (hcov : stackLe σ' σ) (h : popArgs ps σ = Bool.true) :
+    popArgs ps σ' = Bool.true := by
+  unfold popArgs at h ⊢
+  have hlen : σ'.length = σ.length := hcov.1
+  rw [hlen]
+  simp only [Bool.and_eq_true, decide_eq_true_eq] at h ⊢
+  refine ⟨h.1, ?_⟩
+  have hcover : stackLe (σ'.take ps.length).reverse (σ.take ps.length).reverse :=
+    stackLe_reverse (stackLe_take hcov ps.length)
+  exact leTy_mono (leTy_of_stackLe hcover) h.2
