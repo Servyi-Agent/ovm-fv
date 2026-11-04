@@ -507,8 +507,16 @@ def step1 (sigs : SigTable) (i : Instr) (w : World) : Option Worlds :=
   | _ => some [w]
 
 /-- Step every world through one stack instruction. -/
-def stepWorlds (sigs : SigTable) (ws : Worlds) (i : Instr) : Option Worlds :=
-  (ws.mapM (step1 sigs i)).map List.flatten
+def stepWorlds (sigs : SigTable) : Worlds → Instr → Option Worlds
+  | [], _ => some []
+  | w :: rest, i =>
+      match step1 sigs i w with
+      | none => none
+      | some us =>
+          match stepWorlds sigs rest i with
+          | none => none
+          | some urs => some (us ++ urs)
+termination_by ws _ => sizeOf ws
 
 /-- Correlated predicate tests: IsDataDescriptor(x) /
     IsAccessorDescriptor(x) are decidable per EXACT desc atom
