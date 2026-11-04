@@ -78,7 +78,7 @@ def frameChecks (sigs : SigTable) (f : Fr) (p : Option Pending) : Prop :=
   | none => True   -- guarded by the outer conjunct
   | some (σ, _) =>
       match checkSeq sigs (sigRetTy sigs f.ret)
-        [{ Γ := envTyOf f.env, σ := σ, pending := p }] f.stmts with
+        { Γ := envTyOf f.env, σ := σ, pending := p } f.stmts with
       | .flows fb => terminal fb = Bool.true  -- every world returns
       | _ => False
 
@@ -235,7 +235,7 @@ def closedRegistry (sigs : SigTable) (reg : AOReg) : Prop :=
 def certifies (sigs : SigTable) (name : «String») (ps : List «String»)
     (ts : List Ty) (prog : Prog) : Prop :=
   match checkSeq sigs (sigRetTy sigs name)
-      [{ Γ := zipTy ps ts, σ := [], pending := none }] (compileSteps prog) with
+      { Γ := zipTy ps ts, σ := [], pending := none } (compileSteps prog) with
   | .flows fb =>
       terminal fb = Bool.true
         ∧ (fb.throws = Bool.true → complCanThrow (sigCompls sigs name) = Bool.true)
@@ -245,12 +245,12 @@ theorem certifies_flows_elim {sigs : SigTable} {name : «String»}
     {ps : List «String»} {ts : List Ty} {prog : Prog}
     (h : certifies sigs name ps ts prog) :
     ∃ fb, checkSeq sigs (sigRetTy sigs name)
-        [{ Γ := zipTy ps ts, σ := [], pending := none }] (compileSteps prog)
+        { Γ := zipTy ps ts, σ := [], pending := none } (compileSteps prog)
         = TCResult.flows fb ∧ terminal fb = Bool.true
         ∧ (fb.throws = Bool.true
             → complCanThrow (sigCompls sigs name) = Bool.true) := by
   cases hb : checkSeq sigs (sigRetTy sigs name)
-      [{ Γ := zipTy ps ts, σ := [], pending := none }] (compileSteps prog) with
+      { Γ := zipTy ps ts, σ := [], pending := none } (compileSteps prog) with
   | flows fb =>
       simp only [certifies] at h
       rw [hb] at h
@@ -378,25 +378,24 @@ theorem markThrow_const (sigs : SigTable) (v : JSValue) (res : TCResult) :
 
 theorem checkSeq_kEval_const {sigs : SigTable} {r : Ty} {W : World} {v : JSValue}
     {rest : List Instr} (hv : isCompl v = Bool.false) :
-    checkSeq sigs r [W] (.kEval (.const v) :: rest)
-      = checkSeq sigs r [{ W with σ := [typeOfV v] :: W.σ }] rest := by
+    checkSeq sigs r W (.kEval (.const v) :: rest)
+      = checkSeq sigs r { W with σ := [typeOfV v] :: W.σ } rest := by
   cases v with
   | compl b pv => simp [isCompl] at hv
   | undefined | null | boolean _ | number _ | str _ | obj _ | listV _ | descV _ =>
-      simp only [checkSeq, typeOfE, typeOfV, mapM_singleton, Option.map_some,
-                 markThrow_const]
+      simp only [checkSeq, typeOfE, typeOfV, markThrow_const]
 
 
 /-- kEval of a nat literal: push the singleton number. -/
 theorem checkSeq_kEval_nat {sigs : SigTable} {r : Ty} {W : World} {n : Nat}
     {rest : List Instr} :
-    checkSeq sigs r [W] (.kEval (.nat n) :: rest)
+    checkSeq sigs r W (.kEval (.nat n) :: rest)
       = checkSeq sigs r
-          [{ W with σ := [VTy.isValue (.number (↑n : Int))] :: W.σ }] rest := by
-  simp only [checkSeq, typeOfE, mapM_singleton, Option.map_some]
+          { W with σ := [VTy.isValue (.number (↑n : Int))] :: W.σ } rest := by
+  simp only [checkSeq, typeOfE]
   cases checkSeq sigs r
-      [{ Γ := W.Γ, σ := [VTy.isValue (.number (↑n : Int))] :: W.σ,
-         pending := W.pending }] rest with
+      { Γ := W.Γ, σ := [VTy.isValue (.number (↑n : Int))] :: W.σ,
+        pending := W.pending } rest with
   | flows fb => simp only [markThrow, exprCanThrow, Bool.or_false]
   | reject site why => rfl
 
@@ -404,29 +403,34 @@ theorem checkSeq_kEval_nat {sigs : SigTable} {r : Ty} {W : World} {n : Nat}
 theorem checkSeq_kEval_nv {sigs : SigTable} {r : Ty} {W : World} {x : «String»}
     {v : JSValue} {rest : List Instr}
     (hΓ : tyLookup W.Γ x = some [typeOfV v]) :
-    checkSeq sigs r [W] (.kEval (.nv x) :: rest)
-      = checkSeq sigs r [{ W with σ := [typeOfV v] :: W.σ }] rest := by
-  simp only [checkSeq, typeOfE, hΓ, mapM_singleton, Option.map_some]
+    checkSeq sigs r W (.kEval (.nv x) :: rest)
+      = checkSeq sigs r { W with σ := [typeOfV v] :: W.σ } rest := by
+  simp only [checkSeq, typeOfE, hΓ]
   cases checkSeq sigs r
-      [{ Γ := W.Γ, σ := [typeOfV v] :: W.σ, pending := W.pending }] rest with
+      { Γ := W.Γ, σ := [typeOfV v] :: W.σ, pending := W.pending } rest with
   | flows fb => simp only [markThrow, exprCanThrow, Bool.or_false]
   | reject site why => rfl
 
 /-- kPop: drop the top slot (the machine fells on an empty stack -
     those states are ill-typed and never reach this lemma). -/
+theorem mergeTC_noFlows (res : TCResult) : mergeTC noFlows res = res := by
+  cases res with
+  | flows f => rfl
+  | reject site why => rfl
+
 theorem checkSeq_kPop {sigs : SigTable} {r : Ty} {W : World} {ts : Ty} {σ' : List Ty}
     {rest : List Instr} (hpn : W.pending = none) (hσ : W.σ = ts :: σ') :
-    checkSeq sigs r [W] (.kPop :: rest)
-      = checkSeq sigs r [{ W with σ := σ' }] rest := by
-  simp only [checkSeq, stepWorlds, step1, hσ, hpn, List.append_nil]
+    checkSeq sigs r W (.kPop :: rest)
+      = checkSeq sigs r { W with σ := σ' } rest := by
+  simp only [checkSeq, step1, hσ, hpn, List.foldl, mergeTC_noFlows]
 
 /-- kSet: bind the top slot into Γ. -/
 theorem checkSeq_kSet {sigs : SigTable} {r : Ty} {W : World} {x : «String»}
     {ts : Ty} {σ' : List Ty} {rest : List Instr}
     (hpn : W.pending = none) (hσ : W.σ = ts :: σ') :
-    checkSeq sigs r [W] (.kSet x :: rest)
-      = checkSeq sigs r [{ Γ := (x, ts) :: W.Γ, σ := σ', pending := none }] rest := by
-  simp only [checkSeq, stepWorlds, step1, hσ, hpn, List.append_nil]
+    checkSeq sigs r W (.kSet x :: rest)
+      = checkSeq sigs r { Γ := (x, ts) :: W.Γ, σ := σ', pending := none } rest := by
+  simp only [checkSeq, step1, hσ, hpn, List.foldl, mergeTC_noFlows]
 
 
 /- ## Proof layer V: the exact-match sr arms (head frame, above = none) -/
@@ -569,18 +573,18 @@ theorem isCompl_of_head {w : JSValue} {eval : List JSValue} {σ : List Ty}
   | listV vs => rfl
   | descV d => rfl
 
-/-- Uniform reject computation: a failed stepWorlds makes checkSeq
+/-- Uniform reject computation: a failed step1 makes checkSeq
     reject (the catch-all arm). -/
 theorem checkSeq_reject_kPop {sigs : SigTable} {r : Ty} {W : World}
-    {rest : List Instr} (hbad : stepWorlds sigs [W] .kPop = none) :
-    ∃ why, checkSeq sigs r [W] (.kPop :: rest)
+    {rest : List Instr} (hbad : step1 sigs .kPop W = none) :
+    ∃ why, checkSeq sigs r W (.kPop :: rest)
       = TCResult.reject .kPop why := by
   simp only [checkSeq, hbad]
   exact ⟨_, rfl⟩
 
 theorem checkSeq_reject_kSet {sigs : SigTable} {r : Ty} {W : World} {x : «String»}
-    {rest : List Instr} (hbad : stepWorlds sigs [W] (.kSet x) = none) :
-    ∃ why, checkSeq sigs r [W] (.kSet x :: rest)
+    {rest : List Instr} (hbad : step1 sigs (.kSet x) W = none) :
+    ∃ why, checkSeq sigs r W (.kSet x :: rest)
       = TCResult.reject (.kSet x) why := by
   simp only [checkSeq, hbad]
   exact ⟨_, rfl⟩
@@ -600,14 +604,14 @@ theorem sr_kPop {sigs : SigTable} {w : JSValue} {rest : List Instr}
           exfalso
           rw [frameChecks] at hchk
           simp only [hs,
-                     checkSeq, stepWorlds, step1] at hchk
+                     checkSeq, step1, List.foldl] at hchk
       | none =>
           cases σ₀ with
           | nil =>
               exfalso
               rw [frameChecks] at hchk
               simp only [hs,
-                         checkSeq, stepWorlds, step1] at hchk
+                         checkSeq, step1, List.foldl] at hchk
           | cons ts σ' =>
               have hw : isCompl w = Bool.false := isCompl_of_head hs
               cases hse : splitStack eval with
@@ -649,14 +653,14 @@ theorem sr_kSet {sigs : SigTable} {x : «String»} {w : JSValue} {rest : List In
           exfalso
           rw [frameChecks] at hchk
           simp only [hs,
-                     checkSeq, stepWorlds, step1] at hchk
+                     checkSeq, step1, List.foldl] at hchk
       | none =>
           cases σ₀ with
           | nil =>
               exfalso
               rw [frameChecks] at hchk
               simp only [hs,
-                         checkSeq, stepWorlds, step1] at hchk
+                         checkSeq, step1, List.foldl] at hchk
           | cons ts σ' =>
               have hw : isCompl w = Bool.false := isCompl_of_head hs
               cases hse : splitStack eval with
@@ -688,35 +692,35 @@ theorem sr_kSet {sigs : SigTable} {x : «String»} {w : JSValue} {rest : List In
 
 theorem checkSeq_kTest_normal {sigs : SigTable} {r : Ty} {W : World} {t : Ty}
     {rest : List Instr} (hpn : W.pending = some (.normal t)) :
-    checkSeq sigs r [W] (.kTest :: rest)
-      = checkSeq sigs r [{ W with σ := [.isValue (.boolean Bool.false)] :: W.σ }] rest := by
-  simp only [checkSeq, stepWorlds, step1, parkPending, Option.map_some, hpn, List.append_nil]
+    checkSeq sigs r W (.kTest :: rest)
+      = checkSeq sigs r { W with σ := [.isValue (.boolean Bool.false)] :: W.σ } rest := by
+  simp only [checkSeq, step1, List.foldl, hpn, mergeTC_noFlows]
 
 theorem checkSeq_kTest_throw {sigs : SigTable} {r : Ty} {W : World}
     {rest : List Instr} (hpn : W.pending = some Pending.throw) :
-    checkSeq sigs r [W] (.kTest :: rest)
-      = checkSeq sigs r [{ W with σ := [.isValue (.boolean Bool.true)] :: W.σ }] rest := by
-  simp only [checkSeq, stepWorlds, step1, parkPending, Option.map_some, hpn, List.append_nil]
+    checkSeq sigs r W (.kTest :: rest)
+      = checkSeq sigs r { W with σ := [.isValue (.boolean Bool.true)] :: W.σ } rest := by
+  simp only [checkSeq, step1, List.foldl, hpn, mergeTC_noFlows]
 
 theorem checkSeq_kUnwrap_normal {sigs : SigTable} {r : Ty} {W : World} {t : Ty}
     {rest : List Instr} (hpn : W.pending = some (.normal t)) :
-    checkSeq sigs r [W] (.kUnwrap :: rest)
-      = checkSeq sigs r [{ W with σ := t :: W.σ, pending := none }] rest := by
-  simp only [checkSeq, stepWorlds, step1, parkPending, Option.map_some, hpn, List.append_nil]
+    checkSeq sigs r W (.kUnwrap :: rest)
+      = checkSeq sigs r { W with σ := t :: W.σ, pending := none } rest := by
+  simp only [checkSeq, step1, List.foldl, hpn, mergeTC_noFlows]
 
 theorem checkSeq_pWrapC {sigs : SigTable} {r : Ty} {W : World} {ts : Ty} {σ' : List Ty}
     {rest : List Instr} (hpn : W.pending = none) (hσ : W.σ = ts :: σ') :
-    checkSeq sigs r [W] (.kPrim1 .pWrapC :: rest)
-      = checkSeq sigs r [{ W with σ := σ', pending := some (.normal ts) }] rest := by
-  simp only [checkSeq, stepWorlds, step1, parkPending, Option.map_some,
-             hpn, hσ, List.append_nil]
+    checkSeq sigs r W (.kPrim1 .pWrapC :: rest)
+      = checkSeq sigs r { W with σ := σ', pending := some (.normal ts) } rest := by
+  simp only [checkSeq, step1, List.foldl, parkPending, Option.map_some,
+             hpn, hσ, List.append_nil, mergeTC_noFlows]
 
 theorem checkSeq_pThrowC {sigs : SigTable} {r : Ty} {W : World} {ts : Ty} {σ' : List Ty}
     {rest : List Instr} (hpn : W.pending = none) (hσ : W.σ = ts :: σ') :
-    checkSeq sigs r [W] (.kPrim1 .pThrowC :: rest)
-      = checkSeq sigs r [{ W with σ := σ', pending := some Pending.throw }] rest := by
-  simp only [checkSeq, stepWorlds, step1, parkPending, Option.map_some,
-             hpn, hσ, List.append_nil]
+    checkSeq sigs r W (.kPrim1 .pThrowC :: rest)
+      = checkSeq sigs r { W with σ := σ', pending := some Pending.throw } rest := by
+  simp only [checkSeq, step1, List.foldl, parkPending, Option.map_some,
+             hpn, hσ, List.append_nil, mergeTC_noFlows]
 
 /- ## Proof layer VII: the pending-protocol sr arms -/
 
@@ -850,14 +854,14 @@ theorem sr_pWrapC {sigs : SigTable} {v : JSValue} {rest : List Instr}
       | nil =>
           exfalso
           rw [frameChecks] at hchk
-          simp only [hs, checkSeq, stepWorlds, step1, parkPending, Option.map_none,
+          simp only [hs, checkSeq, step1, List.foldl, parkPending, Option.map_none,
                      Option.bind_none, List.append_nil] at hchk
       | cons ts σ'' =>
           cases p₀ with
           | some p' =>
               exfalso
               rw [frameChecks] at hchk
-              simp only [hs, checkSeq, stepWorlds, step1, parkPending, Option.map_none,
+              simp only [hs, checkSeq, step1, List.foldl, parkPending, Option.map_none,
                          Option.bind_none, List.append_nil] at hchk
           | none =>
               have hw : isCompl v = Bool.false := isCompl_of_head hs
@@ -901,14 +905,14 @@ theorem sr_pThrowC {sigs : SigTable} {v : JSValue} {rest : List Instr}
       | nil =>
           exfalso
           rw [frameChecks] at hchk
-          simp only [hs, checkSeq, stepWorlds, step1, parkPending, Option.map_none,
+          simp only [hs, checkSeq, step1, List.foldl, parkPending, Option.map_none,
                      Option.bind_none, List.append_nil] at hchk
       | cons ts σ'' =>
           cases p₀ with
           | some p' =>
               exfalso
               rw [frameChecks] at hchk
-              simp only [hs, checkSeq, stepWorlds, step1, parkPending, Option.map_none,
+              simp only [hs, checkSeq, step1, List.foldl, parkPending, Option.map_none,
                          Option.bind_none, List.append_nil] at hchk
           | none =>
               have hw : isCompl v = Bool.false := isCompl_of_head hs
@@ -1203,13 +1207,16 @@ theorem split1_cov {x : «String»} {T : Ty} {w' w : World}
                               stackLe_cons_same (t := [.isValue (.boolean Bool.false)]) hσ, hp⟩⟩
 
 theorem worldsLe_split {x : «String»} {T : Ty} {ws ws' : Worlds}
-    (hcov : worldsLe ws' ws) : worldsLe (splitWorlds x T ws') (splitWorlds x T ws) := by
+    (hcov : worldsLe ws' ws) :
+    ∀ u' ∈ ws'.flatMap (split1 x T), ∃ u ∈ ws.flatMap (split1 x T), worldLe u' u := by
   intro u' hu'
-  simp only [splitWorlds, List.mem_flatMap] at hu' ⊢
+  simp only [List.mem_flatMap] at hu'
   obtain ⟨w', hw', hu'⟩ := hu'
   obtain ⟨w, hw, hle⟩ := hcov w' hw'
   obtain ⟨u, hu, hle'⟩ := split1_cov hle hu'
-  exact ⟨u, ⟨w, hw, hu⟩, hle'⟩
+  refine ⟨u, ?_, hle'⟩
+  simp only [List.mem_flatMap]
+  exact ⟨w, hw, hu⟩
 
 /- ## Proof layer X: the per-world static step is monotone -/
 
@@ -1905,97 +1912,27 @@ theorem pendLe_trans {p₁ p₂ p₃ : Option Pending}
                       | normal t₃ => exact absurd h₂ (by simp [pendLe])
                       | throw => trivial
 
-/-- Membership lemma for the structural stepWorlds: a successful
-    step's per-world results appear in the result list. -/
-theorem stepWorlds_mem {sigs : SigTable} {i : Instr} :
-    ∀ (ws : Worlds) {ws₂ : Worlds},
-      stepWorlds sigs ws i = some ws₂ →
-      ∀ w ∈ ws, ∀ us, step1 sigs i w = some us →
-        ∀ x ∈ us, x ∈ ws₂ := by
-  intro ws
-  induction ws with
-  | nil => intro ws₂ h w hw; exact absurd hw (by simp)
-  | cons a tl ih =>
-      intro ws₂ h w hw us hus
-      cases hhd : step1 sigs i a with
+theorem worldsLe_trans {ws₁ ws₂ ws₃ : Worlds}
+    (h₁ : worldsLe ws₁ ws₂) (h₂ : worldsLe ws₂ ws₃) : worldsLe ws₁ ws₃ := by
+  intro u hu
+  obtain ⟨v, hv, hΓ₁, hσ₁, hp₁⟩ := h₁ u hu
+  obtain ⟨x, hx, hΓ₂, hσ₂, hp₂⟩ := h₂ v hv
+  refine ⟨x, hx, ?_, ?_, pendLe_trans hp₁ hp₂⟩
+  · intro y t ht
+    obtain ⟨u₁, hu₁, htu⟩ := hΓ₁ y t ht
+    obtain ⟨u₂, hu₂, htu₂⟩ := hΓ₂ y u₁ hu₁
+    exact ⟨u₂, hu₂, tyLe_trans htu htu₂⟩
+  · have hlen : u.σ.length = x.σ.length := hσ₁.1.trans hσ₂.1
+    refine ⟨hlen, ?_⟩
+    intro j a ha b hb
+    obtain ⟨m, hm⟩ : ∃ m, m ∈ v.σ[j]? := by
+      have hu₁ : j < u.σ.length := mem_getElem?_lt ha
+      have hlen1 : u.σ.length = v.σ.length := hσ₁.1
+      cases hv : v.σ[j]? with
       | none =>
-          rw [stepWorlds, hhd] at h
-          cases h
-      | some r₁ =>
-          rw [stepWorlds, hhd] at h
-          cases htl : stepWorlds sigs tl i with
-          | none =>
-              rw [htl] at h
-              cases h
-          | some urs =>
-              rw [htl] at h
-              cases h
-              cases hw with
-              | head =>
-                  rw [hus] at hhd
-                  cases hhd
-                  intro x hx
-                  exact List.mem_append.mpr (Or.inl hx)
-              | tail _ hw =>
-                  intro x hx
-                  exact List.mem_append.mpr (Or.inr (ih htl w hw us hus x hx))
+          have hvle : v.σ.length ≤ j :=
+            List.getElem?_eq_none_iff.mp hv
+          omega
+      | some m => exact ⟨m, by simp [hv]⟩
+    exact tyLe_trans (hσ₁.2 j a ha m hm) (hσ₂.2 j m hm b hb)
 
-/-- Every coarse world's step result is covered-from by the refined
-    side: existence of a refined step for each refined world. -/
-theorem stepWorlds_all {sigs : SigTable} {i : Instr} :
-    ∀ (ws : Worlds) {ws₂ : Worlds},
-      stepWorlds sigs ws i = some ws₂ →
-      ∀ w ∈ ws, ∃ us, step1 sigs i w = some us := by
-  intro ws
-  induction ws with
-  | nil => intro ws₂ h w hw; exact absurd hw (by simp)
-  | cons a tl ih =>
-      intro ws₂ h w hw
-      cases hhd : step1 sigs i a with
-      | none =>
-          rw [stepWorlds, hhd] at h
-          cases h
-      | some r₁ =>
-          rw [stepWorlds, hhd] at h
-          cases htl : stepWorlds sigs tl i with
-          | none =>
-              rw [htl] at h
-              cases h
-          | some urs =>
-              rw [htl] at h
-              cases h
-              cases hw with
-              | head => exact ⟨r₁, hhd⟩
-              | tail _ hw => exact ih htl w hw
-
-theorem stepWorlds_mono {sigs : SigTable} {i : Instr} :
-    ∀ (ws ws' : Worlds), worldsLe ws' ws →
-    ∀ {ws₂ : Worlds}, stepWorlds sigs ws i = some ws₂ →
-    ∃ ws₂', stepWorlds sigs ws' i = some ws₂' ∧ worldsLe ws₂' ws₂ := by
-  intro ws ws' hcov ws₂ h
-  induction ws' with
-  | nil =>
-      refine ⟨[], ?_, ?_⟩
-      · simp only [stepWorlds]
-      · intro x hx
-        exact absurd hx (by simp)
-  | cons u tl ih =>
-      -- u covers some coarse v; v stepped; u steps to a covered result
-      obtain ⟨v, hv, hle⟩ := hcov u (List.Mem.head _)
-      obtain ⟨us, hus⟩ := stepWorlds_all ws h v hv
-      obtain ⟨us', hus', hcus⟩ := step1_mono hle hus
-      -- the tail coverage and IH
-      have hctl : worldsLe tl ws := by
-        intro x hx
-        exact hcov x (List.Mem.tail _ hx)
-      obtain ⟨urs', htl', hct⟩ := ih hctl
-      refine ⟨us' ++ urs', ?_, ?_⟩
-      · rw [stepWorlds, hus', htl']
-      · intro x hx
-        rw [List.mem_append] at hx
-        cases hx with
-        | inl hx =>
-            -- x covered by us', and us' ⊑ us ⊆ ws₂ (element-wise via stepWorlds_mem)
-            obtain ⟨y, hy, hxy⟩ := hcus x hx
-            exact ⟨y, stepWorlds_mem ws h v hv us hus y hy, hxy⟩
-        | inr hx => exact hct x hx

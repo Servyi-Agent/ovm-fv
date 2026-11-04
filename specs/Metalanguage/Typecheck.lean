@@ -1,5 +1,15 @@
 import Metalanguage.Grammar
 
+/-- Append only grows the structural size. -/
+theorem sizeOf_append_le {α : Type} [SizeOf α] :
+    ∀ (t rest : List α), sizeOf (t ++ rest) ≤ sizeOf t + sizeOf rest := by
+  intro t rest
+  induction t with
+  | nil => simp [List.nil_append]
+  | cons a t ih =>
+      show 1 + sizeOf a + sizeOf (t ++ rest) ≤ 1 + sizeOf a + sizeOf t + sizeOf rest
+      omega
+
 /- # Static typechecking: the flat lattice + pending completions.
 
     Types are SETS over a closed constructor universe, always in FLAT
@@ -406,7 +416,91 @@ def testedVar : Expr → Option «String»
   | .varNotPresent x => some x
   | _ => none
 
-/- ## The world-stepping checker -/
+/- Hand-rolled sequence fuel: the kIte arms recurse on (branch ++ rest),
+    which the auto-generated sizeOf cannot compare across the append. -/
+
+/- ## Sequence fuel (termination measure for checkSeq) -/
+
+mutual
+def efuel : Expr → Nat
+  | .nv _ | .const _ | .nat _ | .varNotPresent _ => 1
+  | .isObject e | .isNotObject e | .isNotUndefined e | .hasCall e
+  | .hasCtor e | .isU e | .isBoolVal _ e | .isStrVal _ e
+  | .isNullOrUnd e | .isNull e | .isType _ e | .hasField _ e
+  | .ifield _ e => efuel e + 1
+  | .call _ as => (as.map efuel).sum + 2
+  | .imeth _ r as => efuel r + (as.map efuel).sum + 2
+  | .listE es => (es.map efuel).sum + 2
+
+def ifuel : Instr → Nat
+  | .kEval e => efuel e + 1
+  | .kIte t e => sfuel t + sfuel e + 2
+  | .kRepeatWhile _ b | .kRepeatTest _ b => sfuel b + 2
+  | .kForStart _ b | .kForBody _ _ b => sfuel b + 2
+  | _ => 1
+
+def sfuel : List Instr → Nat
+  | [] => 0
+  | i :: rest => ifuel i + sfuel rest
+end
+
+theorem sfuel_cons (i : Instr) (rest : List Instr) :
+    sfuel (i :: rest) = ifuel i + sfuel rest := rfl
+
+theorem sfuel_append (t rest : List Instr) :
+    sfuel (t ++ rest) ≤ sfuel t + sfuel rest := by
+  induction t with
+  | nil => simp [sfuel]
+  | cons a t ih => simp only [List.cons_append, sfuel] at *; omega
+
+theorem efuel_pos (e : Expr) : 1 ≤ efuel e := by
+  cases e <;> simp only [efuel, List.map_cons, List.sum_cons, List.sum_nil] at * <;> omega
+
+theorem ifuel_pos (i : Instr) : 1 ≤ ifuel i := by
+  cases i with
+  | kEval e => simp only [ifuel]; have := efuel_pos e; omega
+  | kIte t e => simp only [ifuel]; omega
+  | kRepeatWhile c b | kRepeatTest c b => simp only [ifuel]; omega
+  | kForStart x b | kForBody x vs b => simp only [ifuel]; omega
+  | kPrim1 p => cases p <;> simp only [ifuel] <;> omega
+  | kCall f n => simp only [ifuel]; omega
+  | kSet x => simp only [ifuel]; omega
+  | kPop => simp only [ifuel]; omega
+  | kAssert => simp only [ifuel]; omega
+  | kRet => simp only [ifuel]; omega
+  | kTest => simp only [ifuel]; omega
+  | kUnwrap => simp only [ifuel]; omega
+  | kIMeth nm n => simp only [ifuel]; omega
+  | kMkList n => simp only [ifuel]; omega
+  | kNewSlot sn => simp only [ifuel]; omega
+  | kTestVar x p => cases p <;> simp only [ifuel] <;> omega
+
+theorem sfuel_cons_gt (i : Instr) (rest : List Instr) :
+    sfuel rest < sfuel (i :: rest) := by
+  rw [sfuel_cons]
+  have := ifuel_pos i
+  omega
+
+/-- The kIte arms recurse on (branch ++ rest). -/
+theorem sfuel_ite_append_true (t e rest : List Instr) :
+    sfuel (t ++ rest) < sfuel (.kIte t e :: rest) := by
+  have h1 := sfuel_append t rest
+  have h2 : sfuel t < sfuel t + sfuel e + 2 := by omega
+  show sfuel (t ++ rest) < sfuel t + sfuel e + 2 + sfuel rest
+  omega
+
+theorem sfuel_ite_append_false (t e rest : List Instr) :
+    sfuel (e ++ rest) < sfuel (.kIte t e :: rest) := by
+  have h1 := sfuel_append e rest
+  show sfuel (e ++ rest) < sfuel t + sfuel e + 2 + sfuel rest
+  omega
+
+/-- The 1-for-1 binder-test rewrites: kEval (isX (nv x)) > kTestVar x p. -/
+theorem sfuel_testvar_lt (e : Expr) (x : «String») (p : Prim)
+    (h : efuel e = 2) (rest : List Instr) :
+    sfuel (.kTestVar x p :: rest) < sfuel (.kEval e :: rest) := by
+  simp only [sfuel, ifuel, h]
+  omega
 
 /-- Park a completion in a world; refuses double parking. -/
 def parkPending (p : Pending) (w : World) : Option World :=
@@ -436,9 +530,6 @@ def step1 (sigs : SigTable) (i : Instr) (w : World) : Option Worlds :=
           | _, _ => none
       | none => some [w]
   | .kCall f n =>
-      -- PARKING SPLITS over the callee's COMPLETION JUDGEMENT: one
-      -- world per listed alternative - each normal payload, and a
-      -- throw world only if the judgement says the callee can throw.
       match sigFind sigs f with
       | none => none
       | some (ps, retj) =>
@@ -454,8 +545,6 @@ def step1 (sigs : SigTable) (i : Instr) (w : World) : Option Worlds :=
                       some ((sigCompls sigs f).map (fun c =>
                         { w with σ := w.σ.drop n, pending := some c }))
   | .kSet x =>
-      -- PARKED DISCIPLINE: while a completion is parked, only the
-      -- self-test protocol may act
       match w.pending, w.σ with
       | none, t :: σ' => some [{ w with Γ := (x, t) :: w.Γ, σ := σ' }]
       | _, _ => none
@@ -464,9 +553,6 @@ def step1 (sigs : SigTable) (i : Instr) (w : World) : Option Worlds :=
       | none, _ :: σ' => some [{ w with σ := σ' }]
       | _, _ => none
   | .kTest =>
-      -- TESTING OBSERVES: parking already split the deliveries into
-      -- worlds; each world parks exactly one completion and gets its
-      -- EXACT verdict singleton
       match w.pending with
       | some (.normal _) =>
           some [{ w with σ := [.isValue (.boolean Bool.false)] :: w.σ }]
@@ -479,7 +565,6 @@ def step1 (sigs : SigTable) (i : Instr) (w : World) : Option Worlds :=
       | some .throw => some [{ w with σ := anyT :: w.σ, pending := none }]
       | none => none
   | .kIMeth nm n =>
-      -- PARKING SPLITS (same both-deliveries rule as kCall)
       match mopArity nm == some n with
       | false => none
       | true =>
@@ -499,29 +584,16 @@ def step1 (sigs : SigTable) (i : Instr) (w : World) : Option Worlds :=
       | none, some σ' => some [{ w with σ := [.anyValue .list] :: σ' }]
       | _, _ => none
   | .kNewSlot sn =>
-      if (slotOfName sn).isSome then
-        match w.pending, popTy anyT w.σ with
-        | none, some σ' => some [{ w with σ := [.anyValue .obj] :: σ' }]
-        | _, _ => none
-      else none
+      match slotOfName sn with
+      | none => none
+      | some _ =>
+          match w.pending, popTy anyT w.σ with
+          | none, some σ' => some [{ w with σ := [.anyValue .obj] :: σ' }]
+          | _, _ => none
   | _ => some [w]
 
-/-- Step every world through one stack instruction. -/
-def stepWorlds (sigs : SigTable) : Worlds → Instr → Option Worlds
-  | [], _ => some []
-  | w :: rest, i =>
-      match step1 sigs i w with
-      | none => none
-      | some us =>
-          match stepWorlds sigs rest i with
-          | none => none
-          | some urs => some (us ++ urs)
-termination_by ws _ => sizeOf ws
-
 /-- Correlated predicate tests: IsDataDescriptor(x) /
-    IsAccessorDescriptor(x) are decidable per EXACT desc atom
-    (field-set membership); everything else is undecided and
-    duplicated to both sides. -/
+    IsAccessorDescriptor(x) are decidable per EXACT desc atom. -/
 def predDecide (f : «String») : Option (VTy → Option Bool) :=
   match f with
   | "IsDataDescriptor" =>
@@ -534,59 +606,48 @@ def predDecide (f : «String») : Option (VTy → Option Bool) :=
         | _ => none)
   | _ => none
 
-/-- The decider for a correlated `IsX(x) is true` expression, if any. -/
-def predDecideEx : Expr → Option (VTy → Option Bool)
-  | .isBoolVal Bool.true (Expr.call f [Expr.nv _]) => predDecide f
-  | _ => none
-
-/-- Split worlds by a per-atom decider: determined atoms go to their
-    side (verdict singletons); undecided atoms are duplicated to both
-    sides (the runtime picks one). -/
-def splitWorldsP (x : «String») (dec : VTy → Option Bool)
-    (ws : Worlds) : Option Worlds :=
-  match ws.mapM (fun (w : World) =>
-    match tyLookup w.Γ x with
-    | none => none
-    | some S =>
-        let go (acc : Worlds × Worlds) (a : VTy) : Worlds × Worlds :=
-          match dec a with
-          | some Bool.true =>
-              (acc.1 ++ [{ Γ := (x, [a]) :: w.Γ, σ := [.isValue (.boolean Bool.true)] :: w.σ, pending := w.pending }], acc.2)
-          | some Bool.false =>
-              (acc.1, acc.2 ++ [{ Γ := (x, [a]) :: w.Γ, σ := [.isValue (.boolean Bool.false)] :: w.σ, pending := w.pending }])
-          | none =>
-              (acc.1 ++ [{ Γ := (x, [a]) :: w.Γ, σ := [.isValue (.boolean Bool.true)] :: w.σ, pending := w.pending }],
-               acc.2 ++ [{ Γ := (x, [a]) :: w.Γ, σ := [.isValue (.boolean Bool.false)] :: w.σ, pending := w.pending }])
-        let parts := S.foldl go ([], [])
-        let all := parts.1 ++ parts.2
-        if all.isEmpty then none else (some all : Option Worlds)) with
-  | none => none
-  | some wss => some (List.flatten wss)
-
-/-- Split ONE world at a test of x with then-type T. An unbound x
-    drops the world (its checkSeq continuation runs on no worlds and
-    so cannot be terminal - the rejection is structural). -/
+/-- Split ONE world at a shape test of x with then-type T. -/
 def split1 (x : «String») (T : Ty) (w : World) : Worlds :=
   match tyLookup w.Γ x with
   | none => []
   | some S =>
       (match meetTy S T with
        | [] => []
-       | _ => [{ Γ := (x, meetTy S T) :: w.Γ, σ := [.isValue (.boolean Bool.true)] :: w.σ, pending := w.pending }])
+       | _ => [{ Γ := (x, meetTy S T) :: w.Γ,
+                 σ := [.isValue (.boolean Bool.true)] :: w.σ,
+                 pending := w.pending }])
       ++ (match removeTy S T with
        | [] => []
-       | _ => [{ Γ := (x, removeTy S T) :: w.Γ, σ := [.isValue (.boolean Bool.false)] :: w.σ, pending := w.pending }])
+       | _ => [{ Γ := (x, removeTy S T) :: w.Γ,
+                 σ := [.isValue (.boolean Bool.false)] :: w.σ,
+                 pending := w.pending }])
 
-/-- Split worlds at a test of x with then-type T. -/
-def splitWorlds (x : «String») (T : Ty) (ws : Worlds) : Worlds :=
-  ws.flatMap (split1 x T)
+/-- Split ONE world by a per-atom predicate decider. -/
+def splitP1 (x : «String») (dec : VTy → Option Bool) (w : World) : Worlds :=
+  match tyLookup w.Γ x with
+  | none => []
+  | some S =>
+      let go (acc : Worlds) (a : VTy) : Worlds :=
+        match dec a with
+        | some Bool.true =>
+            acc ++ [{ Γ := (x, [a]) :: w.Γ,
+                      σ := [.isValue (.boolean Bool.true)] :: w.σ,
+                      pending := w.pending }]
+        | some Bool.false =>
+            acc ++ [{ Γ := (x, [a]) :: w.Γ,
+                      σ := [.isValue (.boolean Bool.false)] :: w.σ,
+                      pending := w.pending }]
+        | none =>
+            acc ++ [{ Γ := (x, [a]) :: w.Γ,
+                      σ := [.isValue (.boolean Bool.true)] :: w.σ,
+                      pending := w.pending },
+                    { Γ := (x, [a]) :: w.Γ,
+                      σ := [.isValue (.boolean Bool.false)] :: w.σ,
+                      pending := w.pending }]
+      S.foldl go []
 
 /- Loop join: every falls-world must come back to a REFINEMENT of
-    the loop-entry stack with no parked completion (neutrality);
-    the continuation runs from the entry stacks. Equality was too
-    strict: the runtime loop-exit stack refines the static entry
-    stack (canonical singletons below the static slots), never
-    equals it - the subject-reduction loop arms need ⊑. -/
+    the loop-entry stack with no parked completion (neutrality). -/
 def checkLoopBody (rbody : TCResult) (site : Instr)
     (σ₀ : List Ty) (k : Worlds → TCResult) : TCResult :=
   match rbody with
@@ -598,221 +659,209 @@ def checkLoopBody (rbody : TCResult) (site : Instr)
           && w.pending.isNone)
       if neutral then
         match k fb.falls with
-        | .flows fr => .flows { exits := fb.exits || fr.exits, throws := fb.throws || fr.throws, falls := fr.falls, assumes := fb.assumes ++ fr.assumes }
+        | .flows fr => .flows { exits := fb.exits || fr.exits,
+                                throws := fb.throws || fr.throws,
+                                falls := fr.falls,
+                                assumes := fb.assumes ++ fr.assumes }
         | res => res
       else .reject site "loop body is not stack-neutral"
 
-def checkSeq : SigTable → Ty → Worlds → List Instr → TCResult
-  | _, _, ws, [] => .flows { exits := Bool.false, throws := Bool.false, falls := ws, assumes := [] }
-  | _, r, ws, .kRet :: _ =>
-      -- every world returns: pending payload ⊑ r, or a throw
-      if ws.all (fun w =>
-        match w.pending with
-        | some (.normal t) => tmoves t r
-        | some .throw => Bool.true
-        | none => Bool.false) then
-        .flows { exits := Bool.true
-               , throws := ws.any (fun w =>
-                   match w.pending with
-                   | some .throw => Bool.true
-                   | _ => Bool.false)
-               , falls := [], assumes := [] }
-      else .reject .kRet ("kRet: payload does not match the frame's destiny r: "
-        ++ toString (ws.head?.map (fun w =>
-            toString (repr w.pending) ++ toString (repr w.σ)) |>.getD ""))
-  | sigs, r, ws, .kIte t e :: rest =>
-      -- dispatch each world on its verdict; split both-verdict worlds
-      let dispatch (w : World) : Option (Worlds × Worlds) :=
-        match w.σ with
-        | ts :: σ' =>
-            if ts.all (fun a => tmovesV a (.isValue (.boolean Bool.true))) then
-              some ([{ w with σ := σ' }], [])
-            else if ts.all (fun a => tmovesV a (.isValue (.boolean Bool.false))) then
-              some ([], [{ w with σ := σ' }])
-            else if ts.all (fun a => tmovesV a (.anyValue .bool)) then
-              some ([{ w with σ := σ' }], [{ w with σ := σ' }])
-            else none
-        | [] => none
-      match ws.mapM dispatch with
-      | none => .reject (.kIte t e) "kIte: verdict is not boolean"
-      | some pairs =>
-          let wsT := (pairs.map Prod.fst).flatten
-          let wsE := (pairs.map Prod.snd).flatten
-          match checkSeq sigs r wsT t, checkSeq sigs r wsE e with
-          | .reject site' why, _ => .reject site' why
-          | _, .reject site' why => .reject site' why
-          | .flows f₁, .flows f₂ =>
-              match checkSeq sigs r (f₁.falls ++ f₂.falls) rest with
-              | .flows fr =>
-                  .flows { exits := f₁.exits || f₂.exits || fr.exits
-                         , throws := f₁.throws || f₂.throws || fr.throws
-                         , falls := fr.falls
-                         , assumes := f₁.assumes ++ f₂.assumes ++ fr.assumes }
-              | res => res
-  | sigs, r, ws, .kEval (.const (.compl Bool.false pv)) :: rest =>
+/-- Result merge for forks: rejection dominates, otherwise the
+    summaries combine (exits/throws disjoin, falls/assumes append). -/
+def mergeTC : TCResult → TCResult → TCResult
+  | .reject s w, _ => .reject s w
+  | _, .reject s w => .reject s w
+  | .flows f₁, .flows f₂ =>
+      .flows { exits := f₁.exits || f₂.exits
+             , throws := f₁.throws || f₂.throws
+             , falls := f₁.falls ++ f₂.falls
+             , assumes := f₁.assumes ++ f₂.assumes }
+
+/-- The empty summary (fork-fold identity). -/
+def noFlows : TCResult :=
+  .flows { exits := Bool.false, throws := Bool.false, falls := [], assumes := [] }
+
+/-- Record an undischarged assert as proof debt on the result. -/
+def markDebt (why : «String») : TCResult → TCResult :=
+  fun res => match res with
+  | .flows f => .flows { f with assumes := why :: f.assumes }
+  | r => r
+
+def checkSeq : SigTable → Ty → World → List Instr → TCResult
+  | _, _, w, [] => .flows { exits := Bool.false, throws := Bool.false, falls := [w], assumes := [] }
+  | _, r, w, .kRet :: _ =>
+      -- the world returns: pending payload ⊑ r, or a throw
+      match w.pending with
+      | some (.normal t) =>
+          if tmoves t r then
+            .flows { exits := Bool.true, throws := Bool.false, falls := [], assumes := [] }
+          else
+            .reject .kRet ("kRet: payload does not match the frame's destiny r: "
+              ++ toString (toString (repr w.pending) ++ toString (repr w.σ)))
+      | some .throw =>
+          .flows { exits := Bool.true, throws := Bool.true, falls := [], assumes := [] }
+      | none =>
+          .reject .kRet ("kRet: payload does not match the frame's destiny r: "
+            ++ toString (toString (repr w.pending) ++ toString (repr w.σ)))
+  | sigs, r, w, .kIte t e :: rest =>
+      -- dispatch THE world on its verdict; fork a both-verdict world
+      match w.σ with
+      | ts :: σ' =>
+          if ts.all (fun a => tmovesV a (.isValue (.boolean Bool.true))) then
+            checkSeq sigs r { w with σ := σ' } (t ++ rest)
+          else if ts.all (fun a => tmovesV a (.isValue (.boolean Bool.false))) then
+            checkSeq sigs r { w with σ := σ' } (e ++ rest)
+          else if ts.all (fun a => tmovesV a (.anyValue .bool)) then
+            mergeTC (checkSeq sigs r { w with σ := σ' } (t ++ rest))
+              (checkSeq sigs r { w with σ := σ' } (e ++ rest))
+          else .reject (.kIte t e) "kIte: verdict is not boolean"
+      | [] => .reject (.kIte t e) "kIte: verdict is not boolean"
+  | sigs, r, w, .kEval (.const (.compl Bool.false pv)) :: rest =>
       -- a completion literal parks itself (never a stack atom)
-      match ws.mapM (fun w => parkPending (.normal [typeOfV pv]) w) with
+      match parkPending (.normal [typeOfV pv]) w with
       | none => .reject (.kEval (.const (.compl Bool.false pv))) "double-parked completion"
-      | some ws' => checkSeq sigs r ws' rest
-  | sigs, r, ws, .kEval (.const (.compl Bool.true _)) :: rest =>
-      match ws.mapM (fun w => parkPending .throw w) with
+      | some w' => checkSeq sigs r w' rest
+  | sigs, r, w, .kEval (.const (.compl Bool.true _)) :: rest =>
+      match parkPending .throw w with
       | none => .reject (.kEval (.const (.compl Bool.true JSValue.undefined))) "double-parked completion"
-      | some ws' => checkSeq sigs r ws' rest
-  | sigs, r, ws, .kEval (.varNotPresent x) :: rest =>
+      | some w' => checkSeq sigs r w' rest
+  | sigs, r, w, .kEval (.varNotPresent x) :: rest =>
       -- presence test: unbound means NOT present (verdict true);
       -- a binding splits (then: notPresent, else: the alternatives)
-      checkSeq sigs r (ws.flatMap (fun (w : World) =>
-        match tyLookup w.Γ x with
-        | none => [{ w with σ := [.isValue (.boolean Bool.true)] :: w.σ }]
-        | some S =>
-            (match meetTy S [.notPresent] with
-             | [] => []
-             | _ => [{ Γ := (x, meetTy S [.notPresent]) :: w.Γ,
-                       σ := [.isValue (.boolean Bool.true)] :: w.σ,
-                       pending := w.pending }])
-            ++ (match removeTy S [.notPresent] with
-             | [] => []
-             | _ => [{ Γ := (x, removeTy S [.notPresent]) :: w.Γ,
-                       σ := [.isValue (.boolean Bool.false)] :: w.σ,
-                       pending := w.pending }]))) rest
-  | sigs, r, ws, .kEval (.isObject (.nv x)) :: rest =>
-      checkSeq sigs r ws (.kTestVar x .pIsObj :: rest)
-  | sigs, r, ws, .kEval (.isNotObject (.nv x)) :: rest =>
-      checkSeq sigs r ws (.kTestVar x .pIsNotObj :: rest)
-  | sigs, r, ws, .kEval (.isNotUndefined (.nv x)) :: rest =>
-      checkSeq sigs r ws (.kTestVar x .pIsNotU :: rest)
-  | sigs, r, ws, .kEval (.isU (.nv x)) :: rest =>
-      checkSeq sigs r ws (.kTestVar x .pIsU :: rest)
-  | sigs, r, ws, .kEval (.hasCall (.nv x)) :: rest =>
-      checkSeq sigs r ws (.kTestVar x .pHasCall :: rest)
-  | sigs, r, ws, .kEval (.hasCtor (.nv x)) :: rest =>
-      checkSeq sigs r ws (.kTestVar x .pHasCtor :: rest)
-  | sigs, r, ws, .kEval (.isNull (.nv x)) :: rest =>
-      checkSeq sigs r ws (.kTestVar x .pIsNull :: rest)
-  | sigs, r, ws, .kEval (.isNullOrUnd (.nv x)) :: rest =>
-      checkSeq sigs r ws (.kTestVar x .pNullOrUnd :: rest)
-  | sigs, r, ws, .kEval (.isBoolVal Bool.true (.nv x)) :: rest =>
-      checkSeq sigs r ws (.kTestVar x .pIsTrue :: rest)
-  | sigs, r, ws, .kEval (.isBoolVal Bool.false (.nv x)) :: rest =>
-      checkSeq sigs r ws (.kTestVar x .pIsFalse :: rest)
-  | sigs, r, ws, .kEval (.isStrVal s (.nv x)) :: rest =>
-      checkSeq sigs r ws (.kTestVar x (.pIsStr s) :: rest)
-  | sigs, r, ws, .kEval (.isType ty (.nv x)) :: rest =>
-      checkSeq sigs r ws (.kTestVar x (.pIsType ty) :: rest)
-  | sigs, r, ws, .kEval (.hasField nm (.nv x)) :: rest =>
-      checkSeq sigs r ws (.kTestVar x (.pHasField nm) :: rest)
-  | sigs, r, ws, .kEval (.isBoolVal b (.call f [.nv x])) :: rest =>
+      match tyLookup w.Γ x with
+      | none => checkSeq sigs r { w with σ := [.isValue (.boolean Bool.true)] :: w.σ } rest
+      | some _ =>
+          (split1 x [.notPresent] w).foldl
+            (fun acc u => mergeTC acc (checkSeq sigs r u rest)) noFlows
+  | sigs, r, w, .kEval (.isObject (.nv x)) :: rest =>
+      checkSeq sigs r w (.kTestVar x .pIsObj :: rest)
+  | sigs, r, w, .kEval (.isNotObject (.nv x)) :: rest =>
+      checkSeq sigs r w (.kTestVar x .pIsNotObj :: rest)
+  | sigs, r, w, .kEval (.isNotUndefined (.nv x)) :: rest =>
+      checkSeq sigs r w (.kTestVar x .pIsNotU :: rest)
+  | sigs, r, w, .kEval (.isU (.nv x)) :: rest =>
+      checkSeq sigs r w (.kTestVar x .pIsU :: rest)
+  | sigs, r, w, .kEval (.hasCall (.nv x)) :: rest =>
+      checkSeq sigs r w (.kTestVar x .pHasCall :: rest)
+  | sigs, r, w, .kEval (.hasCtor (.nv x)) :: rest =>
+      checkSeq sigs r w (.kTestVar x .pHasCtor :: rest)
+  | sigs, r, w, .kEval (.isNull (.nv x)) :: rest =>
+      checkSeq sigs r w (.kTestVar x .pIsNull :: rest)
+  | sigs, r, w, .kEval (.isNullOrUnd (.nv x)) :: rest =>
+      checkSeq sigs r w (.kTestVar x .pNullOrUnd :: rest)
+  | sigs, r, w, .kEval (.isBoolVal Bool.true (.nv x)) :: rest =>
+      checkSeq sigs r w (.kTestVar x .pIsTrue :: rest)
+  | sigs, r, w, .kEval (.isBoolVal Bool.false (.nv x)) :: rest =>
+      checkSeq sigs r w (.kTestVar x .pIsFalse :: rest)
+  | sigs, r, w, .kEval (.isStrVal s (.nv x)) :: rest =>
+      checkSeq sigs r w (.kTestVar x (.pIsStr s) :: rest)
+  | sigs, r, w, .kEval (.isType ty (.nv x)) :: rest =>
+      checkSeq sigs r w (.kTestVar x (.pIsType ty) :: rest)
+  | sigs, r, w, .kEval (.hasField nm (.nv x)) :: rest =>
+      checkSeq sigs r w (.kTestVar x (.pHasField nm) :: rest)
+  | sigs, r, w, .kEval (.isBoolVal b (.call f [.nv x])) :: rest =>
       -- the machine fuses exactly the descriptor predicates natively
       if fusedPred f
-      then checkSeq sigs r ws (.kTestVar x (.pPred f b) :: rest)
+      then checkSeq sigs r w (.kTestVar x (.pPred f b) :: rest)
       else
-        match ws.mapM (fun (w : World) =>
-          match typeOfE sigs w.Γ (.isBoolVal b (.call f [.nv x])) with
-          | none => none
-          | some t => some { w with σ := t :: w.σ }) with
+        match typeOfE sigs w.Γ (.isBoolVal b (.call f [.nv x])) with
         | none => .reject (.kEval (.isBoolVal b (.call f [.nv x])))
             "ill-typed expression (unbound or bad args)"
-        | some ws' => markThrow sigs (.isBoolVal b (.call f [.nv x]))
-            (checkSeq sigs r ws' rest)
-  | sigs, r, ws, .kRepeatWhile c body :: rest =>
-      if ws.all (fun w =>
-        match typeOfE sigs w.Γ c with
-        | some t => tmoves t [.anyValue .bool]
-        | none => Bool.false) then
-        checkLoopBody (checkSeq sigs r ws body) (.kRepeatWhile c body)
-          (ws.head?.map World.σ |>.getD []) (fun wsf => checkSeq sigs r wsf rest)
-      else .reject (.kRepeatWhile c body) "loop condition is not boolean"
-  | sigs, r, ws, .kEval ex :: rest =>
+        | some t =>
+            markThrow sigs (.isBoolVal b (.call f [.nv x]))
+              (checkSeq sigs r { w with σ := t :: w.σ } rest)
+  | sigs, r, w, .kRepeatWhile c body :: rest =>
+      match typeOfE sigs w.Γ c with
+      | some t =>
+          if tmoves t [.anyValue .bool] then
+            checkLoopBody (checkSeq sigs r w body) (.kRepeatWhile c body)
+              w.σ (fun wsf => wsf.foldl (fun acc u => mergeTC acc (checkSeq sigs r u rest)) noFlows)
+          else .reject (.kRepeatWhile c body) "loop condition is not boolean"
+      | none => .reject (.kRepeatWhile c body) "loop condition is not boolean"
+  | sigs, r, w, .kEval ex :: rest =>
       -- summary arm: the call/imeth/list/ifield dust's NET world effect
       -- (args pushed then popped, payload parked then unwrapped) equals
       -- this push; the expansion-step preservation is a net-effect lemma
-      match ws.mapM (fun (w : World) =>
-        match typeOfE sigs w.Γ ex with
-        | none => none
-        | some t => some { w with σ := t :: w.σ }) with
+      match typeOfE sigs w.Γ ex with
       | none => .reject (.kEval ex) "ill-typed expression (unbound or bad args)"
-      | some ws' => markThrow sigs ex (checkSeq sigs r ws' rest)
-  | sigs, r, ws, .kTestVar x p :: rest =>
+      | some t =>
+          markThrow sigs ex (checkSeq sigs r { w with σ := t :: w.σ } rest)
+  | sigs, r, w, .kTestVar x p :: rest =>
       -- FUSED variable test: the Γ-correlated split site
       match p with
       | .pPred f _ =>
           match predDecide f with
           | some dec =>
-              match splitWorldsP x dec ws with
-              | none => .reject (.kTestVar x p) "ill-typed predicate test (unbound or empty split)"
-              | some ws' => checkSeq sigs r ws' rest
+              (splitP1 x dec w).foldl
+                (fun acc u => mergeTC acc (checkSeq sigs r u rest)) noFlows
           | none =>
-              match ws.mapM (fun (w : World) =>
-                match tyLookup w.Γ x with
-                | none => none
-                | some _ => some { w with σ := [.anyValue .bool] :: w.σ }) with
+              match tyLookup w.Γ x with
               | none => .reject (.kTestVar x p) "unbound variable"
-              | some ws' => checkSeq sigs r ws' rest
+              | some _ =>
+                  checkSeq sigs r { w with σ := [.anyValue .bool] :: w.σ } rest
       | _ =>
           match testTypeP p with
-          | some T => checkSeq sigs r (splitWorlds x T ws) rest
+          | some T =>
+              (split1 x T w).foldl
+                (fun acc u => mergeTC acc (checkSeq sigs r u rest)) noFlows
           | none =>
-              match ws.mapM (fun (w : World) =>
-                match tyLookup w.Γ x with
-                | none => none
-                | some _ => some { w with σ := [.anyValue .bool] :: w.σ }) with
+              match tyLookup w.Γ x with
               | none => .reject (.kTestVar x p) "unbound variable"
-              | some ws' => checkSeq sigs r ws' rest
-  | sigs, r, ws, .kRepeatTest c body :: rest =>
-      match ws.mapM (fun (w : World) => popTy [.anyValue .bool] w.σ) with
+              | some _ =>
+                  checkSeq sigs r { w with σ := [.anyValue .bool] :: w.σ } rest
+  | sigs, r, w, .kRepeatTest c body :: rest =>
+      match popTy [.anyValue .bool] w.σ with
       | none => .reject (.kRepeatTest c body) "loop verdict is not boolean"
-      | some ws' =>
-          let ws'' := ws.zip ws' |>.map (fun (w, σ') => { w with σ := σ' })
-          checkLoopBody (checkSeq sigs r ws'' body) (.kRepeatTest c body)
-            (ws''.head?.map World.σ |>.getD []) (fun wsf => checkSeq sigs r wsf rest)
-  | sigs, r, ws, .kForStart x body :: rest =>
-      match ws.mapM (fun (w : World) => popA (.anyValue .list) w.σ) with
+      | some σ' =>
+          checkLoopBody (checkSeq sigs r { w with σ := σ' } body) (.kRepeatTest c body)
+            σ' (fun wsf => wsf.foldl (fun acc u => mergeTC acc (checkSeq sigs r u rest)) noFlows)
+  | sigs, r, w, .kForStart x body :: rest =>
+      match popA (.anyValue .list) w.σ with
       | none => .reject (.kForStart x body) "for-each over a non-list"
-      | some ws' =>
-          let ws'' := (ws.zip ws').map (fun (w, σ') =>
-            { w with Γ := (x, langT) :: w.Γ, σ := σ' })
-          checkLoopBody (checkSeq sigs r ws'' body) (.kForStart x body)
-            (ws''.head?.map World.σ |>.getD []) (fun wsf => checkSeq sigs r wsf rest)
-  | sigs, r, ws, .kForBody x _ body :: rest =>
-      let ws' := ws.map (fun w => { w with Γ := (x, langT) :: w.Γ })
-      checkLoopBody (checkSeq sigs r ws' body) (.kForBody x [] body)
-        (ws'.head?.map World.σ |>.getD []) (fun wsf => checkSeq sigs r wsf rest)
-  | sigs, r, ws, .kAssert :: rest =>
-      -- asserts: the true-verdict worlds continue; false-verdict
-      -- worlds are ASSUMED away (proof debt recorded); an undecided
-      -- boolean continues with its false side assumed away
-      let rec step (w : World) : World × Bool :=
-        match w.σ with
-        | ts :: σ' =>
-            if ts.all (fun a => tmovesV a (.isValue (.boolean Bool.true))) then
-              ({ w with σ := σ' }, Bool.false)
-            else if ts.all (fun a => tmovesV a (.anyValue .bool)) then
-              ({ w with σ := σ' }, Bool.true)
-            else (w, Bool.true)   -- non-boolean verdict: fell-world
-        | [] => (w, Bool.true)
-      let stepped := ws.map step
-      let ws' := stepped.map Prod.fst
-      let anyAssumed := stepped.any Prod.snd
-      let desc :=
-        match rest.head? with
-        | _ => "assert obligation not discharged"
-      match checkSeq sigs r ws' rest with
-      | .flows fr =>
-          if anyAssumed then
-            .flows { fr with assumes := desc :: fr.assumes }
-          else .flows fr
-      | res => res
-  | sigs, r, ws, i :: rest =>
-      match stepWorlds sigs ws i with
+      | some σ' =>
+          checkLoopBody (checkSeq sigs r
+            { w with Γ := (x, langT) :: w.Γ, σ := σ' } body) (.kForStart x body)
+            σ' (fun wsf => wsf.foldl (fun acc u => mergeTC acc (checkSeq sigs r u rest)) noFlows)
+  | sigs, r, w, .kForBody x _ body :: rest =>
+      checkLoopBody (checkSeq sigs r { w with Γ := (x, langT) :: w.Γ } body)
+        (.kForBody x [] body)
+        w.σ (fun wsf => wsf.foldl (fun acc u => mergeTC acc (checkSeq sigs r u rest)) noFlows)
+  | sigs, r, w, .kAssert :: rest =>
+      -- assert: a true verdict discharges; an undecided boolean or a
+      -- non-boolean verdict continues with the debt recorded
+      match w.σ with
+      | ts :: σ' =>
+          if ts.all (fun a => tmovesV a (.isValue (.boolean Bool.true))) then
+            checkSeq sigs r { w with σ := σ' } rest
+          else if ts.all (fun a => tmovesV a (.anyValue .bool)) then
+            markDebt "assert obligation not discharged"
+              (checkSeq sigs r { w with σ := σ' } rest)
+          else
+            markDebt "assert obligation not discharged"
+              (checkSeq sigs r w rest)
+      | [] =>
+          markDebt "assert obligation not discharged" (checkSeq sigs r w rest)
+  | sigs, r, w, i :: rest =>
+      match step1 sigs i w with
       | none =>
-          .reject i ("world stack mismatch: "
-            ++ toString (ws.head?.map (fun w => repr w) |>.getD ""))
-      | some ws' => checkSeq sigs r ws' rest
-termination_by _ _ _ is => sizeOf is
-
+          .reject i ("world stack mismatch: " ++ toString (repr w))
+      | some ws' =>
+          ws'.foldl (fun acc u => mergeTC acc (checkSeq sigs r u rest)) noFlows
+termination_by _ _ _ is => sfuel is
+decreasing_by
+  all_goals
+    first
+      | exact sfuel_ite_append_true t e rest
+      | exact sfuel_ite_append_false t e rest
+      | exact sfuel_cons_gt _ _
+      | (simp only [sfuel_cons, ifuel, efuel]; omega)
+      | (simp only [sfuel_cons, ifuel]; omega)
+      | (exfalso; simp_all)
+      | omega
+      | (rename_i l; exact absurd rfl (by intro _; exact l.elim))
 
 def typecheckSeq (sigs : SigTable) (r : Ty) (Γ : TyEnv) (seq : List Instr) : TCResult :=
-  checkSeq sigs r [{ Γ := Γ, σ := [], pending := none }] seq
+  checkSeq sigs r { Γ := Γ, σ := [], pending := none } seq
 
 def typecheckAO (sigs : SigTable)
     (name : «String») (params : List «String») (body : List Instr) : Option TCResult :=
