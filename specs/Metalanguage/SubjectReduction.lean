@@ -78,7 +78,7 @@ def frameChecks (sigs : SigTable) (f : Fr) (p : Option Pending) : Prop :=
   | none => True   -- guarded by the outer conjunct
   | some (σ, _) =>
       match checkSeq sigs (sigRetTy sigs f.ret)
-        [{ Γ := envTyOf f.env, σ := σ, pending := p }] (normL f.stmts) with
+        [{ Γ := envTyOf f.env, σ := σ, pending := p }] f.stmts with
       | .flows fb => terminal fb = Bool.true  -- every world returns
       | _ => False
 
@@ -235,7 +235,7 @@ def closedRegistry (sigs : SigTable) (reg : AOReg) : Prop :=
 def certifies (sigs : SigTable) (name : «String») (ps : List «String»)
     (ts : List Ty) (prog : Prog) : Prop :=
   match checkSeq sigs (sigRetTy sigs name)
-      [{ Γ := zipTy ps ts, σ := [], pending := none }] (normL (compileSteps prog)) with
+      [{ Γ := zipTy ps ts, σ := [], pending := none }] (compileSteps prog) with
   | .flows fb =>
       terminal fb = Bool.true
         ∧ (fb.throws = Bool.true → complCanThrow (sigCompls sigs name) = Bool.true)
@@ -245,12 +245,12 @@ theorem certifies_flows_elim {sigs : SigTable} {name : «String»}
     {ps : List «String»} {ts : List Ty} {prog : Prog}
     (h : certifies sigs name ps ts prog) :
     ∃ fb, checkSeq sigs (sigRetTy sigs name)
-        [{ Γ := zipTy ps ts, σ := [], pending := none }] (normL (compileSteps prog))
+        [{ Γ := zipTy ps ts, σ := [], pending := none }] (compileSteps prog)
         = TCResult.flows fb ∧ terminal fb = Bool.true
         ∧ (fb.throws = Bool.true
             → complCanThrow (sigCompls sigs name) = Bool.true) := by
   cases hb : checkSeq sigs (sigRetTy sigs name)
-      [{ Γ := zipTy ps ts, σ := [], pending := none }] (normL (compileSteps prog)) with
+      [{ Γ := zipTy ps ts, σ := [], pending := none }] (compileSteps prog) with
   | flows fb =>
       simp only [certifies] at h
       rw [hb] at h
@@ -431,16 +431,13 @@ theorem type_safety_frames_nil_stmts {sigs : SigTable} {reg : AOReg} {r : Ty}
   | none => rw [hse] at hchk; exact hchk.elim
   | some sp =>
       rw [hse] at hchk
-      simp only [frameChecks, normL, checkSeq, terminal] at hchk
+      simp only [frameChecks, checkSeq, terminal] at hchk
       exact absurd hchk (by simp)
 
 /- ## Proof layer IV: checkSeq step identities (exact matches)
 
     Each machine push lands EXACTLY on the static push: consuming
     the instruction statically IS stepping the abstract world. -/
-
-theorem normL_cons (i : Instr) (rest : List Instr) :
-    normL (i :: rest) = normI i ++ normL rest := by rw [normL]
 
 theorem mapM_singleton {α β : Type} {f : α → Option β} (a : α) :
     List.mapM f [a] = (f a).map (fun b => [b]) := by
@@ -458,59 +455,47 @@ theorem markThrow_nothrow {sigs : SigTable} {ex : Expr}
 /-- kEval of a non-completion const: push its canonical singleton. -/
 theorem checkSeq_kEval_const {sigs : SigTable} {r : Ty} {W : World} {v : JSValue}
     {rest : List Instr} (hv : isCompl v = Bool.false) :
-    checkSeq sigs r [W] (normL (.kEval (.const v) :: rest))
-      = checkSeq sigs r [{ W with σ := [typeOfV v] :: W.σ }] (normL rest) := by
+    checkSeq sigs r [W] (.kEval (.const v) :: rest)
+      = checkSeq sigs r [{ W with σ := [typeOfV v] :: W.σ }] rest := by
   cases v with
   | compl b pv => simp [isCompl] at hv
   | undefined | null | boolean _ | number _ | str _ | obj _ | listV _ | descV _ =>
-      rw [normL_cons]
-      simp only [normI, checkSeq, typeOfE, typeOfV, mapM_singleton,
-                 List.cons_append, List.nil_append, Option.map]
+      simp only [checkSeq, typeOfE, typeOfV, mapM_singleton, Option.map]
       rw [markThrow_nothrow (by simp [exprCanThrow])]
 
 /-- kEval of a nat literal: push the singleton number. -/
 theorem checkSeq_kEval_nat {sigs : SigTable} {r : Ty} {W : World} {n : Nat}
     {rest : List Instr} :
-    checkSeq sigs r [W] (normL (.kEval (.nat n) :: rest))
+    checkSeq sigs r [W] (.kEval (.nat n) :: rest)
       = checkSeq sigs r
-          [{ W with σ := [VTy.isValue (.number (↑n : Int))] :: W.σ }]
-          (normL rest) := by
-  rw [normL_cons]
-  simp only [normI, checkSeq, typeOfE, mapM_singleton, Option.map,
-             List.cons_append, List.nil_append]
+          [{ W with σ := [VTy.isValue (.number (↑n : Int))] :: W.σ }] rest := by
+  simp only [checkSeq, typeOfE, mapM_singleton, Option.map]
   rw [markThrow_nothrow (by simp [exprCanThrow])]
 
 /-- kEval of a bound variable: push the looked-up (canonical) type. -/
 theorem checkSeq_kEval_nv {sigs : SigTable} {r : Ty} {W : World} {x : «String»}
     {v : JSValue} {rest : List Instr}
     (hΓ : tyLookup W.Γ x = some [typeOfV v]) :
-    checkSeq sigs r [W] (normL (.kEval (.nv x) :: rest))
-      = checkSeq sigs r [{ W with σ := [typeOfV v] :: W.σ }] (normL rest) := by
-  rw [normL_cons]
-  simp only [normI, checkSeq, typeOfE, hΓ, mapM_singleton, Option.map,
-             List.cons_append, List.nil_append]
+    checkSeq sigs r [W] (.kEval (.nv x) :: rest)
+      = checkSeq sigs r [{ W with σ := [typeOfV v] :: W.σ }] rest := by
+  simp only [checkSeq, typeOfE, hΓ, mapM_singleton, Option.map]
   rw [markThrow_nothrow (by simp [exprCanThrow])]
 
 /-- kPop: drop the top slot (the machine fells on an empty stack -
     those states are ill-typed and never reach this lemma). -/
 theorem checkSeq_kPop {sigs : SigTable} {r : Ty} {W : World} {ts : Ty} {σ' : List Ty}
     {rest : List Instr} (hpn : W.pending = none) (hσ : W.σ = ts :: σ') :
-    checkSeq sigs r [W] (normL (.kPop :: rest))
-      = checkSeq sigs r [{ W with σ := σ' }] (normL rest) := by
-  rw [normL_cons]
-  simp [normI, checkSeq, stepWorlds, step1, hσ, hpn, mapM_singleton, Option.map,
-        List.cons_append, List.nil_append]
+    checkSeq sigs r [W] (.kPop :: rest)
+      = checkSeq sigs r [{ W with σ := σ' }] rest := by
+  simp [checkSeq, stepWorlds, step1, hσ, hpn, mapM_singleton, Option.map]
 
 /-- kSet: bind the top slot into Γ. -/
 theorem checkSeq_kSet {sigs : SigTable} {r : Ty} {W : World} {x : «String»}
     {ts : Ty} {σ' : List Ty} {rest : List Instr}
     (hpn : W.pending = none) (hσ : W.σ = ts :: σ') :
-    checkSeq sigs r [W] (normL (.kSet x :: rest))
-      = checkSeq sigs r [{ Γ := (x, ts) :: W.Γ, σ := σ', pending := none }]
-          (normL rest) := by
-  rw [normL_cons]
-  simp [normI, checkSeq, stepWorlds, step1, hσ, hpn, mapM_singleton, Option.map,
-        List.cons_append, List.nil_append]
+    checkSeq sigs r [W] (.kSet x :: rest)
+      = checkSeq sigs r [{ Γ := (x, ts) :: W.Γ, σ := σ', pending := none }] rest := by
+  simp [checkSeq, stepWorlds, step1, hσ, hpn, mapM_singleton, Option.map]
 
 /- ## Proof layer V: the exact-match sr arms (head frame, above = none) -/
 
@@ -633,18 +618,16 @@ theorem isCompl_of_head {w : JSValue} {eval : List JSValue} {σ : List Ty}
     reject (the catch-all arm). -/
 theorem checkSeq_reject_kPop {sigs : SigTable} {r : Ty} {W : World}
     {rest : List Instr} (hbad : stepWorlds sigs [W] .kPop = none) :
-    ∃ why, checkSeq sigs r [W] (normL (.kPop :: rest))
+    ∃ why, checkSeq sigs r [W] (.kPop :: rest)
       = TCResult.reject .kPop why := by
-  rw [normL_cons]
-  simp only [List.cons_append, List.nil_append, normI, checkSeq, hbad]
+  simp only [checkSeq, hbad]
   exact ⟨_, rfl⟩
 
 theorem checkSeq_reject_kSet {sigs : SigTable} {r : Ty} {W : World} {x : «String»}
     {rest : List Instr} (hbad : stepWorlds sigs [W] (.kSet x) = none) :
-    ∃ why, checkSeq sigs r [W] (normL (.kSet x :: rest))
+    ∃ why, checkSeq sigs r [W] (.kSet x :: rest)
       = TCResult.reject (.kSet x) why := by
-  rw [normL_cons]
-  simp only [List.cons_append, List.nil_append, normI, checkSeq, hbad]
+  simp only [checkSeq, hbad]
   exact ⟨_, rfl⟩
 
 theorem sr_kPop {sigs : SigTable} {w : JSValue} {rest : List Instr}
@@ -661,14 +644,14 @@ theorem sr_kPop {sigs : SigTable} {w : JSValue} {rest : List Instr}
       | some p' =>
           exfalso
           rw [frameChecks] at hchk
-          simp only [hs, normL_cons, normI, List.cons_append, List.nil_append,
+          simp only [hs,
                      checkSeq, stepWorlds, step1, mapM_singleton, Option.map] at hchk
       | none =>
           cases σ₀ with
           | nil =>
               exfalso
               rw [frameChecks] at hchk
-              simp only [hs, normL_cons, normI, List.cons_append, List.nil_append,
+              simp only [hs,
                          checkSeq, stepWorlds, step1, mapM_singleton, Option.map] at hchk
           | cons ts σ' =>
               have hw : isCompl w = Bool.false := isCompl_of_head hs
@@ -710,14 +693,14 @@ theorem sr_kSet {sigs : SigTable} {x : «String»} {w : JSValue} {rest : List In
       | some p' =>
           exfalso
           rw [frameChecks] at hchk
-          simp only [hs, normL_cons, normI, List.cons_append, List.nil_append,
+          simp only [hs,
                      checkSeq, stepWorlds, step1, mapM_singleton, Option.map] at hchk
       | none =>
           cases σ₀ with
           | nil =>
               exfalso
               rw [frameChecks] at hchk
-              simp only [hs, normL_cons, normI, List.cons_append, List.nil_append,
+              simp only [hs,
                          checkSeq, stepWorlds, step1, mapM_singleton, Option.map] at hchk
           | cons ts σ' =>
               have hw : isCompl w = Bool.false := isCompl_of_head hs
@@ -750,46 +733,37 @@ theorem sr_kSet {sigs : SigTable} {x : «String»} {w : JSValue} {rest : List In
 
 theorem checkSeq_kTest_normal {sigs : SigTable} {r : Ty} {W : World} {t : Ty}
     {rest : List Instr} (hpn : W.pending = some (.normal t)) :
-    checkSeq sigs r [W] (normL (.kTest :: rest))
-      = checkSeq sigs r [{ W with σ := [.isValue (.boolean Bool.false)] :: W.σ }]
-          (normL rest) := by
-  rw [normL_cons]
-  simp only [List.cons_append, List.nil_append, normI, checkSeq, stepWorlds,
+    checkSeq sigs r [W] (.kTest :: rest)
+      = checkSeq sigs r [{ W with σ := [.isValue (.boolean Bool.false)] :: W.σ }] rest := by
+  simp only [checkSeq, stepWorlds,
              step1, mapM_singleton, Option.map, hpn, List.flatten_singleton]
 
 theorem checkSeq_kTest_throw {sigs : SigTable} {r : Ty} {W : World}
     {rest : List Instr} (hpn : W.pending = some Pending.throw) :
-    checkSeq sigs r [W] (normL (.kTest :: rest))
-      = checkSeq sigs r [{ W with σ := [.isValue (.boolean Bool.true)] :: W.σ }]
-          (normL rest) := by
-  rw [normL_cons]
-  simp only [List.cons_append, List.nil_append, normI, checkSeq, stepWorlds,
+    checkSeq sigs r [W] (.kTest :: rest)
+      = checkSeq sigs r [{ W with σ := [.isValue (.boolean Bool.true)] :: W.σ }] rest := by
+  simp only [checkSeq, stepWorlds,
              step1, mapM_singleton, Option.map, hpn, List.flatten_singleton]
 
 theorem checkSeq_kUnwrap_normal {sigs : SigTable} {r : Ty} {W : World} {t : Ty}
     {rest : List Instr} (hpn : W.pending = some (.normal t)) :
-    checkSeq sigs r [W] (normL (.kUnwrap :: rest))
-      = checkSeq sigs r [{ W with σ := t :: W.σ, pending := none }] (normL rest) := by
-  rw [normL_cons]
-  simp only [List.cons_append, List.nil_append, normI, checkSeq, stepWorlds,
+    checkSeq sigs r [W] (.kUnwrap :: rest)
+      = checkSeq sigs r [{ W with σ := t :: W.σ, pending := none }] rest := by
+  simp only [checkSeq, stepWorlds,
              step1, mapM_singleton, Option.map, hpn, List.flatten_singleton]
 
 theorem checkSeq_pWrapC {sigs : SigTable} {r : Ty} {W : World} {ts : Ty} {σ' : List Ty}
     {rest : List Instr} (hpn : W.pending = none) (hσ : W.σ = ts :: σ') :
-    checkSeq sigs r [W] (normL (.kPrim1 .pWrapC :: rest))
-      = checkSeq sigs r [{ W with σ := σ', pending := some (.normal ts) }]
-          (normL rest) := by
-  rw [normL_cons]
-  simp only [List.cons_append, List.nil_append, normI, checkSeq, stepWorlds,
+    checkSeq sigs r [W] (.kPrim1 .pWrapC :: rest)
+      = checkSeq sigs r [{ W with σ := σ', pending := some (.normal ts) }] rest := by
+  simp only [checkSeq, stepWorlds,
              step1, mapM_singleton, Option.map, parkPending, hpn, hσ, List.flatten_singleton]
 
 theorem checkSeq_pThrowC {sigs : SigTable} {r : Ty} {W : World} {ts : Ty} {σ' : List Ty}
     {rest : List Instr} (hpn : W.pending = none) (hσ : W.σ = ts :: σ') :
-    checkSeq sigs r [W] (normL (.kPrim1 .pThrowC :: rest))
-      = checkSeq sigs r [{ W with σ := σ', pending := some Pending.throw }]
-          (normL rest) := by
-  rw [normL_cons]
-  simp only [List.cons_append, List.nil_append, normI, checkSeq, stepWorlds,
+    checkSeq sigs r [W] (.kPrim1 .pThrowC :: rest)
+      = checkSeq sigs r [{ W with σ := σ', pending := some Pending.throw }] rest := by
+  simp only [checkSeq, stepWorlds,
              step1, mapM_singleton, Option.map, parkPending, hpn, hσ, List.flatten_singleton]
 
 /- ## Proof layer VII: the pending-protocol sr arms -/
@@ -924,14 +898,14 @@ theorem sr_pWrapC {sigs : SigTable} {v : JSValue} {rest : List Instr}
       | nil =>
           exfalso
           rw [frameChecks] at hchk
-          simp only [hs, normL_cons, normI, List.cons_append, List.nil_append,
+          simp only [hs,
                      checkSeq, stepWorlds, step1, mapM_singleton, Option.map, parkPending, List.flatten_singleton] at hchk
       | cons ts σ'' =>
           cases p₀ with
           | some p' =>
               exfalso
               rw [frameChecks] at hchk
-              simp only [hs, normL_cons, normI, List.cons_append, List.nil_append,
+              simp only [hs,
                          checkSeq, stepWorlds, step1, mapM_singleton, Option.map, parkPending, List.flatten_singleton] at hchk
           | none =>
               have hw : isCompl v = Bool.false := isCompl_of_head hs
@@ -975,14 +949,14 @@ theorem sr_pThrowC {sigs : SigTable} {v : JSValue} {rest : List Instr}
       | nil =>
           exfalso
           rw [frameChecks] at hchk
-          simp only [hs, normL_cons, normI, List.cons_append, List.nil_append,
+          simp only [hs,
                      checkSeq, stepWorlds, step1, mapM_singleton, Option.map, parkPending, List.flatten_singleton] at hchk
       | cons ts σ'' =>
           cases p₀ with
           | some p' =>
               exfalso
               rw [frameChecks] at hchk
-              simp only [hs, normL_cons, normI, List.cons_append, List.nil_append,
+              simp only [hs,
                          checkSeq, stepWorlds, step1, mapM_singleton, Option.map, parkPending, List.flatten_singleton] at hchk
           | none =>
               have hw : isCompl v = Bool.false := isCompl_of_head hs

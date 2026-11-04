@@ -381,6 +381,11 @@ def testType : Expr → Option Ty
   | .varNotPresent _ => some [.notPresent]
   | _ => none
 
+/-- The correlated-predicate stratum: these AO names fuse into
+    kTestVar (machine + checker agree on exactly this test). -/
+def fusedPred (f : «String») : Bool :=
+  f == "IsDataDescriptor" || f == "IsAccessorDescriptor"
+
 /-- The THEN-type of a fused variable test (per Prim). none = no
     refinement (undecided predicate: plain boolean push). -/
 def testTypeP : Prim → Option Ty
@@ -403,148 +408,6 @@ def testedVar : Expr → Option «String»
   | .isBoolVal _ (.nv x) | .isStrVal _ (.nv x) | .isType _ (.nv x)
   | .varNotPresent x => some x
   | _ => none
-
-/- ## Normalization: mirror the machine's macro rewrites
-
-    The machine never executes `kEval (call …)` or `kEval (isX …)` as
-    an atom - one fstep rewrites it into its dust. `normL` performs
-    the same rewrite system to a fixed point, so a pre-expansion
-    state and its dust successor normalize to the SAME list: the
-    static and machine consumptions align instruction-by-instruction.
-    The fused variable tests (`kTestVar`) keep their Γ-correlated
-    refinement through the rewrite. Loops re-arm exactly as the
-    machine does (kRepeatWhile = kEval c; kRepeatTest). -/
-
-mutual
-def eFuel : Expr → Nat
-  | .call _ as => eFuels as + 7
-  | .imeth _ recv args => eFuel recv + eFuels args + 8
-  | .listE es => eFuels es + 4
-  | .isObject e | .isNotObject e | .isNotUndefined e | .hasCall e
-  | .hasCtor e | .isU e | .isBoolVal _ e | .isStrVal _ e
-  | .isNullOrUnd e | .isNull e | .isType _ e | .hasField _ e
-  | .ifield _ e =>
-      eFuel e + 3
-  | _ => 1
-termination_by e => sizeOf e
-decreasing_by all_goals simp_wf <;> omega
-
-def eFuels : List Expr → Nat
-  | [] => 0
-  | e :: es => eFuel e + 1 + eFuels es
-termination_by es => sizeOf es
-decreasing_by all_goals simp_wf <;> omega
-end
-
-mutual
-def iFuel : Instr → Nat
-  | .kEval e => eFuel e + 1
-  | .kIte t e => 2 + iFuels t + iFuels e
-  | .kRepeatWhile c b => 5 + 2 * eFuel c + iFuels b
-  | .kRepeatTest c b => 2 + eFuel c + iFuels b
-  | .kForStart _ b | .kForBody _ _ b => 2 + iFuels b
-  | _ => 1
-termination_by is => sizeOf is
-decreasing_by all_goals simp_wf <;> omega
-
-def iFuels : List Instr → Nat
-  | [] => 0
-  | i :: is => iFuel i + iFuels is
-termination_by is => sizeOf is
-decreasing_by all_goals simp_wf <;> omega
-end
-
-theorem iFuel_pos (i : Instr) : 0 < iFuel i := by
-  cases i <;> simp only [iFuel] <;> omega
-
-theorem iFuels_cons (i : Instr) (is : List Instr) :
-    iFuels (i :: is) = iFuel i + iFuels is := by rw [iFuels]
-
-theorem iFuels_append (l₁ l₂ : List Instr) :
-    iFuels (l₁ ++ l₂) = iFuels l₁ + iFuels l₂ := by
-  induction l₁ with
-  | nil => simp [iFuels]
-  | cons i rest ih => simp [iFuels, ih]; omega
-
-theorem iFuels_kEval_map (as : List Expr) :
-    iFuels (as.map Instr.kEval) = eFuels as := by
-  induction as with
-  | nil => simp [iFuels, eFuels]
-  | cons a rest ih => simp [iFuels, iFuel, eFuels, ih]
-
-/-- The correlated-predicate stratum: these AO names fuse into
-    kTestVar (machine + normalizer agree on exactly this test). -/
-def fusedPred (f : «String») : Bool :=
-  f == "IsDataDescriptor" || f == "IsAccessorDescriptor"
-
-/- Normalize one instruction to its fully-expanded form (mirroring
-    the machine's macro rewrites). -/
-mutual
-def normI : Instr → List Instr
-  | .kEval (.isObject (.nv x)) => [.kTestVar x .pIsObj]
-  | .kEval (.isNotObject (.nv x)) => [.kTestVar x .pIsNotObj]
-  | .kEval (.isNotUndefined (.nv x)) => [.kTestVar x .pIsNotU]
-  | .kEval (.isU (.nv x)) => [.kTestVar x .pIsU]
-  | .kEval (.hasCall (.nv x)) => [.kTestVar x .pHasCall]
-  | .kEval (.hasCtor (.nv x)) => [.kTestVar x .pHasCtor]
-  | .kEval (.isNull (.nv x)) => [.kTestVar x .pIsNull]
-  | .kEval (.isNullOrUnd (.nv x)) => [.kTestVar x .pNullOrUnd]
-  | .kEval (.isBoolVal b (.nv x)) =>
-      [.kTestVar x (if b then .pIsTrue else .pIsFalse)]
-  | .kEval (.isStrVal s (.nv x)) => [.kTestVar x (.pIsStr s)]
-  | .kEval (.isType ty (.nv x)) => [.kTestVar x (.pIsType ty)]
-  | .kEval (.hasField nm (.nv x)) => [.kTestVar x (.pHasField nm)]
-  | .kEval (.isBoolVal b (.call f [.nv x])) =>
-      if fusedPred f then [.kTestVar x (.pPred f b)]
-      else normL [.kEval (.call f [.nv x]),
-                  .kPrim1 (if b then .pIsTrue else .pIsFalse)]
-  | .kEval (.call f as) =>
-      normL (as.map Instr.kEval
-        ++ [.kCall f as.length, .kTest, .kIte [.kRet] [.kUnwrap]])
-  | .kEval (.imeth nm recv args) =>
-      normL ([.kEval recv] ++ args.map Instr.kEval
-        ++ [.kIMeth nm args.length, .kTest, .kIte [.kRet] [.kUnwrap]])
-  | .kEval (.ifield nm e) => normL [.kEval e, .kPrim1 (.pDescField nm)]
-  | .kEval (.listE es) => normL (es.map Instr.kEval ++ [.kMkList es.length])
-  | .kEval (.isObject e) => normL [.kEval e, .kPrim1 .pIsObj]
-  | .kEval (.isNotObject e) => normL [.kEval e, .kPrim1 .pIsNotObj]
-  | .kEval (.isNotUndefined e) => normL [.kEval e, .kPrim1 .pIsNotU]
-  | .kEval (.isU e) => normL [.kEval e, .kPrim1 .pIsU]
-  | .kEval (.hasCall e) => normL [.kEval e, .kPrim1 .pHasCall]
-  | .kEval (.hasCtor e) => normL [.kEval e, .kPrim1 .pHasCtor]
-  | .kEval (.isBoolVal b e) =>
-      normL [.kEval e, .kPrim1 (if b then .pIsTrue else .pIsFalse)]
-  | .kEval (.isStrVal s e) => normL [.kEval e, .kPrim1 (.pIsStr s)]
-  | .kEval (.hasField nm e) => normL [.kEval e, .kPrim1 (.pHasField nm)]
-  | .kEval (.isType ty e) => normL [.kEval e, .kPrim1 (.pIsType ty)]
-  | .kEval (.isNull e) => normL [.kEval e, .kPrim1 .pIsNull]
-  | .kEval (.isNullOrUnd e) => normL [.kEval e, .kPrim1 .pNullOrUnd]
-  | .kRepeatWhile c body => normL [.kEval c, .kRepeatTest c body]
-  | .kIte t e => [.kIte (normL t) (normL e)]
-  | .kRepeatTest c b => [.kRepeatTest c (normL b)]
-  | .kForStart x b => [.kForStart x (normL b)]
-  | .kForBody x vs b => [.kForBody x vs (normL b)]
-  | i => [i]
-termination_by is => iFuel is
-decreasing_by
-  all_goals
-    simp only [iFuel, eFuel, eFuels, iFuels, iFuels_kEval_map, iFuels_append,
-               List.map_append, List.map_cons, List.sum_cons, List.sum_nil] at *
-  all_goals
-    try simp only [iFuel, eFuel, eFuels, iFuels, iFuels_kEval_map, iFuels_append,
-                   iFuels_cons, List.map_append, List.map_cons, List.sum_cons,
-                   List.sum_nil] at *
-  all_goals omega
-
-/-- Normalize a whole instruction list. -/
-def normL : List Instr → List Instr
-  | [] => []
-  | i :: is => normI i ++ normL is
-termination_by is => 1 + iFuels is
-decreasing_by
-  · rw [iFuels_cons]; omega
-  · rw [iFuels_cons]; have := iFuel_pos i; omega
-end
 
 /- ## The world-stepping checker -/
 
@@ -802,8 +665,57 @@ def checkSeq : SigTable → Ty → Worlds → List Instr → TCResult
              | _ => [{ Γ := (x, removeTy S [.notPresent]) :: w.Γ,
                        σ := [.isValue (.boolean Bool.false)] :: w.σ,
                        pending := w.pending }]))) rest
+  | sigs, r, ws, .kEval (.isObject (.nv x)) :: rest =>
+      checkSeq sigs r ws (.kTestVar x .pIsObj :: rest)
+  | sigs, r, ws, .kEval (.isNotObject (.nv x)) :: rest =>
+      checkSeq sigs r ws (.kTestVar x .pIsNotObj :: rest)
+  | sigs, r, ws, .kEval (.isNotUndefined (.nv x)) :: rest =>
+      checkSeq sigs r ws (.kTestVar x .pIsNotU :: rest)
+  | sigs, r, ws, .kEval (.isU (.nv x)) :: rest =>
+      checkSeq sigs r ws (.kTestVar x .pIsU :: rest)
+  | sigs, r, ws, .kEval (.hasCall (.nv x)) :: rest =>
+      checkSeq sigs r ws (.kTestVar x .pHasCall :: rest)
+  | sigs, r, ws, .kEval (.hasCtor (.nv x)) :: rest =>
+      checkSeq sigs r ws (.kTestVar x .pHasCtor :: rest)
+  | sigs, r, ws, .kEval (.isNull (.nv x)) :: rest =>
+      checkSeq sigs r ws (.kTestVar x .pIsNull :: rest)
+  | sigs, r, ws, .kEval (.isNullOrUnd (.nv x)) :: rest =>
+      checkSeq sigs r ws (.kTestVar x .pNullOrUnd :: rest)
+  | sigs, r, ws, .kEval (.isBoolVal Bool.true (.nv x)) :: rest =>
+      checkSeq sigs r ws (.kTestVar x .pIsTrue :: rest)
+  | sigs, r, ws, .kEval (.isBoolVal Bool.false (.nv x)) :: rest =>
+      checkSeq sigs r ws (.kTestVar x .pIsFalse :: rest)
+  | sigs, r, ws, .kEval (.isStrVal s (.nv x)) :: rest =>
+      checkSeq sigs r ws (.kTestVar x (.pIsStr s) :: rest)
+  | sigs, r, ws, .kEval (.isType ty (.nv x)) :: rest =>
+      checkSeq sigs r ws (.kTestVar x (.pIsType ty) :: rest)
+  | sigs, r, ws, .kEval (.hasField nm (.nv x)) :: rest =>
+      checkSeq sigs r ws (.kTestVar x (.pHasField nm) :: rest)
+  | sigs, r, ws, .kEval (.isBoolVal b (.call f [.nv x])) :: rest =>
+      -- the machine fuses exactly the descriptor predicates natively
+      if fusedPred f
+      then checkSeq sigs r ws (.kTestVar x (.pPred f b) :: rest)
+      else
+        match ws.mapM (fun (w : World) =>
+          match typeOfE sigs w.Γ (.isBoolVal b (.call f [.nv x])) with
+          | none => none
+          | some t => some { w with σ := t :: w.σ }) with
+        | none => .reject (.kEval (.isBoolVal b (.call f [.nv x])))
+            "ill-typed expression (unbound or bad args)"
+        | some ws' => markThrow sigs (.isBoolVal b (.call f [.nv x]))
+            (checkSeq sigs r ws' rest)
+  | sigs, r, ws, .kRepeatWhile c body :: rest =>
+      if ws.all (fun w =>
+        match typeOfE sigs w.Γ c with
+        | some t => tmoves t [.anyValue .bool]
+        | none => Bool.false) then
+        checkLoopBody (checkSeq sigs r ws body) (.kRepeatWhile c body)
+          (ws.head?.map World.σ |>.getD []) (fun wsf => checkSeq sigs r wsf rest)
+      else .reject (.kRepeatWhile c body) "loop condition is not boolean"
   | sigs, r, ws, .kEval ex :: rest =>
-      -- post-normalization only atomic pushes reach here
+      -- summary arm: the call/imeth/list/ifield dust's NET world effect
+      -- (args pushed then popped, payload parked then unwrapped) equals
+      -- this push; the expansion-step preservation is a net-effect lemma
       match ws.mapM (fun (w : World) =>
         match typeOfE sigs w.Γ ex with
         | none => none
@@ -888,8 +800,9 @@ def checkSeq : SigTable → Ty → Worlds → List Instr → TCResult
       | some ws' => checkSeq sigs r ws' rest
 termination_by _ _ _ is => sizeOf is
 
+
 def typecheckSeq (sigs : SigTable) (r : Ty) (Γ : TyEnv) (seq : List Instr) : TCResult :=
-  checkSeq sigs r [{ Γ := Γ, σ := [], pending := none }] (normL seq)
+  checkSeq sigs r [{ Γ := Γ, σ := [], pending := none }] seq
 
 def typecheckAO (sigs : SigTable)
     (name : «String») (params : List «String») (body : List Instr) : Option TCResult :=
