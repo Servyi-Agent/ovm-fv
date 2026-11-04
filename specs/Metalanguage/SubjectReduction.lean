@@ -1477,3 +1477,425 @@ theorem popArgs_mono {ps σ' σ : List Ty}
   have hcover : stackLe (σ'.take ps.length).reverse (σ.take ps.length).reverse :=
     stackLe_reverse (stackLe_take hcov ps.length)
   exact leTy_mono (leTy_of_stackLe hcover) h.2
+
+/- ## Proof layer XII: step1_mono (the per-world static step) -/
+
+theorem pendLe_refl (p : Option Pending) : pendLe p p := by
+  cases p with
+  | none => trivial
+  | some q =>
+      cases q with
+      | normal t => exact tmoves_refl t
+      | throw => trivial
+
+theorem pendLe_none {p' p : Option Pending} (h : pendLe p' p) (hp : p = none) :
+    p' = none := by
+  cases p' with
+  | none => rfl
+  | some q =>
+      cases p with
+      | none => exact absurd (h) (by simp [pendLe] at *)
+      | some q₂ => exact absurd hp (by simp)
+
+theorem step1_prim_mono {sigs : SigTable} {p : Prim} {w' w : World}
+    (hle : worldLe w' w) {ws₂ : Worlds} (hst : step1 sigs (.kPrim1 p) w = some ws₂) :
+    ∃ ws₂', step1 sigs (.kPrim1 p) w' = some ws₂' ∧ worldsLe ws₂' ws₂ := by
+  obtain ⟨hΓ, hσ, hp⟩ := hle
+  cases p with
+
+      | pWrapC =>
+          simp only [step1] at hst
+          cases hsl : w.σ with
+          | nil => rw [hsl] at hst; dsimp only at hst; cases hst
+          | cons t σ₁ =>
+              rw [hsl] at hst
+              cases hpn : w.pending with
+              | some q => rw [hpn] at hst; cases hst
+              | none =>
+                  rw [hpn] at hst
+                  simp only [parkPending] at hst
+                  cases hst
+                  have hp' : w'.pending = none := pendLe_none hp hpn
+                  rw [hsl] at hσ
+                  cases hs : w'.σ with
+                  | nil => rw [hs] at hσ; exact absurd hσ.1 (by simp)
+                  | cons t' σ₁' =>
+                      rw [hs] at hσ
+                      obtain ⟨hrest, hhead⟩ := stackLe_cons hσ
+                      refine ⟨[{ w' with σ := σ₁', pending := some (.normal t') }],
+                        by simp only [step1, hs, hp', parkPending, Option.map_some], ?_⟩
+                      intro u hu
+                      simp only [List.mem_singleton] at hu
+                      subst u
+                      exact ⟨_, List.Mem.head _, hΓ, hrest, hhead⟩
+      | pThrowC =>
+          simp only [step1] at hst
+          cases hsl : w.σ with
+          | nil => rw [hsl] at hst; dsimp only at hst; cases hst
+          | cons t σ₁ =>
+              rw [hsl] at hst
+              cases hpn : w.pending with
+              | some q => rw [hpn] at hst; cases hst
+              | none =>
+                  rw [hpn] at hst
+                  simp only [parkPending] at hst
+                  cases hst
+                  have hp' : w'.pending = none := pendLe_none hp hpn
+                  rw [hsl] at hσ
+                  cases hs : w'.σ with
+                  | nil => rw [hs] at hσ; exact absurd hσ.1 (by simp)
+                  | cons t' σ₁' =>
+                      rw [hs] at hσ
+                      obtain ⟨hrest, _⟩ := stackLe_cons hσ
+                      refine ⟨[{ w' with σ := σ₁', pending := some .throw }],
+                        by simp only [step1, hs, hp', parkPending, Option.map_some], ?_⟩
+                      intro u hu
+                      simp only [List.mem_singleton] at hu
+                      subst u
+                      refine ⟨_, List.Mem.head _, hΓ, hrest, by trivial⟩
+      | pPred f b =>
+          simp only [step1, primTys] at hst
+          cases hst
+          exact ⟨[w'], by simp [step1, primTys], by
+            intro u hu
+            simp only [List.mem_singleton] at hu
+            subst hu
+            exact ⟨w, List.Mem.head _, hΓ, hσ, hp⟩⟩
+      | pIsObj | pIsNotObj | pIsNotU | pHasCall | pHasCtor | pIsU
+      | pIsTrue | pIsFalse | pNullOrUnd | pIsNull | pIsType s | pHasField s
+      | pIsStr s =>
+          -- primTys = (anyT, [.anyValue .bool]): pop any, push the
+          -- boolean union (EQUAL on both sides)
+          simp only [step1, primTys] at hst
+          cases hpn : w.pending with
+          | some q => rw [hpn] at hst; cases hst
+          | none =>
+              have hp' : w'.pending = none := pendLe_none hp hpn
+              rw [hpn] at hst
+              try dsimp only at hst
+              cases hpop : popTy anyT w.σ with
+              | none => rw [hpop] at hst; cases hst
+              | some σ₂ =>
+                  rw [hpop] at hst
+                  cases hst
+                  obtain ⟨σ₂', hpop', hc₂⟩ := popTy_mono hσ hpop
+                  refine ⟨[{ w' with σ := [.anyValue .bool] :: σ₂' }], by
+                    simp only [step1, primTys, hp', hpop'], ?_⟩
+                  intro u hu
+                  simp only [List.mem_singleton] at hu
+                  subst u
+                  exact ⟨{ w with σ := [.anyValue .bool] :: σ₂, pending := none },
+                    List.Mem.head _, hΓ, stackLe_cons_same hc₂, by rw [hp']; exact pendLe_refl _⟩
+      | pDescField s =>
+          -- tout depends on s; mono only needs tin/tout EQUAL on both
+          -- sides, so abstract over the primTys decomposition
+          simp only [step1] at hst
+          generalize hpt : primTys (Prim.pDescField s) = pr at hst
+          cases pr with
+          | none =>
+              exfalso
+              dsimp only at hst
+              cases hst
+              match hs : s with
+              | "GetPrototypeOf" | "Value" | "Getter" | "Setter"
+              | "Writable" | "Enumerable" | "Configurable" =>
+                  simp [primTys] at hpt
+              | _ => simp [primTys] at hpt
+          | some pr₂ =>
+              obtain ⟨tin, tout⟩ := pr₂
+              dsimp only at hst
+              cases hpn : w.pending with
+              | some q => rw [hpn] at hst; cases hst
+              | none =>
+                  have hp' : w'.pending = none := pendLe_none hp hpn
+                  rw [hpn] at hst
+                  cases hpop : popTy tin w.σ with
+                  | none => rw [hpop] at hst; cases hst
+                  | some σ₂ =>
+                      rw [hpop] at hst
+                      cases hst
+                      obtain ⟨σ₂', hpop', hc₂⟩ := popTy_mono hσ hpop
+                      refine ⟨[{ w' with σ := tout :: σ₂' }], by
+                        simp only [step1, hpt, hp', hpop'], ?_⟩
+                      intro u hu
+                      simp only [List.mem_singleton] at hu
+                      subst u
+                      exact ⟨{ w with σ := tout :: σ₂, pending := none },
+                        List.Mem.head _, hΓ, stackLe_cons_same hc₂,
+                        by rw [hp']; exact pendLe_refl _⟩
+
+theorem step1_mono {sigs : SigTable} {i : Instr} {w' w : World}
+    (hle : worldLe w' w) {ws₂ : Worlds} (hst : step1 sigs i w = some ws₂) :
+    ∃ ws₂', step1 sigs i w' = some ws₂' ∧ worldsLe ws₂' ws₂ := by
+  obtain ⟨hΓ, hσ, hp⟩ := hle
+  cases i with
+  | kEval e | kIte t e | kAssert | kRet | kRepeatWhile c body
+  | kRepeatTest c body | kForStart x body | kForBody x vs body
+  | kTestVar x p =>
+      simp only [step1] at hst
+      cases hst
+      exact ⟨[w'], by simp [step1], by
+        intro u hu
+        simp only [List.mem_singleton] at hu
+        subst hu
+        exact ⟨w, List.Mem.head _, hΓ, hσ, hp⟩⟩
+  | kPrim1 p => exact step1_prim_mono ⟨hΓ, hσ, hp⟩ hst
+  | kSet x =>
+      simp only [step1] at hst
+      cases hpn : w.pending with
+      | some q => rw [hpn] at hst; cases hst
+      | none =>
+          have hp' : w'.pending = none := pendLe_none hp hpn
+          rw [hpn] at hst
+          cases hsl : w.σ with
+          | nil => rw [hsl] at hst; cases hst
+          | cons t σ₁ =>
+              rw [hsl] at hst
+              cases hst
+              rw [hsl] at hσ
+              cases hs : w'.σ with
+              | nil => rw [hs] at hσ; exact absurd hσ.1 (by simp)
+              | cons t' σ₁' =>
+                  rw [hs] at hσ
+                  obtain ⟨hrest, hhead⟩ := stackLe_cons hσ
+                  refine ⟨[{ w' with Γ := (x, t') :: w'.Γ, σ := σ₁' }],
+                    by simp only [step1, hp', hs], ?_⟩
+                  intro u hu
+                  simp only [List.mem_singleton] at hu
+                  subst u
+                  exact ⟨_, List.Mem.head _,
+                    envLe_cons hhead hΓ, hrest, by rw [hp']; exact pendLe_refl _⟩
+  | kPop =>
+      simp only [step1] at hst
+      cases hpn : w.pending with
+      | some q => rw [hpn] at hst; cases hst
+      | none =>
+          have hp' : w'.pending = none := pendLe_none hp hpn
+          rw [hpn] at hst
+          cases hsl : w.σ with
+          | nil => rw [hsl] at hst; cases hst
+          | cons t σ₁ =>
+              rw [hsl] at hst
+              cases hst
+              rw [hsl] at hσ
+              cases hs : w'.σ with
+              | nil => rw [hs] at hσ; exact absurd hσ.1 (by simp)
+              | cons t' σ₁' =>
+                  rw [hs] at hσ
+                  obtain ⟨hrest, _⟩ := stackLe_cons hσ
+                  refine ⟨[{ w' with σ := σ₁' }],
+                    by simp only [step1, hp', hs], ?_⟩
+                  intro u hu
+                  simp only [List.mem_singleton] at hu
+                  subst u
+                  exact ⟨_, List.Mem.head _, hΓ, hrest, by rw [hp']; exact pendLe_refl _⟩
+  | kTest =>
+      simp only [step1] at hst
+      cases hpn : w.pending with
+      | none => rw [hpn] at hst; cases hst
+      | some q =>
+          cases q with
+          | normal t =>
+              rw [show w.pending = some (.normal t) from hpn] at hst
+              cases hst
+              cases hpn' : w'.pending with
+              | none =>
+                  rw [hpn'] at hp
+                  rw [hpn] at hp
+                  exact absurd hp (by simp [pendLe])
+              | some q' =>
+                  cases q' with
+                  | normal t' =>
+                      refine ⟨[{ w' with σ := [.isValue (.boolean Bool.false)] :: w'.σ }],
+                        by simp only [step1, hpn'], ?_⟩
+                      intro u hu
+                      simp only [List.mem_singleton] at hu
+                      subst u
+                      exact ⟨_, List.Mem.head _, hΓ, stackLe_cons_same hσ,
+                        by rw [hpn] at hp; exact hp⟩
+                  | throw =>
+                      rw [hpn'] at hp
+                      rw [hpn] at hp
+                      exact absurd hp (by simp [pendLe])
+          | throw =>
+              rw [show w.pending = some Pending.throw from hpn] at hst
+              cases hst
+              cases hpn' : w'.pending with
+              | none =>
+                  rw [hpn'] at hp
+                  rw [hpn] at hp
+                  exact absurd hp (by simp [pendLe])
+              | some q' =>
+                  cases q' with
+                  | normal t' =>
+                      rw [hpn'] at hp
+                      rw [hpn] at hp
+                      exact absurd hp (by simp [pendLe])
+                  | throw =>
+                      refine ⟨[{ w' with σ := [.isValue (.boolean Bool.true)] :: w'.σ }],
+                        by simp only [step1, hpn'], ?_⟩
+                      intro u hu
+                      simp only [List.mem_singleton] at hu
+                      subst u
+                      exact ⟨_, List.Mem.head _, hΓ, stackLe_cons_same hσ,
+                        by rw [hpn] at hp; exact hp⟩
+  | kUnwrap =>
+      simp only [step1] at hst
+      cases hpn : w.pending with
+      | none => rw [hpn] at hst; cases hst
+      | some q =>
+          cases q with
+          | normal t =>
+              rw [show w.pending = some (.normal t) from hpn] at hst
+              cases hst
+              cases hpn' : w'.pending with
+              | none =>
+                  rw [hpn'] at hp
+                  rw [hpn] at hp
+                  exact absurd hp (by simp [pendLe])
+              | some q' =>
+                  cases q' with
+                  | normal t' =>
+                      refine ⟨[{ w' with σ := t' :: w'.σ, pending := none }],
+                        by simp only [step1, hpn'], ?_⟩
+                      intro u hu
+                      simp only [List.mem_singleton] at hu
+                      subst u
+                      have hpp : pendLe w'.pending w.pending := hp
+                      rw [hpn'] at hpp
+                      rw [hpn] at hpp
+                      exact ⟨_, List.Mem.head _, hΓ, stackLe_cons_le hσ hpp, by trivial⟩
+                  | throw =>
+                      rw [hpn'] at hp
+                      rw [hpn] at hp
+                      exact absurd hp (by simp [pendLe])
+          | throw =>
+              rw [show w.pending = some Pending.throw from hpn] at hst
+              cases hst
+              cases hpn' : w'.pending with
+              | none =>
+                  rw [hpn'] at hp
+                  rw [hpn] at hp
+                  exact absurd hp (by simp [pendLe])
+              | some q' =>
+                  cases q' with
+                  | normal t' =>
+                      rw [hpn'] at hp
+                      rw [hpn] at hp
+                      exact absurd hp (by simp [pendLe])
+                  | throw =>
+                      refine ⟨[{ w' with σ := anyT :: w'.σ, pending := none }],
+                        by simp only [step1, hpn'], ?_⟩
+                      intro u hu
+                      simp only [List.mem_singleton] at hu
+                      subst u
+                      exact ⟨_, List.Mem.head _, hΓ, stackLe_cons_same hσ, by trivial⟩
+  | kMkList n =>
+      simp only [step1] at hst
+      cases hpn : w.pending with
+      | some q => rw [hpn] at hst; cases hst
+      | none =>
+          have hp' : w'.pending = none := pendLe_none hp hpn
+          rw [hpn] at hst
+          cases hpop : popTyN n anyT w.σ with
+          | none => rw [hpop] at hst; cases hst
+          | some σ₂ =>
+              rw [hpop] at hst
+              cases hst
+              obtain ⟨σ₂', hpop', hc₂⟩ := popTyN_mono n hσ hpop
+              refine ⟨[{ w' with σ := [.anyValue .list] :: σ₂' }],
+                by simp only [step1, hp', hpop'], ?_⟩
+              intro u hu
+              simp only [List.mem_singleton] at hu
+              subst u
+              exact ⟨_, List.Mem.head _, hΓ, stackLe_cons_same hc₂,
+                by rw [hp']; exact pendLe_refl _⟩
+  | kNewSlot sn =>
+      simp only [step1] at hst
+      cases hslot : slotOfName sn with
+      | none => rw [hslot] at hst; cases hst
+      | some ord =>
+          rw [hslot] at hst
+          try dsimp only at hst
+          cases hpn : w.pending with
+          | some q => rw [hpn] at hst; cases hst
+          | none =>
+              have hp' : w'.pending = none := pendLe_none hp hpn
+              rw [hpn] at hst
+              cases hpop : popTy anyT w.σ with
+              | none => rw [hpop] at hst; cases hst
+              | some σ₂ =>
+                  rw [hpop] at hst
+                  cases hst
+                  obtain ⟨σ₂', hpop', hc₂⟩ := popTy_mono hσ hpop
+                  refine ⟨[{ w' with σ := [.anyValue .obj] :: σ₂' }],
+                    by simp [step1, hslot, hp', hpop'], ?_⟩
+                  intro u hu
+                  simp only [List.mem_singleton] at hu
+                  subst u
+                  exact ⟨_, List.Mem.head _, hΓ, stackLe_cons_same hc₂,
+                    by rw [hp']; exact pendLe_refl _⟩
+  | kCall f n =>
+      simp only [step1] at hst
+      cases hsig : sigFind sigs f with
+      | none => rw [hsig] at hst; cases hst
+      | some pr =>
+          obtain ⟨ps, retj⟩ := pr
+          rw [hsig] at hst
+          cases hpn : w.pending with
+          | some q => rw [hpn] at hst; cases hst
+          | none =>
+              have hp' : w'.pending = none := pendLe_none hp hpn
+              rw [hpn] at hst
+              dsimp only at hst
+              cases hlen' : (ps.length == n) || (ps.length == n + 1) with
+              | false => rw [hlen'] at hst; cases hst
+              | true =>
+                  rw [hlen'] at hst
+                  dsimp only at hst
+                  cases hpop : popArgs (if ps.length == n then ps else ps.take n) w.σ with
+                  | false => rw [hpop] at hst; cases hst
+                  | true =>
+                      rw [hpop] at hst
+                      cases hst
+                      have hpop' := popArgs_mono hσ hpop
+                      refine ⟨(sigCompls sigs f).map (fun c =>
+                          { w' with σ := w'.σ.drop n, pending := some c }), ?_, ?_⟩
+                      · simp only [step1, hsig, hp', hlen', hpop']
+                      · intro u hu
+                        simp only [List.mem_map] at hu
+                        obtain ⟨c, hc, rfl⟩ := hu
+                        exact ⟨_, List.mem_map.mpr ⟨c, hc, rfl⟩,
+                          hΓ, stackLe_drop hσ n, pendLe_refl _⟩
+  | kIMeth nm n =>
+      simp only [step1] at hst
+      cases har : mopArity nm == some n with
+      | false => rw [har] at hst; cases hst
+      | true =>
+          rw [har] at hst
+          cases hpn : w.pending with
+          | some q => rw [hpn] at hst; cases hst
+          | none =>
+              have hp' : w'.pending = none := pendLe_none hp hpn
+              rw [hpn] at hst
+              dsimp only at hst
+              cases hpop1 : popTyN n anyT w.σ with
+              | none => rw [hpop1] at hst; cases hst
+              | some σ₁ =>
+                  rw [hpop1] at hst
+                  dsimp only at hst
+                  cases hpop2 : popA (.anyValue .obj) σ₁ with
+                  | none => rw [hpop2] at hst; cases hst
+                  | some σ₂ =>
+                      rw [hpop2] at hst
+                      cases hst
+                      obtain ⟨σ₁', hpop1', hc₁⟩ := popTyN_mono n hσ hpop1
+                      obtain ⟨σ₂', hpop2', hc₂⟩ := popA_mono hc₁ hpop2
+                      refine ⟨(mopResult nm).map (fun c =>
+                          { w' with σ := σ₂', pending := some c }), ?_, ?_⟩
+                      · simp only [step1, har, hp', hpop1', hpop2']
+                      · intro u hu
+                        simp only [List.mem_map] at hu
+                        obtain ⟨c, hc, rfl⟩ := hu
+                        exact ⟨_, List.mem_map.mpr ⟨c, hc, rfl⟩,
+                          hΓ, hc₂, pendLe_refl _⟩

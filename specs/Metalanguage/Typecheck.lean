@@ -349,15 +349,12 @@ def primTys (p : Prim) : Option (Ty × Ty) :=
   | .pIsObj | .pIsNotObj | .pIsNotU | .pHasCall | .pHasCtor | .pIsU
   | .pIsTrue | .pIsFalse | .pNullOrUnd | .pIsNull
   | .pIsType _ | .pHasField _ | .pIsStr _ => some (anyT, [.anyValue .bool])
-  | .pDescField "GetPrototypeOf" =>
-      -- the zero-arg-MOP deviation: o.[[GetPrototypeOf]] is written
-      -- in field-read form; semantically the MOP call
-      some ([.anyValue .obj], [.anyValue .null, .anyValue .obj])
-  | .pDescField "Value" | .pDescField "Getter" | .pDescField "Setter" =>
-      some (anyT, langT)
-  | .pDescField "Writable" | .pDescField "Enumerable"
-  | .pDescField "Configurable" => some (anyT, [.anyValue .bool])
-  | .pDescField _ => some (anyT, anyT)
+  | .pDescField _ =>
+      -- uniform: the receiver-side descent (GetOwnProperty's union)
+      -- carries the precision; the field read is loose here. (The
+      -- per-name refinement was unprovable for abstract names: the
+      -- string-match in primTys cannot reduce.)
+      some (anyT, anyT)
   | .pPred _ _ => none                      -- fused in kTestVar
 
 /- ## Shape tests: the flat type a test's THEN side asserts -/
@@ -443,14 +440,19 @@ def step1 (sigs : SigTable) (i : Instr) (w : World) : Option Worlds :=
       -- world per listed alternative - each normal payload, and a
       -- throw world only if the judgement says the callee can throw.
       match sigFind sigs f with
-      | some (ps, retj) =>
-          if (ps.length == n || ps.length == n + 1)
-              && w.pending.isNone
-                && popArgs (if ps.length == n then ps else ps.take n) w.σ then
-            some ((sigCompls sigs f).map (fun c =>
-              { w with σ := w.σ.drop n, pending := some c }))
-          else none
       | none => none
+      | some (ps, retj) =>
+          match w.pending with
+          | some _ => none
+          | none =>
+              match (ps.length == n) || (ps.length == n + 1) with
+              | false => none
+              | true =>
+                  match popArgs (if ps.length == n then ps else ps.take n) w.σ with
+                  | false => none
+                  | true =>
+                      some ((sigCompls sigs f).map (fun c =>
+                        { w with σ := w.σ.drop n, pending := some c }))
   | .kSet x =>
       -- PARKED DISCIPLINE: while a completion is parked, only the
       -- self-test protocol may act
@@ -478,20 +480,20 @@ def step1 (sigs : SigTable) (i : Instr) (w : World) : Option Worlds :=
       | none => none
   | .kIMeth nm n =>
       -- PARKING SPLITS (same both-deliveries rule as kCall)
-      if mopArity nm == some n
-          && w.pending.isNone
-          && (match popTyN n anyT w.σ with
-              | some σ' => (popA (.anyValue .obj) σ').isSome
-              | none => Bool.false) then
-        match popTyN n anyT w.σ with
-        | some σ' =>
-            match popA (.anyValue .obj) σ' with
-            | some σ'' =>
-                some ((mopResult nm).map (fun c =>
-                  { w with σ := σ'', pending := some c }))
-            | none => none
-        | none => none
-      else none
+      match mopArity nm == some n with
+      | false => none
+      | true =>
+          match w.pending with
+          | some _ => none
+          | none =>
+              match popTyN n anyT w.σ with
+              | none => none
+              | some σ' =>
+                  match popA (.anyValue .obj) σ' with
+                  | none => none
+                  | some σ'' =>
+                      some ((mopResult nm).map (fun c =>
+                        { w with σ := σ'', pending := some c }))
   | .kMkList n =>
       match w.pending, popTyN n anyT w.σ with
       | none, some σ' => some [{ w with σ := [.anyValue .list] :: σ' }]
