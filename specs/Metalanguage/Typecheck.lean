@@ -706,13 +706,13 @@ def checkSeq : SigTable → Ty → World → List Instr → TCResult
   | sigs, r, w, .kIte t e :: rest =>
       -- dispatch per VERDICT ATOM of the top slot: true checks a
       -- then-world, false an else-world, a bool-union spawns both
-      -- (fork), any other atom rejects. All atom judgements must be
-      -- OK — mergeTC is reject-dominating, so the fold IS the
-      -- conjunction. (An empty slot — the bottom type — is vacuous:
-      -- the then-world, as List.all was vacuously true.)
+      -- (fork), any other atom rejects. The atom judgements combine
+      -- with a mergeTC fold — reject-dominating, so the fold IS the
+      -- conjunction — seeded with the vacuous OK: the empty slot is
+      -- the bottom type (unreachable) and accepts vacuously, exactly
+      -- as a conjunction over an empty index set does.
       match w.σ with
       | [] => .reject (.kIte t e) "kIte: verdict is not boolean"
-      | [] :: σ' => checkSeq sigs r { w with σ := σ' } (t ++ rest)
       | ts :: σ' =>
           ts.foldl (fun acc a =>
             mergeTC acc
@@ -725,7 +725,8 @@ def checkSeq : SigTable → Ty → World → List Instr → TCResult
                    mergeTC (checkSeq sigs r { w with σ := σ' } (t ++ rest))
                      (checkSeq sigs r { w with σ := σ' } (e ++ rest))
                | _ => .reject (.kIte t e) "kIte: verdict is not boolean"))
-            noFlows
+            (TCResult.flows
+              { exits := Bool.true, throws := Bool.false, falls := [], assumes := [] })
   | sigs, r, w, .kEval (.const (.compl Bool.false pv)) :: rest =>
       -- a completion literal parks itself (never a stack atom)
       match parkPending (.normal [typeOfV pv]) w with
