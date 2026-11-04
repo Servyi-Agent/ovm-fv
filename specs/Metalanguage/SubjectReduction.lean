@@ -418,11 +418,15 @@ theorem mergeTC_noFlows (res : TCResult) : mergeTC noFlows res = res := by
   | flows f => rfl
   | reject site why => rfl
 
+theorem forkTC_cons (site : Instr) (u : World) (k : World → TCResult) :
+    forkTC site [u] k = k u := by
+  simp only [forkTC, List.foldl, mergeTC_noFlows, forkTC_cons]
+
 theorem checkSeq_kPop {sigs : SigTable} {r : Ty} {W : World} {ts : Ty} {σ' : List Ty}
     {rest : List Instr} (hpn : W.pending = none) (hσ : W.σ = ts :: σ') :
     checkSeq sigs r W (.kPop :: rest)
       = checkSeq sigs r { W with σ := σ' } rest := by
-  simp only [checkSeq, step1, hσ, hpn, List.foldl, mergeTC_noFlows]
+  simp only [checkSeq, step1, hσ, hpn, List.foldl, mergeTC_noFlows, forkTC_cons]
 
 /-- kSet: bind the top slot into Γ. -/
 theorem checkSeq_kSet {sigs : SigTable} {r : Ty} {W : World} {x : «String»}
@@ -430,7 +434,7 @@ theorem checkSeq_kSet {sigs : SigTable} {r : Ty} {W : World} {x : «String»}
     (hpn : W.pending = none) (hσ : W.σ = ts :: σ') :
     checkSeq sigs r W (.kSet x :: rest)
       = checkSeq sigs r { Γ := (x, ts) :: W.Γ, σ := σ', pending := none } rest := by
-  simp only [checkSeq, step1, hσ, hpn, List.foldl, mergeTC_noFlows]
+  simp only [checkSeq, step1, hσ, hpn, List.foldl, mergeTC_noFlows, forkTC_cons]
 
 
 /- ## Proof layer V: the exact-match sr arms (head frame, above = none) -/
@@ -694,33 +698,33 @@ theorem checkSeq_kTest_normal {sigs : SigTable} {r : Ty} {W : World} {t : Ty}
     {rest : List Instr} (hpn : W.pending = some (.normal t)) :
     checkSeq sigs r W (.kTest :: rest)
       = checkSeq sigs r { W with σ := [.isValue (.boolean Bool.false)] :: W.σ } rest := by
-  simp only [checkSeq, step1, List.foldl, hpn, mergeTC_noFlows]
+  simp only [checkSeq, step1, List.foldl, hpn, mergeTC_noFlows, forkTC_cons]
 
 theorem checkSeq_kTest_throw {sigs : SigTable} {r : Ty} {W : World}
     {rest : List Instr} (hpn : W.pending = some Pending.throw) :
     checkSeq sigs r W (.kTest :: rest)
       = checkSeq sigs r { W with σ := [.isValue (.boolean Bool.true)] :: W.σ } rest := by
-  simp only [checkSeq, step1, List.foldl, hpn, mergeTC_noFlows]
+  simp only [checkSeq, step1, List.foldl, hpn, mergeTC_noFlows, forkTC_cons]
 
 theorem checkSeq_kUnwrap_normal {sigs : SigTable} {r : Ty} {W : World} {t : Ty}
     {rest : List Instr} (hpn : W.pending = some (.normal t)) :
     checkSeq sigs r W (.kUnwrap :: rest)
       = checkSeq sigs r { W with σ := t :: W.σ, pending := none } rest := by
-  simp only [checkSeq, step1, List.foldl, hpn, mergeTC_noFlows]
+  simp only [checkSeq, step1, List.foldl, hpn, mergeTC_noFlows, forkTC_cons]
 
 theorem checkSeq_pWrapC {sigs : SigTable} {r : Ty} {W : World} {ts : Ty} {σ' : List Ty}
     {rest : List Instr} (hpn : W.pending = none) (hσ : W.σ = ts :: σ') :
     checkSeq sigs r W (.kPrim1 .pWrapC :: rest)
       = checkSeq sigs r { W with σ := σ', pending := some (.normal ts) } rest := by
   simp only [checkSeq, step1, List.foldl, parkPending, Option.map_some,
-             hpn, hσ, List.append_nil, mergeTC_noFlows]
+             hpn, hσ, List.append_nil, mergeTC_noFlows, forkTC_cons]
 
 theorem checkSeq_pThrowC {sigs : SigTable} {r : Ty} {W : World} {ts : Ty} {σ' : List Ty}
     {rest : List Instr} (hpn : W.pending = none) (hσ : W.σ = ts :: σ') :
     checkSeq sigs r W (.kPrim1 .pThrowC :: rest)
       = checkSeq sigs r { W with σ := σ', pending := some Pending.throw } rest := by
   simp only [checkSeq, step1, List.foldl, parkPending, Option.map_some,
-             hpn, hσ, List.append_nil, mergeTC_noFlows]
+             hpn, hσ, List.append_nil, mergeTC_noFlows, forkTC_cons]
 
 /- ## Proof layer VII: the pending-protocol sr arms -/
 

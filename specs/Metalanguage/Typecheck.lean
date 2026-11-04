@@ -681,6 +681,20 @@ def mergeTC : TCResult → TCResult → TCResult
 def noFlows : TCResult :=
   .flows { exits := Bool.false, throws := Bool.false, falls := [], assumes := [] }
 
+/-- The vacuous OK (conjunction seed): the empty index set accepts.
+    A bottom (unreachable) slot folds to this. -/
+def vacOk : TCResult :=
+  .flows { exits := Bool.true, throws := Bool.false, falls := [], assumes := [] }
+
+/-- Fork fold over CONCRETE successor worlds: an empty successor set
+    is a stuck (or unreachable) world and rejects — it is the dual
+    of the vacuous-OK seed: an empty SUCCESSOR SET is stuck, an
+    empty VERDICT SLOT is unreachable. -/
+def forkTC (site : Instr) (ws : Worlds) (k : World → TCResult) : TCResult :=
+  match ws with
+  | [] => .reject site "empty fork (stuck or unreachable world)"
+  | _ => ws.foldl (fun acc u => mergeTC acc (k u)) noFlows
+
 /-- Record an undischarged assert as proof debt on the result. -/
 def markDebt (why : «String») : TCResult → TCResult :=
   fun res => match res with
@@ -725,8 +739,7 @@ def checkSeq : SigTable → Ty → World → List Instr → TCResult
                    mergeTC (checkSeq sigs r { w with σ := σ' } (t ++ rest))
                      (checkSeq sigs r { w with σ := σ' } (e ++ rest))
                | _ => .reject (.kIte t e) "kIte: verdict is not boolean"))
-            (TCResult.flows
-              { exits := Bool.true, throws := Bool.false, falls := [], assumes := [] })
+            vacOk
   | sigs, r, w, .kEval (.const (.compl Bool.false pv)) :: rest =>
       -- a completion literal parks itself (never a stack atom)
       match parkPending (.normal [typeOfV pv]) w with
@@ -742,8 +755,8 @@ def checkSeq : SigTable → Ty → World → List Instr → TCResult
       match tyLookup w.Γ x with
       | none => checkSeq sigs r { w with σ := [.isValue (.boolean Bool.true)] :: w.σ } rest
       | some _ =>
-          (split1 x [.notPresent] w).foldl
-            (fun acc u => mergeTC acc (checkSeq sigs r u rest)) noFlows
+          forkTC (.kEval (.varNotPresent x)) (split1 x [.notPresent] w)
+            (fun u => checkSeq sigs r u rest)
   | sigs, r, w, .kEval (.isObject (.nv x)) :: rest =>
       checkSeq sigs r w (.kTestVar x .pIsObj :: rest)
   | sigs, r, w, .kEval (.isNotObject (.nv x)) :: rest =>
@@ -803,8 +816,8 @@ def checkSeq : SigTable → Ty → World → List Instr → TCResult
       | .pPred f _ =>
           match predDecide f with
           | some dec =>
-              (splitP1 x dec w).foldl
-                (fun acc u => mergeTC acc (checkSeq sigs r u rest)) noFlows
+              forkTC (.kTestVar x p) (splitP1 x dec w)
+                (fun u => checkSeq sigs r u rest)
           | none =>
               match tyLookup w.Γ x with
               | none => .reject (.kTestVar x p) "unbound variable"
@@ -813,8 +826,8 @@ def checkSeq : SigTable → Ty → World → List Instr → TCResult
       | _ =>
           match testTypeP p with
           | some T =>
-              (split1 x T w).foldl
-                (fun acc u => mergeTC acc (checkSeq sigs r u rest)) noFlows
+              forkTC (.kTestVar x p) (split1 x T w)
+                (fun u => checkSeq sigs r u rest)
           | none =>
               match tyLookup w.Γ x with
               | none => .reject (.kTestVar x p) "unbound variable"
@@ -858,14 +871,13 @@ def checkSeq : SigTable → Ty → World → List Instr → TCResult
                    markDebt "assert obligation not discharged"
                      (checkSeq sigs r { w with σ := σ' } rest)
                | _ => .reject .kAssert "assert: verdict is not boolean"))
-            (TCResult.flows
-              { exits := Bool.true, throws := Bool.false, falls := [], assumes := [] })
+            vacOk
   | sigs, r, w, i :: rest =>
       match step1 sigs i w with
       | none =>
           .reject i ("world stack mismatch: " ++ toString (repr w))
       | some ws' =>
-          ws'.foldl (fun acc u => mergeTC acc (checkSeq sigs r u rest)) noFlows
+          forkTC i ws' (fun u => checkSeq sigs r u rest)
 termination_by _ _ _ is => sfuel is
 decreasing_by
   all_goals
