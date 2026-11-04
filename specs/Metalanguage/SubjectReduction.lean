@@ -1936,3 +1936,17 @@ theorem worldsLe_trans {ws₁ ws₂ ws₃ : Worlds}
       | some m => exact ⟨m, by simp [hv]⟩
     exact tyLe_trans (hσ₁.2 j a ha m hm) (hσ₂.2 j m hm b hb)
 
+
+/- ## Next: the specialization capstone (pointwise)
+
+    theorem checkSeq_specialize : ∀ seq w w', worldLe w' w →
+      tterm (checkSeq sigs r w seq) → tterm (checkSeq sigs r w' seq)
+
+    Induction on seq; each arm pointwise: kRet (pending payload ⊑
+    via pendLe), kIte (verdict dispatch forks a both-verdict world —
+    both sides covered), splits (split1_cov), the catch-all (step1_mono
+    + a fold-terminality lift: every refined world's check terminal
+    because its coarse cover's is; the fold merges exits/disj,
+    falls/append — terminal iff every element exits with no falls;
+    step1 outputs are nonempty). Loop joins: ⊑-neutrality per path.
+    -/
