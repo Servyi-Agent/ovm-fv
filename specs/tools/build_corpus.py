@@ -102,7 +102,7 @@ def loopBody : List Instr := [.kEval (.const JSValue.undefined), .kSet "done"]
 def loopRest : List Instr :=
   [.kEval (.const (JSValue.number 42)), .kPrim1 .pWrapC, .kRet]
 #eval fsteps theReg 100
-    (.frames [⟨.kRepeatWhile (Expr.varNotPresent "done") loopBody :: loopRest, [], [], "«top»"⟩]
+    (.frames [⟨.kRepeatWhile (Expr.varNotPresent "done") loopBody :: loopRest, [], [], "«top»", none⟩]
       emptyHeap 0)
 /- GetMethod on a non-callable, non-undefined value: spec says
    step 4 throws a TypeError (compl true undefined). -/
@@ -121,10 +121,10 @@ def demoHeap : Heap :=
 #eval checkRun (renest lookupDemoF)
 #eval fsteps theReg
     1000 (.frames [⟨compileSteps (build lookupDemoF),
-        [("input", .obj 0), ("propertyKey", .str "x")], [], "«top»"⟩] demoHeap 1)
+        [("input", .obj 0), ("propertyKey", .str "x")], [], "«top»", none⟩] demoHeap 1)
 #eval fsteps theReg
     1000 (.frames [⟨compileSteps (build getMethodDemoF),
-         [("input", .obj 0), ("propertyKey", .str "x")], [], "«top»"⟩] demoHeap 1)
+         [("input", .obj 0), ("propertyKey", .str "x")], [], "«top»", none⟩] demoHeap 1)
 
 /- ===== static typing: signature table (payload types) =====
    Delivery is always a completion; the table types the payload.
@@ -352,8 +352,8 @@ def theRefReg : RefReg := fun f =>
 def refAgree (reg : RefReg) (n : Nat) (p : Prog)
     (m : FM) : Bool :=
   match refRun reg n p [] emptyHeap 0, m with
-  | .done v _ _, .fdone (.compl Bool.false v') _ _ _ _ => v == v'
-  | .threw v _ _, .fdone (.compl Bool.true v') _ _ _ _ => v == v'
+  | .done v _ _, .fdone (.normal v') _ _ _ _ => v == v'
+  | .threw v _ _, .fdone PendV.throw _ _ _ _ => Bool.true
   | .fell _ _, .fell _ _ _ _ => Bool.true
   | _, _ => Bool.false
 
