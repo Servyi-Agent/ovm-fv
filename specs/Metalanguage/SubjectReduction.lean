@@ -1364,6 +1364,38 @@ theorem frameTyped_kPop_reject_nil {sigs : SigTable} {r : Ty} {rest : List Instr
     frameTyped sigs r ⟨.kPop :: rest, env, [], ret⟩ = False := by
   simp only [frameTyped, frameWorld, List.map, checkSeq, step1]
 
+/-- kSet transfer. -/
+theorem frameTyped_kSet {sigs : SigTable} {x : «String»} {w : JSValue} {rest : List Instr}
+    {env : Env} {eval : List JSValue} {ret : «String»} {r : Ty}
+    (h : frameTyped sigs r ⟨.kSet x :: rest, env, w :: eval, ret⟩) :
+    frameTyped sigs r ⟨rest, (x, w) :: env, eval, ret⟩ := by
+  simp only [frameTyped, frameWorld, Fr.stmts, Fr.env, Fr.eval, List.map_cons] at h ⊢
+  rw [checkSeq_kSet rfl] at h
+  rw [envTyOf_cons]
+  exact h
+
+theorem frameTyped_kSet_reject_nil {sigs : SigTable} {r : Ty} {x : «String»} {rest : List Instr}
+    {env : Env} {ret : «String»} :
+    frameTyped sigs r ⟨.kSet x :: rest, env, [], ret⟩ = False := by
+  simp only [frameTyped, frameWorld, List.map, checkSeq, step1]
+
+/-- kEval of a literal — ALL value shapes (compl literals use the
+    checker's dedicated push arms; everything else the generic one). -/
+theorem frameTyped_kEval_const {sigs : SigTable} {v : JSValue} {rest : List Instr}
+    {env : Env} {eval : List JSValue} {ret : «String»} {r : Ty}
+    (h : frameTyped sigs r ⟨.kEval (.const v) :: rest, env, eval, ret⟩) :
+    frameTyped sigs r ⟨rest, env, v :: eval, ret⟩ := by
+  cases v with
+  | compl a b =>
+      cases a <;>
+        simp only [frameTyped, frameWorld, Fr.stmts, Fr.env, Fr.eval, checkSeq,
+          List.map_cons, typeOfV] at h ⊢
+      all_goals exact h
+  | undefined | null | boolean _ | number _ | str _ | obj _ | listV _ | descV _ =>
+      simp only [frameTyped, frameWorld, Fr.stmts, Fr.env, Fr.eval, List.map_cons] at h ⊢
+      rw [checkSeq_kEval_const rfl] at h
+      exact h
+
 /- ## Proof layer XVIII: THE SR_arm PREDICATE and the arm theorems
 
     SR_arm h s r, literally as specified: s is ANY value machine
@@ -1400,17 +1432,22 @@ def stateTyped (sigs : SigTable) (r : Ty) (m : FM) : Prop :=
   | .fdone v _ _ _ _ => tmoves [typeOfV v] r = Bool.true
   | _ => False
 
-/-- THE SR PREDICATE — one shape; every arm theorem instantiates it. -/
+/-- THE SR PREDICATE — one shape; every arm theorem instantiates it.
+    The registry premise is part of the predicate: the callee's
+    body is the one thing the caller's check never sees, so the
+    kCall arm draws its post-frame typing from the registry's
+    certificates (registryCertified). -/
 def SR_arm (sigs : SigTable) (reg : AOReg) (h : Instr) (s : FM) (r : Ty) : Prop :=
-  stateTyped sigs r (withHead h s) →
-    stateTyped sigs r (fstep reg (withHead h s))
+  registryCertified sigs reg →
+    stateTyped sigs r (withHead h s) →
+      stateTyped sigs r (fstep reg (withHead h s))
 
 /-- The kIte arm: ∀ s, r. The case analysis is the machine's own
     match (boolean / non-boolean / empty stack); the loud posts are
     excluded by the type machine itself. -/
 theorem SR_kIte (sigs : SigTable) (reg : AOReg) (t e : List Instr) (s : FM) (r : Ty) :
     SR_arm sigs reg (.kIte t e) s r := by
-  intro hpre
+  intro _ hpre
   cases s with
   | fdone v fs heap nl n => exact hpre
   | fell fs heap nl n => exact hpre
@@ -1458,7 +1495,7 @@ theorem SR_kIte (sigs : SigTable) (reg : AOReg) (t e : List Instr) (s : FM) (r :
 /-- The kPop arm: ∀ s, r. -/
 theorem SR_kPop (sigs : SigTable) (reg : AOReg) (s : FM) (r : Ty) :
     SR_arm sigs reg .kPop s r := by
-  intro hpre
+  intro _ hpre
   cases s with
   | fdone v fs heap nl n => exact hpre
   | fell fs heap nl n => exact hpre
@@ -1475,6 +1512,45 @@ theorem SR_kPop (sigs : SigTable) (reg : AOReg) (s : FM) (r : Ty) :
           | cons w eval' =>
               show frameTyped sigs r ⟨stmts, env, eval', ret⟩ ∧ stateTailTyped sigs fs'
               exact ⟨frameTyped_kPop hpre.1, hpre.2⟩
+
+/-- The kSet arm: ∀ s, r. -/
+theorem SR_kSet (sigs : SigTable) (reg : AOReg) (x : «String») (s : FM) (r : Ty) :
+    SR_arm sigs reg (.kSet x) s r := by
+  intro _ hpre
+  cases s with
+  | fdone v fs heap nl n => exact hpre
+  | fell fs heap nl n => exact hpre
+  | frames fs heap nl =>
+      cases fs with
+      | nil => exact hpre
+      | cons f fs' =>
+          obtain ⟨stmts, env, eval, ret⟩ := f
+          simp only [withHead, stateTyped] at hpre ⊢
+          cases eval with
+          | nil =>
+              rw [frameTyped_kSet_reject_nil] at hpre
+              exact hpre.1.elim
+          | cons w eval' =>
+              show frameTyped sigs r ⟨stmts, (x, w) :: env, eval', ret⟩
+                ∧ stateTailTyped sigs fs'
+              exact ⟨frameTyped_kSet hpre.1, hpre.2⟩
+
+/-- The kEval-const arm: ∀ s, r (a pushing arm — no stack shape
+    demanded; the machine's own arm fires on any eval). -/
+theorem SR_kEval_const (sigs : SigTable) (reg : AOReg) (v : JSValue) (s : FM) (r : Ty) :
+    SR_arm sigs reg (.kEval (.const v)) s r := by
+  intro _ hpre
+  cases s with
+  | fdone v' fs heap nl n => exact hpre
+  | fell fs heap nl n => exact hpre
+  | frames fs heap nl =>
+      cases fs with
+      | nil => exact hpre
+      | cons f fs' =>
+          obtain ⟨stmts, env, eval, ret⟩ := f
+          simp only [withHead, stateTyped] at hpre ⊢
+          show frameTyped sigs r ⟨stmts, env, v :: eval, ret⟩ ∧ stateTailTyped sigs fs'
+          exact ⟨frameTyped_kEval_const hpre.1, hpre.2⟩
 
 /- ## Next: the specialization capstone (pointwise)
 
