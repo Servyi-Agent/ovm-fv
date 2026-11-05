@@ -89,6 +89,34 @@ def isNullV : JSValue → Bool
    return undefined. Calls are machine-only: the big-step evaluator
    cannot enter the registry. -/
 
+/-- The descriptor-field read (undefined if absent); the
+    GetPrototypeOf zero-arg-MOP deviation lives here. -/
+def descFieldPrim (h : Heap) (s : «String») (v : JSValue) : JSValue :=
+  if s == "GetPrototypeOf" then
+    match v with
+    | .obj l =>
+        match h l with
+        | some o => match o.proto with
+          | some p => .obj p
+          | none => JSValue.null
+        | none => JSValue.undefined
+    | _ => JSValue.undefined
+  else
+    match v with
+    | .descV (.mk value writable getter setter enumerable configurable) =>
+        let natToObj (o : Option Nat) : JSValue :=
+          match o with | some l => .obj l | none => JSValue.undefined
+        let boolToVal (o : Option Bool) : JSValue :=
+          match o with | some b => .boolean b | none => JSValue.undefined
+        if s == "Value" then value.getD JSValue.undefined
+        else if s == "Getter" then natToObj getter
+        else if s == "Setter" then natToObj setter
+        else if s == "Writable" then boolToVal writable
+        else if s == "Enumerable" then boolToVal enumerable
+        else if s == "Configurable" then boolToVal configurable
+        else JSValue.undefined
+    | _ => JSValue.undefined
+
 def applyPrim (h : Heap) : Prim → JSValue → JSValue
   | .pIsObj, v => .boolean (isObjV v)
   | .pIsNotObj, v => .boolean (!isObjV v)
@@ -141,34 +169,13 @@ def applyPrim (h : Heap) : Prim → JSValue → JSValue
             else Bool.false
         | _ => Bool.false)
   | .pDescField s, v =>
-      -- record field read on a descriptor value (undefined if absent);
-      -- the GetPrototypeOf deviation: the zero-arg MOP, written in
-      -- field-read form, actually dispatches (the heap is in scope)
-      if s == "GetPrototypeOf" then
+      -- the completion-payload polymorphism of .[[Value]]: on a
+      -- normal completion it unwraps (static: payloadOf)
+      if s == "Value" then
         match v with
-        | .obj l =>
-            match h l with
-            | some o => match o.proto with
-              | some p => .obj p
-              | none => JSValue.null
-            | none => JSValue.undefined
-        | _ => JSValue.undefined
-      else
-      match v with
-      | .descV (.mk value writable getter setter enumerable configurable) =>
-          let natToObj (o : Option Nat) : JSValue :=
-            match o with | some l => .obj l | none => JSValue.undefined
-          let boolToVal (o : Option Bool) : JSValue :=
-            match o with | some b => .boolean b | none => JSValue.undefined
-          if s == "Value" then value.getD JSValue.undefined
-          else if s == "Getter" then natToObj getter
-          else if s == "Setter" then natToObj setter
-          else if s == "Writable" then boolToVal writable
-          else if s == "Enumerable" then boolToVal enumerable
-          else if s == "Configurable" then boolToVal configurable
-          else JSValue.undefined
-      | _ => JSValue.undefined
-
+        | .compl Bool.false w => w
+        | v' => descFieldPrim h s v'
+      else descFieldPrim h s v
 
 mutual
 def evalListE (h : Heap) (env : Env) : List Expr → Option (List JSValue)

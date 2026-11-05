@@ -13,6 +13,8 @@ declare_syntax_cat algExpr
 declare_syntax_cat var
 syntax ident : var
 syntax "method" : var
+syntax "return" : var
+syntax "completion" : var
 declare_syntax_cat kwIf
 declare_syntax_cat kwElse
 declare_syntax_cat kwLet
@@ -58,6 +60,8 @@ syntax "either" "undefined" "or" "null" : isTail
 syntax "null" : isTail
 syntax "string" : isTail
 syntax "number" : isTail
+syntax "a" "normal" "completion" : isTail
+syntax "a" "throw" "completion" : isTail
 syntax algExpr "has" "a" "[[Call]]" "internal" "method" : algExpr
 syntax algExpr "has" "a" "[[Construct]]" "internal" "method" : algExpr
 /- n-ary calls: zero or more comma-separated arguments. Heads accept
@@ -96,6 +100,8 @@ syntax algExpr "has" hasTail : algExpr
 syntax algExpr "is" isTail : algExpr
 syntax "number" : algExpr
 syntax "string" : algExpr
+/- Completion(e): wrap a bare value into a normal completion. -/
+syntax "Completion" "(" algExpr ")" : algExpr
 
 
 /- Deviation: the spec's « argList » — Lean lexes « » as identifier
@@ -149,6 +155,8 @@ syntax kwReturn "a" "new" typeName "object" "whose" "[" "[" aoName "]" "]"
    spec List value; the body is the run of deeper steps. -/
 syntax kwFor "each" "element" var "of" algExpr "," "do" : stmt
 syntax kwSet var "to" algExpr "." : stmt
+syntax kwSet var "to" "!" algExpr "." : stmt
+syntax kwSet var ".[[" aoName "]" "]" "to" algExpr "." : stmt
 /- Block forms (sub-steps follow, deeper). The spec writes "If c, then";
    after the comma, block (then) and inline (statement) diverge, so the
    tail is its own first-token-disjoint category. -/
@@ -229,10 +237,14 @@ def varName (x : TSyntax `var) : «String» :=
     fun s => match s with
       | .ident _ t _ _ => t.toString
       | .atom _ "method" => "method"
+      | .atom _ "return" => "return"
+      | .atom _ "completion" => "completion"
       | _ => "?"
   match x.raw with
   | .ident _ s _ _ => s.toString
   | .atom _ "method" => "method"
+  | .atom _ "return" => "return"
+  | .atom _ "completion" => "completion"
   | .node _ _ args =>
     match (args[0]? : Option Lean.Syntax) with
     | some w => inner w
@@ -337,6 +349,9 @@ macro_rules
       ``(Expr.isStrVal $(quote (toString v.getId)) [e| $e])
   | `([e| $e:algExpr has a [ [$m:aoName ] ] field]) =>
       ``(Expr.hasField $(quote (aoNameOf m)) [e| $e])
+  | `([e| $e:algExpr is a normal completion]) => ``(Expr.isNormalC [e| $e])
+  | `([e| $e:algExpr is a throw completion]) => ``(Expr.isThrowC [e| $e])
+  | `([e| Completion ( $e:algExpr )]) => ``(Expr.completionOf [e| $e])
   | `([e| $e:algExpr is an Object]) => ``(Expr.isObject [e| $e])
   | `([e| $e:algExpr is a Boolean]) => ``(Expr.isType "Boolean" [e| $e])
   | `([e| $e:algExpr is a Number]) => ``(Expr.isType "Number" [e| $e])
@@ -381,6 +396,13 @@ macro_rules
       ``(FBody.retNewSlot $(quote (aoNameOf s)) $(quote (varName x)))
   | `([s| $_t:kwThrow a TypeError exception .]) =>
       ``(FBody.throw)
+  | `([s| $_s:kwSet $x:var to ! $e:algExpr .]) =>
+      ``(FBody.setE $(quote (varName x)) (Expr.complValue [e| $e]))
+  | `([s| $_s:kwSet $x:var .[[ $f:aoName ]] to $e:algExpr .]) =>
+      let n := varName x
+      let fl := toString (aoNameOf f)
+      let full : «String» := n ++ ".[[" ++ fl ++ "]]"
+      ``(FBody.setE $(quote full) [e| $e])
   | `([s| $_s:kwSet $x:var to $e:algExpr .]) =>
       ``(FBody.setE $(quote (varName x)) [e| $e])
   | `([s| $_k:kwIf $c:algExpr , $s:stmt]) =>

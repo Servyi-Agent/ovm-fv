@@ -216,6 +216,10 @@ def mopArity : «String» → Option Nat
 
 def mopResult : «String» → List Pending
   | "Get" => [.normal langT]
+  -- Iterator Record fields: [[Iterator]] is an Object (spec 7.4.1);
+  -- the others are dynamic guards.
+  | "Iterator" => [.normal [.anyValue .obj]]
+  | "NextMethod" | "Done" => [.normal langT]
   | "GetPrototypeOf" => [.normal [.anyValue .null, .anyValue .obj]]
   | "Value" | "Getter" | "Setter" => [.normal langT]
   | "Writable" | "Enumerable" | "Configurable" => [.normal [.anyValue .bool]]
@@ -315,12 +319,32 @@ def typeOfE (sigs : SigTable) (Γ : TyEnv) : Expr → Option Ty
           then some (mopPayload nm) else none
       | none => none
   | .ifield nm x =>
-      -- the zero-arg-MOP deviation: o.[[GetPrototypeOf]] is
-      -- semantically the call; other fields are dynamic guards
-      if (typeOfE sigs Γ x).isSome then some (mopPayload nm) else none
+      -- `.[[Value]]` is POLYMORPHIC by receiver: on a normal
+      -- completion it is the payload read (IteratorClose's
+      -- innerResult.[[Value]]); otherwise the zero-arg-MOP
+      -- deviation / dynamic guard as before.
+      if nm == "Value" then
+        match typeOfE sigs Γ x with
+        | some t =>
+            match payloadOf t with
+            | some ps => some ps
+            | none => some (mopPayload nm)
+        | none => none
+      else
+        if (typeOfE sigs Γ x).isSome then some (mopPayload nm) else none
   | .listE es =>
       if (typesOf sigs Γ es).isSome then some [.anyValue .list] else none
-  | .isObject x | .isNotObject x | .isNotUndefined x | .hasCall x
+  | .isObject x =>
+      -- refinement: an obj-only receiver makes the test decidable
+      -- (IteratorClose's step-1 assert discharges)
+      match typeOfE sigs Γ x with
+      | some t =>
+          if tmoves t [.anyValue .obj] then some [.isValue (.boolean Bool.true)]
+          else if (removeTy t [.anyValue .obj]).isEmpty && !t.isEmpty then
+            some [.isValue (.boolean Bool.false)]
+          else some [.anyValue .bool]
+      | none => none
+  | .isNotObject x | .isNotUndefined x | .hasCall x
   | .hasCtor x | .isU x | .isBoolVal _ x | .isStrVal _ x
   | .isNullOrUnd x | .isNull x | .isType _ x | .hasField _ x =>
       if (typeOfE sigs Γ x).isSome then some [.anyValue .bool] else none

@@ -147,9 +147,20 @@ def corpusSigs : SigTable := [
   ("GetV",                ([langT, [.anyValue .str]], [.normal langT, .throw])),
   ("GetMethod",           ([langT, [.anyValue .str]], [.normal langT, .throw])),
   ("OrdinaryGet",         ([[.anyValue .obj], langT, langT], [.normal langT])),
+  ("IteratorNext",        ([[.anyValue .obj], [.notPresent] ++ langT], [.normal [.anyValue .obj], .throw])),
+  ("IteratorComplete",    ([[.anyValue .obj]], [.normal [.anyValue .bool], .throw])),
+  ("ToBoolean",           ([langT], [.normal [.anyValue .bool]])),
+  -- returns "either an Object or done"; done is the spec's marker,
+  -- typed as the true singleton (step 5.b's Return done).
+  ("IteratorStep",        ([[.anyValue .obj]], [.normal [.anyValue .obj, .isValue (.boolean Bool.true)], .throw])),
+  ("IteratorClose",       ([[.anyValue .obj], complTy [.normal langT, .throw]], [.normal langT, .throw])),
   -- prim-named calls the machine handles natively on registry miss:
   ("Get",                 ([langT, langT], [.normal langT])),
-  ("Call",                ([langT, langT, [.anyValue .list]], [.normal langT]))
+  -- deviation: the spec's « argList » is written bare (list
+  -- brackets are Lean identifier delimiters) in IteratorNext but
+  -- compiled as a list literal in ToPrimitive — the third Call
+  -- parameter accepts either.
+  ("Call",                ([langT, langT, langT ++ [.anyValue .list]], [.normal langT]))
 ]
 
 /- Gate helpers: the #evals are for humans; the examples below make
@@ -179,6 +190,18 @@ example : tcOk corpusSigs (liftC langT) []
 -- (prints the first rejection with reason + stack, or none)
 #eval typecheckReg corpusSigs theReg
 
+#eval typecheckSeq corpusSigs (sigRetTy corpusSigs "IteratorClose")
+    (zipTy ["iteratorRecord", "completion"]
+      [[.anyValue .obj], complTy [.normal langT, .throw]])
+    (compileSteps (build iteratorClose7_4_11))
+#eval typeOfE corpusSigs
+    (zipTy ["iteratorRecord", "completion"]
+      [[.anyValue .obj], complTy [.normal langT, .throw]])
+    (Expr.completionOf (Expr.call "GetMethod" [Expr.nv "iterator", Expr.const (JSValue.str "return")]))
+#eval typeOfE corpusSigs
+    (zipTy ["iteratorRecord", "completion"]
+      [[.anyValue .obj], complTy [.normal langT, .throw]])
+    (Expr.call "GetMethod" [Expr.nv "iterator", Expr.const (JSValue.str "return")])
 #eval typecheckRegOk corpusSigs theReg
 
 -- signature well-formedness: every desc atom in the table obeys the
@@ -378,6 +401,25 @@ def refDemos : Bool :=
 
 #eval refDemos
 example : refDemos = Bool.true := by native_decide
+
+/- The complex completion corner: first-class completions certify
+    assumption-free, and the machine agrees with the reference. -/
+#eval assumesOf corpusSigs "IteratorNext" ["iteratorRecord", "value"]
+    (compileSteps (build iteratorNext7_4_6))
+#eval assumesOf corpusSigs "IteratorComplete" ["iteratorResult"]
+    (compileSteps (build iteratorComplete7_4_7))
+#eval assumesOf corpusSigs "IteratorStep" ["iteratorRecord"]
+    (compileSteps (build iteratorStep7_4_9))
+#eval assumesOf corpusSigs "IteratorClose" ["iteratorRecord", "completion"]
+    (compileSteps (build iteratorClose7_4_11))
+example : assumesOf corpusSigs "IteratorNext" ["iteratorRecord", "value"]
+    (compileSteps (build iteratorNext7_4_6)) = 0 := by native_decide
+example : assumesOf corpusSigs "IteratorComplete" ["iteratorResult"]
+    (compileSteps (build iteratorComplete7_4_7)) = 0 := by native_decide
+example : assumesOf corpusSigs "IteratorStep" ["iteratorRecord"]
+    (compileSteps (build iteratorStep7_4_9)) = 0 := by native_decide
+example : assumesOf corpusSigs "IteratorClose" ["iteratorRecord", "completion"]
+    (compileSteps (build iteratorClose7_4_11)) = 0 := by native_decide
 '''
 out = ["import metalanguage", ""]
 entries = []
