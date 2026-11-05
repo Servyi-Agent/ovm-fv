@@ -46,6 +46,11 @@ theorem envTyOf_lookup (env : Env) (x : «String») :
 theorem envTyOf_cons (n : «String») (v : JSValue) (env : Env) :
     envTyOf ((n, v) :: env) = (n, [typeOfV v]) :: envTyOf env := rfl
 
+/-- THE ABSTRACTION FUNCTION: value frame → type-machine state
+    (the canonical singleton map — the bridge, named). -/
+def frameWorld (f : Fr) : World :=
+  { Γ := envTyOf f.env, σ := f.eval.map (fun v => [typeOfV v]) }
+
 /- ## The anticipated completion.
 
     After kCall / kIMeth fire, the caller's instructions are
@@ -73,8 +78,7 @@ def frameChecksAt (sigs : SigTable) (f : Fr) (top : Ty) : Prop :=
 
 /-- The frame's check as it stands. -/
 def frameChecks (sigs : SigTable) (f : Fr) : Prop :=
-  match checkSeq sigs (sigRetTy sigs f.ret)
-    { Γ := envTyOf f.env, σ := f.eval.map (fun v => [typeOfV v]) } f.stmts with
+  match checkSeq sigs (sigRetTy sigs f.ret) (frameWorld f) f.stmts with
   | .flows fb => terminal fb = Bool.true  -- every world returns
   | _ => False
 
@@ -503,33 +507,6 @@ theorem checkSeq_kSet {sigs : SigTable} {r : Ty} {W : World} {x : «String»}
 /- ## Proof layer V: the exact-match sr arms (head frame, above = none) -/
 
 
-theorem sr_kEval_const {sigs : SigTable} {v : JSValue} {rest : List Instr}
-    {env : Env} {eval : List JSValue} {ret : «String»}
-    (hv : isCompl v = Bool.false)
-    (h : frameOk sigs none ⟨.kEval (.const v) :: rest, env, eval, ret⟩) :
-    frameOk sigs none ⟨rest, env, v :: eval, ret⟩ := by
-  have hchk := frameOk_none_elim h
-  rw [frameChecks] at hchk
-  simp only [List.map_cons] at hchk
-  rw [checkSeq_kEval_const hv] at hchk
-  refine frameOk_none_intro ?_
-  rw [frameChecks]
-  simp only [List.map_cons]
-  exact hchk
-
-theorem sr_kEval_nat {sigs : SigTable} {n : Nat} {rest : List Instr}
-    {env : Env} {eval : List JSValue} {ret : «String»}
-    (h : frameOk sigs none ⟨.kEval (.nat n) :: rest, env, eval, ret⟩) :
-    frameOk sigs none ⟨rest, env, .number (↑n : Int) :: eval, ret⟩ := by
-  have hchk := frameOk_none_elim h
-  rw [frameChecks] at hchk
-  simp only [List.map_cons] at hchk
-  rw [checkSeq_kEval_nat] at hchk
-  refine frameOk_none_intro ?_
-  rw [frameChecks]
-  simp only [List.map_cons]
-  exact hchk
-
 theorem lookup_mem {x : «String»} {v : JSValue} {env : Env}
     (h : lookup env x = some v) : (x, v) ∈ env := by
   induction env with
@@ -543,30 +520,17 @@ theorem lookup_mem {x : «String»} {v : JSValue} {env : Env}
       · simp [lookup, hx] at h
         exact List.Mem.tail _ (ih h)
 
-theorem sr_kEval_nv {sigs : SigTable} {x : «String»} {v : JSValue} {rest : List Instr}
-    {env : Env} {eval : List JSValue} {ret : «String»}
-    (hl : lookup env x = some v)
-    (h : frameOk sigs none ⟨.kEval (.nv x) :: rest, env, eval, ret⟩) :
-    frameOk sigs none ⟨rest, env, v :: eval, ret⟩ := by
-  have hchk := frameOk_none_elim h
-  rw [frameChecks] at hchk
-  have hΓ : tyLookup (envTyOf env) x = some [typeOfV v] := by
-    rw [← envTyOf_lookup env x, hl]
-    rfl
-  rw [checkSeq_kEval_nv hΓ] at hchk
-  refine frameOk_none_intro ?_
-  rw [frameChecks]
-  simp only [List.map_cons]
-  exact hchk
-
-/- ## Proof layer Vb: kPop / kSet (the parked-discipline arms) -/
-
-/-- A head value never parks: if the parked slot stayed none, the
-    head cannot be a completion. -/
 theorem checkSeq_reject_kPop {sigs : SigTable} {r : Ty} {W : World}
     {rest : List Instr} (hbad : step1 sigs .kPop W = none) :
     ∃ why, checkSeq sigs r W (.kPop :: rest)
       = TCResult.reject .kPop why := by
+  simp only [checkSeq, hbad]
+  exact ⟨_, rfl⟩
+
+theorem checkSeq_reject_kWrapC {sigs : SigTable} {r : Ty} {W : World}
+    {rest : List Instr} (hbad : step1 sigs (.kPrim1 .pWrapC) W = none) :
+    ∃ why, checkSeq sigs r W (.kPrim1 .pWrapC :: rest)
+      = TCResult.reject (.kPrim1 .pWrapC) why := by
   simp only [checkSeq, hbad]
   exact ⟨_, rfl⟩
 
@@ -576,30 +540,6 @@ theorem checkSeq_reject_kSet {sigs : SigTable} {r : Ty} {W : World} {x : «Strin
       = TCResult.reject (.kSet x) why := by
   simp only [checkSeq, hbad]
   exact ⟨_, rfl⟩
-
-theorem sr_kPop {sigs : SigTable} {w : JSValue} {rest : List Instr}
-    {env : Env} {eval : List JSValue} {ret : «String»}
-    (h : frameOk sigs none ⟨.kPop :: rest, env, w :: eval, ret⟩) :
-    frameOk sigs none ⟨rest, env, eval, ret⟩ := by
-  have hchk := frameOk_none_elim h
-  rw [frameChecks] at hchk
-  simp only [List.map_cons] at hchk
-  rw [checkSeq_kPop rfl] at hchk
-  refine frameOk_none_intro ?_
-  rw [frameChecks]
-  exact hchk
-
-theorem sr_kSet {sigs : SigTable} {x : «String»} {w : JSValue} {rest : List Instr}
-    {env : Env} {eval : List JSValue} {ret : «String»}
-    (h : frameOk sigs none ⟨.kSet x :: rest, env, w :: eval, ret⟩) :
-    frameOk sigs none ⟨rest, (x, w) :: env, eval, ret⟩ := by
-  have hchk := frameOk_none_elim h
-  rw [frameChecks] at hchk
-  simp only [List.map_cons] at hchk
-  rw [checkSeq_kSet rfl] at hchk
-  refine frameOk_none_intro ?_
-  rw [frameChecks, envTyOf_cons]
-  exact hchk
 
 /- Result accessors (reject-projectable). -/
 def exitsT : TCResult → Bool
@@ -1246,120 +1186,6 @@ theorem checkSeq_pThrowC {sigs : SigTable} {r : Ty} {W : World} {v : JSValue}
     singleton map (typeOfV completion-aware). Each arm is the
     identity transported across frameChecks. -/
 
-theorem sr_kEval_compl_normal {sigs : SigTable} {pv : JSValue} {rest : List Instr}
-    {env : Env} {eval : List JSValue} {ret : «String»}
-    (h : frameOk sigs none ⟨.kEval (.const (.compl Bool.false pv)) :: rest, env, eval, ret⟩) :
-    frameOk sigs none ⟨rest, env, .compl Bool.false pv :: eval, ret⟩ := by
-  have hchk := frameOk_none_elim h
-  rw [frameChecks] at hchk
-  simp only [checkSeq] at hchk
-  refine frameOk_none_intro ?_
-  rw [frameChecks]
-  simp only [List.map_cons, typeOfV]
-  exact hchk
-
-theorem sr_kEval_compl_throw {sigs : SigTable} {v : JSValue} {rest : List Instr}
-    {env : Env} {eval : List JSValue} {ret : «String»}
-    (h : frameOk sigs none ⟨.kEval (.const (.compl Bool.true v)) :: rest, env, eval, ret⟩) :
-    frameOk sigs none ⟨rest, env, .compl Bool.true v :: eval, ret⟩ := by
-  have hchk := frameOk_none_elim h
-  rw [frameChecks] at hchk
-  simp only [checkSeq] at hchk
-  refine frameOk_none_intro ?_
-  rw [frameChecks]
-  simp only [List.map_cons, typeOfV]
-  exact hchk
-
-theorem sr_kTest_normal {sigs : SigTable} {pv : JSValue} {rest : List Instr}
-    {env : Env} {eval : List JSValue} {ret : «String»}
-    (h : frameOk sigs none ⟨.kTest :: rest, env, .compl Bool.false pv :: eval, ret⟩) :
-    frameOk sigs none
-      ⟨rest, env, .boolean Bool.false :: .compl Bool.false pv :: eval, ret⟩ := by
-  have hchk := frameOk_none_elim h
-  rw [frameChecks] at hchk
-  simp only [List.map_cons, typeOfV] at hchk
-  rw [checkSeq_kTest_normal rfl] at hchk
-  refine frameOk_none_intro ?_
-  rw [frameChecks]
-  simp only [List.map_cons, typeOfV]
-  exact hchk
-
-theorem sr_kTest_throw {sigs : SigTable} {pv : JSValue} {rest : List Instr}
-    {env : Env} {eval : List JSValue} {ret : «String»}
-    (h : frameOk sigs none ⟨.kTest :: rest, env, .compl Bool.true pv :: eval, ret⟩) :
-    frameOk sigs none
-      ⟨rest, env, .boolean Bool.true :: .compl Bool.true pv :: eval, ret⟩ := by
-  have hchk := frameOk_none_elim h
-  rw [frameChecks] at hchk
-  simp only [List.map_cons, typeOfV] at hchk
-  rw [checkSeq_kTest_throw rfl] at hchk
-  refine frameOk_none_intro ?_
-  rw [frameChecks]
-  simp only [List.map_cons, typeOfV]
-  exact hchk
-
-theorem sr_kUnwrap {sigs : SigTable} {pv : JSValue} {rest : List Instr}
-    {env : Env} {eval : List JSValue} {ret : «String»}
-    (h : frameOk sigs none ⟨.kUnwrap :: rest, env, .compl Bool.false pv :: eval, ret⟩) :
-    frameOk sigs none ⟨rest, env, pv :: eval, ret⟩ := by
-  have hchk := frameOk_none_elim h
-  rw [frameChecks] at hchk
-  simp only [List.map_cons, typeOfV] at hchk
-  rw [checkSeq_kUnwrap rfl] at hchk
-  refine frameOk_none_intro ?_
-  rw [frameChecks]
-  simp only [List.map_cons]
-  exact hchk
-
-theorem sr_pWrapC {sigs : SigTable} {v : JSValue} {rest : List Instr}
-    {env : Env} {eval : List JSValue} {ret : «String»}
-    (hv : isCompl v = Bool.false)
-    (h : frameOk sigs none ⟨.kPrim1 .pWrapC :: rest, env, v :: eval, ret⟩) :
-    frameOk sigs none ⟨rest, env, .compl Bool.false v :: eval, ret⟩ := by
-  have hchk := frameOk_none_elim h
-  rw [frameChecks] at hchk
-  simp only [List.map_cons] at hchk
-  rw [checkSeq_pWrapC rfl (by
-    cases v with
-    | compl a b => simp [isCompl] at hv
-    | undefined | null | boolean _ | number _ | str _
-    | obj _ | listV _ | descV _ => rfl)] at hchk
-  refine frameOk_none_intro ?_
-  rw [frameChecks]
-  simp only [List.map_cons, typeOfV]
-  exact hchk
-
-theorem sr_pThrowC {sigs : SigTable} {v : JSValue} {rest : List Instr}
-    {env : Env} {eval : List JSValue} {ret : «String»}
-    (h : frameOk sigs none ⟨.kPrim1 .pThrowC :: rest, env, v :: eval, ret⟩) :
-    frameOk sigs none ⟨rest, env, .compl Bool.true v :: eval, ret⟩ := by
-  have hchk := frameOk_none_elim h
-  rw [frameChecks] at hchk
-  simp only [List.map_cons] at hchk
-  rw [checkSeq_pThrowC rfl] at hchk
-  refine frameOk_none_intro ?_
-  rw [frameChecks]
-  simp only [List.map_cons, typeOfV]
-  exact hchk
-
-/- ## QUARANTINED (to re-derive on the flat completion universe):
-    layers X-XIII (step1_mono and its plumbing) referenced the old
-    step1 equations; git history preserves the proofs. Nothing
-    proven depends on them yet — they serve sr_kTestVar/sr_kCall,
-    which come with the completion-corpus work. -/
-
-/- ## Proof layer XVI: sr_kIte and the no-silent-falls bridge
-
-    The kIte commutation: one machine step through a decided
-    verdict equals the checker's vacOk-merge of the chosen branch;
-    terminality transfers across the merge ONLY because of the
-    no-silent-falls invariant (checkSeq_exits, layer Vb). The loud
-    arm is excluded by the per-atom dispatch itself — on the
-    pending-machine, a completion can never sit on eval at all, so
-    there is no position caveat: EVERY loud kIte state is
-    statically rejected. -/
-
-/-- Terminal transfer across the vacOk merge. -/
 theorem merge_vacOk_terminal {sigs : SigTable} {r : Ty} {W : World} {seq : List Instr}
     {fb : Flows}
     (h : mergeTC vacOk (checkSeq sigs r W seq) = TCResult.flows fb)
@@ -1403,95 +1229,13 @@ theorem checkSeq_kIte_false {sigs : SigTable} {r : Ty} {W : World} {t e : List I
 
 /-- sr_kIte: one machine step through a decided verdict commutes
     with the checker's dispatch. -/
-theorem sr_kIte {sigs : SigTable} {b : Bool} {t e : List Instr} {rest : List Instr}
-    {env : Env} {eval : List JSValue} {ret : «String»}
-    (h : frameOk sigs none ⟨.kIte t e :: rest, env, .boolean b :: eval, ret⟩) :
-    frameOk sigs none ⟨(if b then t else e) ++ rest, env, eval, ret⟩ := by
-  obtain ⟨-, hchk⟩ := h
-  rw [frameChecks] at hchk
-  simp only [List.map_cons] at hchk
-  cases hb : b with
-  | true =>
-      rw [hb] at hchk
-      have hslot : [typeOfV (JSValue.boolean Bool.true)] = [VTy.isValue (JSValue.boolean Bool.true)] := rfl
-      rw [hslot] at hchk
-      have hid : checkSeq sigs (sigRetTy sigs ret)
-          { Γ := envTyOf env, σ := [VTy.isValue (JSValue.boolean Bool.true)] :: eval.map (fun v => [typeOfV v])} (.kIte t e :: rest)
-          = mergeTC vacOk (checkSeq sigs (sigRetTy sigs ret)
-              { Γ := envTyOf env, σ := eval.map (fun v => [typeOfV v])} (t ++ rest)) :=
-        checkSeq_kIte_true rfl
-      rw [hid] at hchk
-      cases hres : checkSeq sigs (sigRetTy sigs ret)
-          { Γ := envTyOf env, σ := eval.map (fun v => [typeOfV v])} (t ++ rest) with
-      | reject s w =>
-          rw [hres] at hchk
-          have hrej : mergeTC vacOk (TCResult.reject s w) = TCResult.reject s w := rfl
-          rw [hrej] at hchk
-          exact hchk.elim
-      | flows fbr =>
-          cases hm : mergeTC vacOk (checkSeq sigs (sigRetTy sigs ret)
-              { Γ := envTyOf env, σ := eval.map (fun v => [typeOfV v])} (t ++ rest)) with
-          | reject s w =>
-              rw [hm] at hchk
-              exact hchk.elim
-          | flows fbm =>
-              rw [hm] at hchk
-              obtain ⟨fbr', hfb, htr⟩ := merge_vacOk_terminal hm hchk
-              have hbr' : fbr' = fbr := TCResult.flows.inj (hfb.symm.trans hres)
-              subst hbr'
-              refine ⟨by simp, ?_⟩
-              rw [frameChecks]
-              show (match checkSeq sigs (sigRetTy sigs ret)
-                  { Γ := envTyOf env, σ := eval.map (fun v => [typeOfV v])} (t ++ rest) with
-                  | .flows fb => terminal fb = Bool.true | _ => False)
-              rw [hres]
-              exact htr
-  | false =>
-      rw [hb] at hchk
-      have hslot : [typeOfV (JSValue.boolean Bool.false)] = [VTy.isValue (JSValue.boolean Bool.false)] := rfl
-      rw [hslot] at hchk
-      have hid : checkSeq sigs (sigRetTy sigs ret)
-          { Γ := envTyOf env, σ := [VTy.isValue (JSValue.boolean Bool.false)] :: eval.map (fun v => [typeOfV v])} (.kIte t e :: rest)
-          = mergeTC vacOk (checkSeq sigs (sigRetTy sigs ret)
-              { Γ := envTyOf env, σ := eval.map (fun v => [typeOfV v])} (e ++ rest)) :=
-        checkSeq_kIte_false rfl
-      rw [hid] at hchk
-      cases hres : checkSeq sigs (sigRetTy sigs ret)
-          { Γ := envTyOf env, σ := eval.map (fun v => [typeOfV v])} (e ++ rest) with
-      | reject s w =>
-          rw [hres] at hchk
-          have hrej : mergeTC vacOk (TCResult.reject s w) = TCResult.reject s w := rfl
-          rw [hrej] at hchk
-          exact hchk.elim
-      | flows fbr =>
-          cases hm : mergeTC vacOk (checkSeq sigs (sigRetTy sigs ret)
-              { Γ := envTyOf env, σ := eval.map (fun v => [typeOfV v])} (e ++ rest)) with
-          | reject s w =>
-              rw [hm] at hchk
-              exact hchk.elim
-          | flows fbm =>
-              rw [hm] at hchk
-              obtain ⟨fbr', hfb, htr⟩ := merge_vacOk_terminal hm hchk
-              have hbr' : fbr' = fbr := TCResult.flows.inj (hfb.symm.trans hres)
-              subst hbr'
-              refine ⟨by simp, ?_⟩
-              rw [frameChecks]
-              first
-              | (simp only [ite_false]; rw [hres])
-              | (rw [if_neg (by decide), hres])
-              exact htr
-
-/-- The loud arm is EXCLUDED — and on the pending-machine,
-    COMPLETELY: a completion can never sit on eval, so every loud
-    kIte state (a non-boolean verdict) is rejected by the per-atom
-    dispatch. No position caveat. -/
 theorem sr_kIte_loud {sigs : SigTable} {t e : List Instr} {rest : List Instr}
     {env : Env} {eval : List JSValue} {ret : «String»} {v : JSValue}
     (hv : ∀ b, v ≠ JSValue.boolean b)
     (h : frameOk sigs none ⟨.kIte t e :: rest, env, v :: eval, ret⟩) : False := by
   obtain ⟨-, hchk⟩ := h
   rw [frameChecks] at hchk
-  simp only [List.map_cons] at hchk
+  simp only [frameWorld, List.map_cons] at hchk
   have hrej : checkSeq sigs (sigRetTy sigs ret)
       { Γ := envTyOf env, σ := [typeOfV v] :: eval.map (fun v => [typeOfV v])} (.kIte t e :: rest)
       = TCResult.reject (.kIte t e) "kIte: verdict is not boolean" := by
@@ -1508,6 +1252,271 @@ theorem sr_kIte_loud {sigs : SigTable} {t e : List Instr} {rest : List Instr}
         cases b <;> simp only [checkSeq, typeOfV, List.foldl, vacOk, mergeTC]
   rw [hrej] at hchk
   exact hchk
+
+/- ## Proof layer XVII: SR arms in the ABSTRACTION SHAPE
+
+    SR_arm h s r: for ALL value frames s (heap, registry arbitrary)
+    and destinies r — if the type machine proves `h :: s` returns
+    inside r, then the machine's ACTUAL successor — computed by
+    fstep, witnessed by an equation, never transcribed — is
+    likewise proved. The post-frame is what the machine's own arm
+    reduces to on the pre-state; guard hypotheses (e.g.
+    lookup env x = some v) are the machine arm's own branch
+    conditions. -/
+
+/-- The type machine accepts the abstracted frame: every
+    exploration path returns inside r. -/
+def frameTyped (sigs : SigTable) (r : Ty) (f : Fr) : Prop :=
+  match checkSeq sigs r (frameWorld f) f.stmts with
+  | .flows fb => terminal fb = Bool.true  -- every world returns
+  | _ => False
+
+theorem frameTyped_eq_frameChecks (sigs : SigTable) (f : Fr) :
+    frameTyped sigs (sigRetTy sigs f.ret) f = frameChecks sigs f := rfl
+
+/-- kIte: the machine pops the boolean and jumps; the type machine
+    dispatches the singleton verdict atom. ∀ s, r. -/
+theorem SR_arm_kIte (sigs : SigTable) (reg : AOReg) (b : Bool) (t e : List Instr)
+    (rest : List Instr) (env : Env) (eval : List JSValue) (ret : «String»)
+    (heap : Heap) (nl : Nat) (r : Ty)
+    (h : frameTyped sigs r ⟨.kIte t e :: rest, env, .boolean b :: eval, ret⟩) :
+    ∃ f', fstep reg (.frames [⟨.kIte t e :: rest, env, .boolean b :: eval, ret⟩] heap nl)
+            = .frames [f'] heap nl
+        ∧ frameTyped sigs r f' := by
+  refine ⟨⟨(if b then t else e) ++ rest, env, eval, ret⟩, rfl, ?_⟩
+  simp only [frameTyped, frameWorld, Fr.stmts, Fr.env, Fr.eval, List.map_cons] at h ⊢
+  cases hb : b with
+  | true =>
+      rw [hb] at h
+      have hslot : [typeOfV (JSValue.boolean Bool.true)] = [VTy.isValue (JSValue.boolean Bool.true)] := rfl
+      rw [hslot] at h
+      rw [checkSeq_kIte_true rfl] at h
+      rw [if_pos rfl]
+      cases hres : checkSeq sigs r
+          { Γ := envTyOf env, σ := eval.map (fun v => [typeOfV v]) } (t ++ rest) with
+      | reject s w =>
+          have hrej : mergeTC vacOk (TCResult.reject s w) = TCResult.reject s w := rfl
+          rw [hres, hrej] at h
+          exact h.elim
+      | flows fbr =>
+          cases hm : mergeTC vacOk (checkSeq sigs r
+              { Γ := envTyOf env, σ := eval.map (fun v => [typeOfV v]) } (t ++ rest)) with
+          | reject s w =>
+              rw [hm] at h
+              exact h.elim
+          | flows fbm =>
+              rw [hm] at h
+              obtain ⟨fbr', hfb, htr⟩ := merge_vacOk_terminal hm h
+              have hbr' : fbr' = fbr := TCResult.flows.inj (hfb.symm.trans hres)
+              subst hbr'
+              exact htr
+  | false =>
+      rw [hb] at h
+      have hslot : [typeOfV (JSValue.boolean Bool.false)] = [VTy.isValue (JSValue.boolean Bool.false)] := rfl
+      rw [hslot] at h
+      rw [checkSeq_kIte_false rfl] at h
+      rw [if_neg (by decide)]
+      cases hres : checkSeq sigs r
+          { Γ := envTyOf env, σ := eval.map (fun v => [typeOfV v]) } (e ++ rest) with
+      | reject s w =>
+          have hrej : mergeTC vacOk (TCResult.reject s w) = TCResult.reject s w := rfl
+          rw [hres, hrej] at h
+          exact h.elim
+      | flows fbr =>
+          cases hm : mergeTC vacOk (checkSeq sigs r
+              { Γ := envTyOf env, σ := eval.map (fun v => [typeOfV v]) } (e ++ rest)) with
+          | reject s w =>
+              rw [hm] at h
+              exact h.elim
+          | flows fbm =>
+              rw [hm] at h
+              obtain ⟨fbr', hfb, htr⟩ := merge_vacOk_terminal hm h
+              have hbr' : fbr' = fbr := TCResult.flows.inj (hfb.symm.trans hres)
+              subst hbr'
+              exact htr
+
+/-- kPop: pop one slot. -/
+theorem SR_arm_kPop (sigs : SigTable) (reg : AOReg) (w : JSValue) (rest : List Instr)
+    (env : Env) (eval : List JSValue) (ret : «String»)
+    (heap : Heap) (nl : Nat) (r : Ty)
+    (h : frameTyped sigs r ⟨.kPop :: rest, env, w :: eval, ret⟩) :
+    ∃ f', fstep reg (.frames [⟨.kPop :: rest, env, w :: eval, ret⟩] heap nl)
+            = .frames [f'] heap nl
+        ∧ frameTyped sigs r f' := by
+  refine ⟨⟨rest, env, eval, ret⟩, rfl, ?_⟩
+  simp only [frameTyped, frameWorld, Fr.stmts, Fr.env, Fr.eval, List.map_cons] at h ⊢
+  rw [checkSeq_kPop rfl] at h
+  exact h
+
+/-- kSet: bind the top slot into the environment. -/
+theorem SR_arm_kSet (sigs : SigTable) (reg : AOReg) (x : «String») (w : JSValue)
+    (rest : List Instr) (env : Env) (eval : List JSValue) (ret : «String»)
+    (heap : Heap) (nl : Nat) (r : Ty)
+    (h : frameTyped sigs r ⟨.kSet x :: rest, env, w :: eval, ret⟩) :
+    ∃ f', fstep reg (.frames [⟨.kSet x :: rest, env, w :: eval, ret⟩] heap nl)
+            = .frames [f'] heap nl
+        ∧ frameTyped sigs r f' := by
+  refine ⟨⟨rest, (x, w) :: env, eval, ret⟩, rfl, ?_⟩
+  simp only [frameTyped, frameWorld, Fr.stmts, Fr.env, Fr.eval, List.map_cons] at h ⊢
+  rw [checkSeq_kSet rfl] at h
+  rw [envTyOf_cons]
+  exact h
+
+/-- kEval of a value literal. -/
+theorem SR_arm_kEval_const (sigs : SigTable) (reg : AOReg) (v : JSValue)
+    (rest : List Instr) (env : Env) (eval : List JSValue) (ret : «String»)
+    (heap : Heap) (nl : Nat) (r : Ty) (hv : isCompl v = Bool.false)
+    (h : frameTyped sigs r ⟨.kEval (.const v) :: rest, env, eval, ret⟩) :
+    ∃ f', fstep reg (.frames [⟨.kEval (.const v) :: rest, env, eval, ret⟩] heap nl)
+            = .frames [f'] heap nl
+        ∧ frameTyped sigs r f' := by
+  refine ⟨⟨rest, env, v :: eval, ret⟩, rfl, ?_⟩
+  simp only [frameTyped, frameWorld, Fr.stmts, Fr.env, Fr.eval, List.map_cons] at h ⊢
+  rw [checkSeq_kEval_const hv] at h
+  exact h
+
+/-- kEval of a normal-completion literal. -/
+theorem SR_arm_kEval_compl_normal (sigs : SigTable) (reg : AOReg) (pv : JSValue)
+    (rest : List Instr) (env : Env) (eval : List JSValue) (ret : «String»)
+    (heap : Heap) (nl : Nat) (r : Ty)
+    (h : frameTyped sigs r ⟨.kEval (.const (.compl Bool.false pv)) :: rest, env, eval, ret⟩) :
+    ∃ f', fstep reg (.frames [⟨.kEval (.const (.compl Bool.false pv)) :: rest, env, eval, ret⟩] heap nl)
+            = .frames [f'] heap nl
+        ∧ frameTyped sigs r f' := by
+  refine ⟨⟨rest, env, .compl Bool.false pv :: eval, ret⟩, rfl, ?_⟩
+  simp only [frameTyped, frameWorld, Fr.stmts, Fr.env, Fr.eval, checkSeq,
+    List.map_cons, typeOfV] at h ⊢
+  exact h
+
+/-- kEval of a numeric literal (the machine's own arm). -/
+theorem SR_arm_kEval_nat (sigs : SigTable) (reg : AOReg) (n : Nat)
+    (rest : List Instr) (env : Env) (eval : List JSValue) (ret : «String»)
+    (heap : Heap) (nl : Nat) (r : Ty)
+    (h : frameTyped sigs r ⟨.kEval (.nat n) :: rest, env, eval, ret⟩) :
+    ∃ f', fstep reg (.frames [⟨.kEval (.nat n) :: rest, env, eval, ret⟩] heap nl)
+            = .frames [f'] heap nl
+        ∧ frameTyped sigs r f' := by
+  refine ⟨⟨rest, env, .number (↑n : Int) :: eval, ret⟩, rfl, ?_⟩
+  simp only [frameTyped, frameWorld, Fr.stmts, Fr.env, Fr.eval, List.map_cons] at h ⊢
+  rw [checkSeq_kEval_nat] at h
+  exact h
+
+/-- kEval of a variable (the machine's own arm guard: bound). -/
+theorem SR_arm_kEval_nv (sigs : SigTable) (reg : AOReg) (x : «String») (v : JSValue)
+    (rest : List Instr) (env : Env) (eval : List JSValue) (ret : «String»)
+    (heap : Heap) (nl : Nat) (r : Ty) (hl : lookup env x = some v)
+    (h : frameTyped sigs r ⟨.kEval (.nv x) :: rest, env, eval, ret⟩) :
+    ∃ f', fstep reg (.frames [⟨.kEval (.nv x) :: rest, env, eval, ret⟩] heap nl)
+            = .frames [f'] heap nl
+        ∧ frameTyped sigs r f' := by
+  have hstep : fstep reg (.frames [⟨.kEval (.nv x) :: rest, env, eval, ret⟩] heap nl)
+      = .frames [⟨rest, env, v :: eval, ret⟩] heap nl := by
+    simp only [fstep, hl]
+  refine ⟨⟨rest, env, v :: eval, ret⟩, hstep, ?_⟩
+  simp only [frameTyped, frameWorld, Fr.stmts, Fr.env, Fr.eval, List.map_cons] at h ⊢
+  have hΓ : tyLookup (envTyOf env) x = some [typeOfV v] := by
+    rw [← envTyOf_lookup env x, hl]
+    rfl
+  rw [checkSeq_kEval_nv hΓ] at h
+  exact h
+
+/-- kTest: the peek — verdict pushed above the parked completion. -/
+theorem SR_arm_kTest_normal (sigs : SigTable) (reg : AOReg) (pv : JSValue)
+    (rest : List Instr) (env : Env) (eval : List JSValue) (ret : «String»)
+    (heap : Heap) (nl : Nat) (r : Ty)
+    (h : frameTyped sigs r ⟨.kTest :: rest, env, .compl Bool.false pv :: eval, ret⟩) :
+    ∃ f', fstep reg (.frames [⟨.kTest :: rest, env, .compl Bool.false pv :: eval, ret⟩] heap nl)
+            = .frames [f'] heap nl
+        ∧ frameTyped sigs r f' := by
+  refine ⟨⟨rest, env, .boolean Bool.false :: .compl Bool.false pv :: eval, ret⟩, rfl, ?_⟩
+  simp only [frameTyped, frameWorld, Fr.stmts, Fr.env, Fr.eval, List.map_cons, typeOfV] at h ⊢
+  rw [checkSeq_kTest_normal rfl] at h
+  exact h
+
+/-- kTest on a throw completion. -/
+theorem SR_arm_kTest_throw (sigs : SigTable) (reg : AOReg) (pv : JSValue)
+    (rest : List Instr) (env : Env) (eval : List JSValue) (ret : «String»)
+    (heap : Heap) (nl : Nat) (r : Ty)
+    (h : frameTyped sigs r ⟨.kTest :: rest, env, .compl Bool.true pv :: eval, ret⟩) :
+    ∃ f', fstep reg (.frames [⟨.kTest :: rest, env, .compl Bool.true pv :: eval, ret⟩] heap nl)
+            = .frames [f'] heap nl
+        ∧ frameTyped sigs r f' := by
+  refine ⟨⟨rest, env, .boolean Bool.true :: .compl Bool.true pv :: eval, ret⟩, rfl, ?_⟩
+  simp only [frameTyped, frameWorld, Fr.stmts, Fr.env, Fr.eval, List.map_cons, typeOfV] at h ⊢
+  rw [checkSeq_kTest_throw rfl] at h
+  exact h
+
+/-- kEval of a throw-completion literal. -/
+theorem SR_arm_kEval_compl_throw (sigs : SigTable) (reg : AOReg) (v : JSValue)
+    (rest : List Instr) (env : Env) (eval : List JSValue) (ret : «String»)
+    (heap : Heap) (nl : Nat) (r : Ty)
+    (h : frameTyped sigs r ⟨.kEval (.const (.compl Bool.true v)) :: rest, env, eval, ret⟩) :
+    ∃ f', fstep reg (.frames [⟨.kEval (.const (.compl Bool.true v)) :: rest, env, eval, ret⟩] heap nl)
+            = .frames [f'] heap nl
+        ∧ frameTyped sigs r f' := by
+  refine ⟨⟨rest, env, .compl Bool.true v :: eval, ret⟩, rfl, ?_⟩
+  simp only [frameTyped, frameWorld, Fr.stmts, Fr.env, Fr.eval, checkSeq,
+    List.map_cons, typeOfV] at h ⊢
+  exact h
+
+/-- kUnwrap: normal completion → bare payload. -/
+theorem SR_arm_kUnwrap (sigs : SigTable) (reg : AOReg) (pv : JSValue)
+    (rest : List Instr) (env : Env) (eval : List JSValue) (ret : «String»)
+    (heap : Heap) (nl : Nat) (r : Ty)
+    (h : frameTyped sigs r ⟨.kUnwrap :: rest, env, .compl Bool.false pv :: eval, ret⟩) :
+    ∃ f', fstep reg (.frames [⟨.kUnwrap :: rest, env, .compl Bool.false pv :: eval, ret⟩] heap nl)
+            = .frames [f'] heap nl
+        ∧ frameTyped sigs r f' := by
+  refine ⟨⟨rest, env, pv :: eval, ret⟩, rfl, ?_⟩
+  simp only [frameTyped, frameWorld, Fr.stmts, Fr.env, Fr.eval, List.map_cons, typeOfV] at h ⊢
+  rw [checkSeq_kUnwrap rfl] at h
+  exact h
+
+/-- pWrapC: bare value → normal completion (the machine's applyPrim
+    computes the post). -/
+theorem SR_arm_pWrapC (sigs : SigTable) (reg : AOReg) (v : JSValue)
+    (rest : List Instr) (env : Env) (eval : List JSValue) (ret : «String»)
+    (heap : Heap) (nl : Nat) (r : Ty)
+    (h : frameTyped sigs r ⟨.kPrim1 .pWrapC :: rest, env, v :: eval, ret⟩) :
+    ∃ f', fstep reg (.frames [⟨.kPrim1 .pWrapC :: rest, env, v :: eval, ret⟩] heap nl)
+            = .frames [f'] heap nl
+        ∧ frameTyped sigs r f' := by
+  refine ⟨⟨rest, env, .compl Bool.false v :: eval, ret⟩, rfl, ?_⟩
+  simp only [frameTyped, frameWorld, Fr.stmts, Fr.env, Fr.eval, List.map_cons, typeOfV] at h ⊢
+  have hbar : isBareVTy (typeOfV v) = Bool.true := by
+    cases v with
+    | compl a b =>
+        exfalso
+        have hbad : step1 sigs (.kPrim1 .pWrapC)
+            { Γ := envTyOf env,
+              σ := [typeOfV (JSValue.compl a b)] :: eval.map (fun v => [typeOfV v]) } = none := by
+          cases a with
+          | false =>
+              simp only [step1, typeOfV, bareSlot, isBareVTy]
+              rfl
+          | true =>
+              simp only [step1, typeOfV, bareSlot, isBareVTy]
+              rfl
+        obtain ⟨why, hrej⟩ := checkSeq_reject_kWrapC hbad
+        rw [hrej] at h
+        exact h
+    | undefined | null | boolean _ | number _ | str _
+    | obj _ | listV _ | descV _ => rfl
+  rw [checkSeq_pWrapC rfl hbar] at h
+  exact h
+
+/-- pThrowC: bare value → throw completion. -/
+theorem SR_arm_pThrowC (sigs : SigTable) (reg : AOReg) (v : JSValue)
+    (rest : List Instr) (env : Env) (eval : List JSValue) (ret : «String»)
+    (heap : Heap) (nl : Nat) (r : Ty)
+    (h : frameTyped sigs r ⟨.kPrim1 .pThrowC :: rest, env, v :: eval, ret⟩) :
+    ∃ f', fstep reg (.frames [⟨.kPrim1 .pThrowC :: rest, env, v :: eval, ret⟩] heap nl)
+            = .frames [f'] heap nl
+        ∧ frameTyped sigs r f' := by
+  refine ⟨⟨rest, env, .compl Bool.true v :: eval, ret⟩, rfl, ?_⟩
+  simp only [frameTyped, frameWorld, Fr.stmts, Fr.env, Fr.eval, List.map_cons, typeOfV] at h ⊢
+  rw [checkSeq_pThrowC rfl] at h
+  exact h
 
 /- ## Next: the specialization capstone (pointwise)
 
