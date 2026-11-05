@@ -102,7 +102,7 @@ def loopBody : List Instr := [.kEval (.const JSValue.undefined), .kSet "done"]
 def loopRest : List Instr :=
   [.kEval (.const (JSValue.number 42)), .kPrim1 .pWrapC, .kRet]
 #eval fsteps theReg 100
-    (.frames [⟨.kRepeatWhile (Expr.varNotPresent "done") loopBody :: loopRest, [], [], "«top»", none⟩]
+    (.frames [⟨.kRepeatWhile (Expr.varNotPresent "done") loopBody :: loopRest, [], [], "«top»"⟩]
       emptyHeap 0)
 /- GetMethod on a non-callable, non-undefined value: spec says
    step 4 throws a TypeError (compl true undefined). -/
@@ -121,10 +121,10 @@ def demoHeap : Heap :=
 #eval checkRun (renest lookupDemoF)
 #eval fsteps theReg
     1000 (.frames [⟨compileSteps (build lookupDemoF),
-        [("input", .obj 0), ("propertyKey", .str "x")], [], "«top»", none⟩] demoHeap 1)
+        [("input", .obj 0), ("propertyKey", .str "x")], [], "«top»"⟩] demoHeap 1)
 #eval fsteps theReg
     1000 (.frames [⟨compileSteps (build getMethodDemoF),
-         [("input", .obj 0), ("propertyKey", .str "x")], [], "«top»", none⟩] demoHeap 1)
+         [("input", .obj 0), ("propertyKey", .str "x")], [], "«top»"⟩] demoHeap 1)
 
 /- ===== static typing: signature table (payload types) =====
    Delivery is always a completion; the table types the payload.
@@ -155,6 +155,10 @@ def corpusSigs : SigTable := [
 /- Gate helpers: the #evals are for humans; the examples below make
     every load-bearing claim EXIT-CHECKED - a regression fails the
     build, not the reading. -/
+def liftC (t : Ty) : Ty := t.map VTy.complN
+/-- the standard ?-dust destiny: any payload, may throw -/
+def langCT : Ty := complTy [Pending.normal langT, Pending.throw]
+
 def tcOk (sigs : SigTable) (r : Ty) (Γ : TyEnv) (seq : List Instr) : Bool :=
   match typecheckSeq sigs r Γ seq with
   | .flows f => terminal f && f.assumes.isEmpty
@@ -166,14 +170,15 @@ def tcReject (sigs : SigTable) (r : Ty) (Γ : TyEnv) (seq : List Instr) : Bool :
   | _ => Bool.false
 
 /- the issue-#1 regression loop typechecks too: body neutral, cond boolean -/
-#eval typecheckSeq corpusSigs langT []
+#eval typecheckSeq corpusSigs (liftC langT) []
     (.kRepeatWhile (Expr.varNotPresent "done") loopBody :: loopRest)
-example : tcOk corpusSigs langT []
+example : tcOk corpusSigs (liftC langT) []
     (.kRepeatWhile (Expr.varNotPresent "done") loopBody :: loopRest) = Bool.true := by native_decide
 
 -- every registry body typechecks against its declared signature
 -- (prints the first rejection with reason + stack, or none)
 #eval typecheckReg corpusSigs theReg
+
 #eval typecheckRegOk corpusSigs theReg
 
 -- signature well-formedness: every desc atom in the table obeys the
@@ -230,12 +235,12 @@ example : assumesOf corpusSigs "GetMethod" ["value", "propertyKey"]
 example : assumesOf corpusSigs "OrdinaryGet" ["obj", "propertyKey", "receiver"]
     (compileSteps (build ordinaryGet7_3_2)) = 0 := by native_decide
 -- the demos typecheck as frames (Γ = params, or empty for top-level)
-#eval typecheckSeq corpusSigs langT [("input", langT), ("propertyKey", [.anyValue .str])] (compileSteps (build lookupDemoF))
-#eval typecheckSeq corpusSigs langT [("input", langT), ("propertyKey", [.anyValue .str])] (compileSteps (build getMethodDemoF))
-example : tcOk corpusSigs langT
+#eval typecheckSeq corpusSigs (liftC langT) [("input", langT), ("propertyKey", [.anyValue .str])] (compileSteps (build lookupDemoF))
+#eval typecheckSeq corpusSigs (liftC langT) [("input", langT), ("propertyKey", [.anyValue .str])] (compileSteps (build getMethodDemoF))
+example : tcOk corpusSigs (liftC langT)
     [("input", langT), ("propertyKey", [.anyValue .str])]
     (compileSteps (build lookupDemoF)) = Bool.true := by native_decide
-example : tcOk corpusSigs langT
+example : tcOk corpusSigs (liftC langT)
     [("input", langT), ("propertyKey", [.anyValue .str])]
     (compileSteps (build getMethodDemoF)) = Bool.true := by native_decide
 
@@ -245,15 +250,15 @@ example : tcOk corpusSigs langT
 def bug1 : List Instr :=
   [.kEval (.const (.compl Bool.false (JSValue.number 5))), .kTest,
    .kIte [.kRet] [.kUnwrap, .kRet]]
-#eval typecheckSeq corpusSigs langT [] bug1
-example : tcReject corpusSigs langT [] bug1 = Bool.true := by native_decide
+#eval typecheckSeq corpusSigs (liftC langT) [] bug1
+example : tcReject corpusSigs (liftC langT) [] bug1 = Bool.true := by native_decide
 /- Bug 2 (double self-test): kEval of a call yields the payload type
    (raw), a stray kTest demands a completion. -/
 def bug2 : List Instr :=
   [.kEval (Expr.call "GetV" [Expr.nv "v", Expr.nv "p"]), .kTest,
    .kIte [.kRet] [.kUnwrap, .kPrim1 .pWrapC, .kRet]]
-#eval typecheckSeq corpusSigs langT [("v", langT), ("p", langT)] bug2
-example : tcReject corpusSigs langT [("v", langT), ("p", langT)] bug2 = Bool.true := by native_decide
+#eval typecheckSeq corpusSigs (liftC langT) [("v", langT), ("p", langT)] bug2
+example : tcReject corpusSigs (liftC langT) [("v", langT), ("p", langT)] bug2 = Bool.true := by native_decide
 /- Signature-driven argument checking: args must be BELOW the
    callee's parameters (fit the contract), never supersets. -/
 def closeSigs : SigTable := [("FakeClose", ([langT, [.anyValue .desc]], [.normal langT]))]
@@ -269,8 +274,8 @@ def callSigs : SigTable := [("FakeCall", ([langT], [.normal langT, .throw]))]
 def callBoth : List Instr :=
   [.kEval (.const (JSValue.number 5)), .kCall "FakeCall" 1,
    .kTest, .kIte [.kRet] [.kUnwrap, .kPrim1 .pWrapC, .kRet]]
-#eval typecheckSeq callSigs langT [] callBoth
-example : tcOk callSigs langT [] callBoth = Bool.true := by native_decide
+#eval typecheckSeq callSigs langCT [] callBoth
+example : tcOk callSigs langCT [] callBoth = Bool.true := by native_decide
 /- Negative control: the throw delivery is REALLY explored - a
    then-branch that falls through (kPop, then end) must fail
    terminality. If parking were normal-only, this would certify. -/
@@ -286,8 +291,8 @@ def neverSigs : SigTable := [("FakeTotal", ([langT], [.normal langT]))]
 def callNeverBlind : List Instr :=
   [.kEval (.const (JSValue.number 5)), .kCall "FakeTotal" 1,
    .kTest, .kIte [.kPop] [.kUnwrap, .kPrim1 .pWrapC, .kRet]]
-#eval typecheckSeq neverSigs langT [] callNeverBlind
-example : tcOk neverSigs langT [] callNeverBlind = Bool.true := by native_decide
+#eval typecheckSeq neverSigs (liftC langT) [] callNeverBlind
+example : tcOk neverSigs (liftC langT) [] callNeverBlind = Bool.true := by native_decide
 /- Judgement consistency: a body that CAN throw must declare it.
    BadThrow's judgement omits throw - its pThrowC exit must fail
    certification. -/
@@ -317,15 +322,15 @@ example : (typecheckAO argThrowSigs "FakeCall" ["x"] argThrowBody).isSome
   = Bool.true := by native_decide
 example : (typecheckAO argThrowGoodSigs "FakeCall" ["x"] argThrowBody).isNone
   = Bool.true := by native_decide
-#eval typecheckSeq closeSigs langT [("r", langT), ("c", [.anyValue .desc])] goodArg
-example : tcOk closeSigs langT [("r", langT), ("c", [.anyValue .desc])] goodArg
+#eval typecheckSeq closeSigs langCT [("r", langT), ("c", [.anyValue .desc])] goodArg
+example : tcOk closeSigs langCT [("r", langT), ("c", [.anyValue .desc])] goodArg
     = Bool.true := by native_decide
 /- Stricter typing: a number where kIte demands a boolean. This is the
    class of bug runtime smoke tests miss on dead paths. -/
 def bug3 : List Instr :=
   [.kEval (.const (JSValue.number 5)), .kIte [] []]
-#eval typecheckSeq corpusSigs langT [] bug3
-example : tcReject corpusSigs langT [] bug3 = Bool.true := by native_decide
+#eval typecheckSeq corpusSigs (liftC langT) [] bug3
+example : tcReject corpusSigs (liftC langT) [] bug3 = Bool.true := by native_decide
 
 /- ## Reference machine equivalence (exit-checked).
     Reference.lean is re-exported by the root metalanguage module. -/
@@ -352,8 +357,8 @@ def theRefReg : RefReg := fun f =>
 def refAgree (reg : RefReg) (n : Nat) (p : Prog)
     (m : FM) : Bool :=
   match refRun reg n p [] emptyHeap 0, m with
-  | .done v _ _, .fdone (.normal v') _ _ _ _ => v == v'
-  | .threw v _ _, .fdone PendV.throw _ _ _ _ => Bool.true
+  | .done v _ _, .fdone (.compl Bool.false v') _ _ _ _ => v == v'
+  | .threw v _ _, .fdone (.compl Bool.true v') _ _ _ _ => Bool.true
   | .fell _ _, .fell _ _ _ _ => Bool.true
   | _, _ => Bool.false
 

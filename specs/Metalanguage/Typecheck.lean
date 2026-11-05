@@ -57,12 +57,25 @@ def fieldsOf : Descriptor → List Field
 
 /- ## Atoms: the flat value layer -/
 
+/- THE FLAT UNIVERSE: ONE eval stack, ONE lattice. A completion is
+    an ordinary value whose atom says so — no pending field, no
+    splitStack: the slot's type gives its position and kind. The
+    four constructors below are the BARE forms (plain values); the
+    two above them are the COMPLETION forms. `isBareVTy` is the
+    two-arm classification. -/
 inductive VTy where
-  | anyValue (c : Ctor)          -- any value of this class
-  | isValue (v : JSValue)        -- exactly this value (singleton)
-  | desc (fs : List Field)      -- descriptor with exactly this field-set
-  | notPresent                   -- the binding is absent (optional arg)
+  | complN (p : VTy)             -- normal completion, payload of type p
+  | complT                       -- throw completion
+  | anyValue (c : Ctor)          -- any bare value of this class
+  | isValue (v : JSValue)        -- exactly this bare value (singleton)
+  | desc (fs : List Field)      -- bare descriptor with exactly this field-set
+  | notPresent                   -- the bare binding is absent (optional arg)
   deriving Repr, BEq
+
+/-- The classification: bare value vs completion. -/
+def isBareVTy : VTy → Bool
+  | .complN _ | .complT => Bool.false
+  | _ => Bool.true
 
 /-- A flat type: a finite disjunction of atoms. -/
 abbrev Ty := List VTy
@@ -79,18 +92,13 @@ def tagOf : JSValue → Ctor
   | .obj _ => .obj | .listV _ => .list | .descV _ => .desc
   | .compl _ _ => .undef        -- completions are never stack atoms
 
-/-- Canonical abstraction of a NON-completion stack value.
-    Completions are abstracted by pendingOf, never by typeOfV. -/
+/-- Canonical abstraction of a stack value — completions included:
+    they are ordinary values, abstracted where they sit. -/
 def typeOfV : JSValue → VTy
   | .descV d => .desc (fieldsOf d)
-  | .compl _ _ => .notPresent   -- unreachable; totality only
+  | .compl Bool.false v => .complN (typeOfV v)
+  | .compl Bool.true _ => .complT
   | v => .isValue v
-
-/-- Canonical abstraction of a completion value. -/
-def pendingOf : JSValue → Pending
-  | .compl Bool.false v => .normal [typeOfV v]
-  | .compl Bool.true _ => .throw
-  | _ => .throw
 
 def anyOf (cs : List Ctor) : Ty := cs.map VTy.anyValue
 def langT : Ty := anyOf langTags
@@ -99,6 +107,8 @@ def anyT : Ty := anyOf anyTags
 /- ## Subtyping: a finite grid on atoms; forall-exists on flat types -/
 
 def tmovesV : VTy → VTy → Bool
+  | .complN p, .complN q => tmovesV p q
+  | .complT, .complT => Bool.true
   | .anyValue c, .anyValue c' => decide (c = c')
   | .isValue v, .isValue w => v == w
   | .isValue v, .anyValue c => decide (tagOf v = c)
@@ -153,13 +163,21 @@ def removeTy (S T : Ty) : Ty :=
 
 abbrev SigTable := List («String» × (List Ty × List Pending))
 
-/-- The payload union of a completion judgement. -/
+def complCanThrow (cs : List Pending) : Bool :=
+  cs.any (fun c => match c with | .throw => Bool.true | _ => Bool.false)
+
+/-- The payload union of a completion judgement (bare). -/
 def complPayload (cs : List Pending) : Ty :=
   (cs.filterMap (fun c => match c with
     | .normal t => some t | .throw => none)).flatten
 
-def complCanThrow (cs : List Pending) : Bool :=
-  cs.any (fun c => match c with | .throw => Bool.true | _ => Bool.false)
+/-- A completion judgement as ONE stack-slot type: the normal
+    payload alternatives as complN atoms, plus complT iff declared.
+    This is what a call pushes and what a frame returns. -/
+def complTy (cs : List Pending) : Ty :=
+  (cs.filterMap (fun c => match c with
+    | .normal t => some (t.map VTy.complN) | .throw => none)).flatten
+  ++ (if complCanThrow cs then [VTy.complT] else [])
 
 def sigFind : SigTable → «String» → Option (List Ty × List Pending)
   | [], _ => none
@@ -177,7 +195,7 @@ def sigCompls (sigs : SigTable) (name : «String») : List Pending :=
   | none => [.throw]
 
 def sigRetTy (sigs : SigTable) (name : «String») : Ty :=
-  complPayload (sigCompls sigs name)
+  complTy (sigCompls sigs name)
 
 abbrev TyEnv := List («String» × Ty)
 
@@ -216,7 +234,6 @@ def mopPayload («nm» : «String») : Ty := complPayload (mopResult nm)
 structure World where
   Γ : TyEnv
   σ : List Ty
-  pending : Option Pending
   deriving Repr
 
 abbrev Worlds := List World
@@ -502,94 +519,112 @@ theorem sfuel_testvar_lt (e : Expr) (x : «String») (p : Prim)
   simp only [sfuel, ifuel, h]
   omega
 
-/-- Park a completion in a world; refuses double parking. -/
-def parkPending (p : Pending) (w : World) : Option World :=
-  match w.pending with
-  | some _ => none
-  | none => some { w with pending := some p }
+/-- Split a slot type by completion kind: the normal side (complN
+    atoms, payloads kept) and the throw side. -/
+def complNormals (t : Ty) : Ty :=
+  t.filterMap (fun a => match a with | .complN p => some (.complN p) | _ => none)
+
+def complHasThrow (t : Ty) : Bool :=
+  t.any (fun a => match a with | .complT => Bool.true | _ => Bool.false)
+
+/-- The payloads of a complN-ONLY slot (none if any atom is not a
+    normal completion). -/
+def unwrapSlot : Ty → Option Ty
+  | [] => some []
+  | .complN p :: rest => (unwrapSlot rest).map (fun ps => p :: ps)
+  | _ :: _ => none
+
+/-- The complN-wrapping of a BARE-only slot (none if any atom is a
+    completion). -/
+def bareSlot : Ty → Option Ty
+  | [] => some []
+  | a :: rest =>
+      match isBareVTy a with
+      | Bool.true => (bareSlot rest).map (fun ps => a :: ps)
+      | Bool.false => none
 
 /-- Step ONE world through one stack instruction (no control flow).
-    Fails (none) if the world's stack or pending does not match;
-    may expand into several worlds (parking splits over completion
-    judgements). -/
+    Fails (none) on shape mismatch; the completion test (kTest)
+    splits by completion kind — the same fork machinery as the Γ
+    splits, applied to the slot. -/
 def step1 (sigs : SigTable) (i : Instr) (w : World) : Option Worlds :=
   match i with
   | .kPrim1 .pWrapC =>
       match w.σ with
-      | t :: σ' => (parkPending (.normal t) { w with σ := σ' }).map (fun w₂ => [w₂])
+      | t :: σ' => (bareSlot t).map (fun wt => [{ w with σ := wt.map VTy.complN :: σ' }])
       | [] => none
   | .kPrim1 .pThrowC =>
       match w.σ with
-      | _ :: σ' => (parkPending .throw { w with σ := σ' }).map (fun w₂ => [w₂])
+      | _ :: σ' => some [{ w with σ := [VTy.complT] :: σ' }]
       | [] => none
   | .kPrim1 p =>
       match primTys p with
       | some (tin, tout) =>
-          match w.pending, popTy tin w.σ with
-          | none, some σ' => some [{ w with σ := tout :: σ' }]
-          | _, _ => none
+          match popTy tin w.σ with
+          | some σ' => some [{ w with σ := tout :: σ' }]
+          | none => none
       | none => some [w]
   | .kCall f n =>
       match sigFind sigs f with
       | none => none
       | some (ps, retj) =>
-          match w.pending with
-          | some _ => none
-          | none =>
-              match (ps.length == n) || (ps.length == n + 1) with
+          match (ps.length == n) || (ps.length == n + 1) with
+          | false => none
+          | true =>
+              match popArgs (if ps.length == n then ps else ps.take n) w.σ with
               | false => none
-              | true =>
-                  match popArgs (if ps.length == n then ps else ps.take n) w.σ with
-                  | false => none
-                  | true =>
-                      some ((sigCompls sigs f).map (fun c =>
-                        { w with σ := w.σ.drop n, pending := some c }))
+              | true => some [{ w with σ := complTy retj :: w.σ.drop n }]
   | .kSet x =>
-      match w.pending, w.σ with
-      | none, t :: σ' => some [{ w with Γ := (x, t) :: w.Γ, σ := σ' }]
-      | _, _ => none
+      match w.σ with
+      | t :: σ' => some [{ w with Γ := (x, t) :: w.Γ, σ := σ' }]
+      | [] => none
   | .kPop =>
-      match w.pending, w.σ with
-      | none, _ :: σ' => some [{ w with σ := σ' }]
-      | _, _ => none
+      match w.σ with
+      | _ :: σ' => some [{ w with σ := σ' }]
+      | [] => none
   | .kTest =>
-      match w.pending with
-      | some (.normal _) =>
-          some [{ w with σ := [.isValue (.boolean Bool.false)] :: w.σ }]
-      | some .throw =>
-          some [{ w with σ := [.isValue (.boolean Bool.true)] :: w.σ }]
-      | none => none
+      -- peek the top slot: split by completion kind, push the verdict
+      match w.σ with
+      | t :: σ' =>
+          let normals := complNormals t
+          let normalSide : Worlds :=
+            match normals with
+            | [] => []
+            | _ => [{ w with σ := [.isValue (.boolean Bool.false)] :: normals :: σ' }]
+          let throwSide : Worlds :=
+            match complHasThrow t with
+            | Bool.true => [{ w with σ := [.isValue (.boolean Bool.true)] :: [VTy.complT] :: σ' }]
+            | Bool.false => []
+          match normalSide ++ throwSide with
+          | [] => none
+          | ws => some ws
+      | [] => none
   | .kUnwrap =>
-      match w.pending with
-      | some (.normal t) => some [{ w with σ := t :: w.σ, pending := none }]
-      | some .throw => some [{ w with σ := anyT :: w.σ, pending := none }]
-      | none => none
+      match w.σ with
+      | t :: σ' => (unwrapSlot t).map (fun ps => [{ w with σ := ps :: σ' }])
+      | [] => none
   | .kIMeth nm n =>
       match mopArity nm == some n with
       | false => none
       | true =>
-          match w.pending with
-          | some _ => none
-          | none =>
-              match popTyN n anyT w.σ with
+          match popTyN n anyT w.σ with
+          | none => none
+          | some σ' =>
+              match popA (.anyValue .obj) σ' with
               | none => none
-              | some σ' =>
-                  match popA (.anyValue .obj) σ' with
-                  | none => none
-                  | some σ'' =>
-                      some ((mopResult nm).map (fun c =>
-                        { w with σ := σ'', pending := some c }))
+              | some σ'' =>
+                  some [{ w with σ := complTy (mopResult nm) :: σ'' }]
   | .kMkList n =>
-      match w.pending, popTyN n anyT w.σ with
-      | none, some σ' => some [{ w with σ := [.anyValue .list] :: σ' }]
-      | _, _ => none
+      match popTyN n anyT w.σ with
+      | some σ' => some [{ w with σ := [.anyValue .list] :: σ' }]
+      | none => none
   | .kNewSlot sn =>
       match slotOfName sn with
       | none => none
       | some _ =>
-          match w.pending, popTy anyT w.σ with
-          | none, some σ' => some [{ w with σ := [.anyValue .obj] :: σ' }]
-          | _, _ => none
+          match popTy anyT w.σ with
+          | some σ' => some [{ w with σ := [.anyValue .obj] :: σ' }]
+          | none => none
   | _ => some [w]
 
 /-- Correlated predicate tests: IsDataDescriptor(x) /
@@ -614,13 +649,11 @@ def split1 (x : «String») (T : Ty) (w : World) : Worlds :=
       (match meetTy S T with
        | [] => []
        | _ => [{ Γ := (x, meetTy S T) :: w.Γ,
-                 σ := [.isValue (.boolean Bool.true)] :: w.σ,
-                 pending := w.pending }])
+                 σ := [.isValue (.boolean Bool.true)] :: w.σ }])
       ++ (match removeTy S T with
        | [] => []
        | _ => [{ Γ := (x, removeTy S T) :: w.Γ,
-                 σ := [.isValue (.boolean Bool.false)] :: w.σ,
-                 pending := w.pending }])
+                 σ := [.isValue (.boolean Bool.false)] :: w.σ }])
 
 /-- Split ONE world by a per-atom predicate decider. -/
 def splitP1 (x : «String») (dec : VTy → Option Bool) (w : World) : Worlds :=
@@ -631,19 +664,15 @@ def splitP1 (x : «String») (dec : VTy → Option Bool) (w : World) : Worlds :=
         match dec a with
         | some Bool.true =>
             acc ++ [{ Γ := (x, [a]) :: w.Γ,
-                      σ := [.isValue (.boolean Bool.true)] :: w.σ,
-                      pending := w.pending }]
+                      σ := [.isValue (.boolean Bool.true)] :: w.σ }]
         | some Bool.false =>
             acc ++ [{ Γ := (x, [a]) :: w.Γ,
-                      σ := [.isValue (.boolean Bool.false)] :: w.σ,
-                      pending := w.pending }]
+                      σ := [.isValue (.boolean Bool.false)] :: w.σ }]
         | none =>
             acc ++ [{ Γ := (x, [a]) :: w.Γ,
-                      σ := [.isValue (.boolean Bool.true)] :: w.σ,
-                      pending := w.pending },
+                      σ := [.isValue (.boolean Bool.true)] :: w.σ },
                     { Γ := (x, [a]) :: w.Γ,
-                      σ := [.isValue (.boolean Bool.false)] :: w.σ,
-                      pending := w.pending }]
+                      σ := [.isValue (.boolean Bool.false)] :: w.σ }]
       S.foldl go []
 
 /- Loop join: every falls-world must come back to a REFINEMENT of
@@ -655,8 +684,7 @@ def checkLoopBody (rbody : TCResult) (site : Instr)
   | .flows fb =>
       let neutral := fb.falls.all (fun w =>
         w.σ.length == σ₀.length
-          && (List.zip w.σ σ₀).all (fun (t, u) => tmoves t u)
-          && w.pending.isNone)
+          && (List.zip w.σ σ₀).all (fun (t, u) => tmoves t u))
       if neutral then
         match k fb.falls with
         | .flows fr => .flows { exits := fb.exits || fr.exits,
@@ -704,19 +732,20 @@ def markDebt (why : «String») : TCResult → TCResult :=
 def checkSeq : SigTable → Ty → World → List Instr → TCResult
   | _, _, w, [] => .flows { exits := Bool.false, throws := Bool.false, falls := [w], assumes := [] }
   | _, r, w, .kRet :: _ =>
-      -- the world returns: pending payload ⊑ r, or a throw
-      match w.pending with
-      | some (.normal t) =>
+      -- the frame returns its top: a completion (complN payload ⊑
+      -- r's payloads, or complT when r declares throw)
+      match w.σ with
+      | t :: σ' =>
           if tmoves t r then
-            .flows { exits := Bool.true, throws := Bool.false, falls := [], assumes := [] }
+            .flows { exits := Bool.true,
+                     throws := complHasThrow t,
+                     falls := [], assumes := [] }
           else
             .reject .kRet ("kRet: payload does not match the frame's destiny r: "
-              ++ toString (toString (repr w.pending) ++ toString (repr w.σ)))
-      | some .throw =>
-          .flows { exits := Bool.true, throws := Bool.true, falls := [], assumes := [] }
-      | none =>
+              ++ toString (toString (repr t) ++ toString (repr w.σ)))
+      | [] =>
           .reject .kRet ("kRet: payload does not match the frame's destiny r: "
-            ++ toString (toString (repr w.pending) ++ toString (repr w.σ)))
+            ++ toString (toString (repr w.σ)))
   | sigs, r, w, .kIte t e :: rest =>
       -- dispatch per VERDICT ATOM of the top slot: true checks a
       -- then-world, false an else-world, a bool-union spawns both
@@ -741,14 +770,10 @@ def checkSeq : SigTable → Ty → World → List Instr → TCResult
                | _ => .reject (.kIte t e) "kIte: verdict is not boolean"))
             vacOk
   | sigs, r, w, .kEval (.const (.compl Bool.false pv)) :: rest =>
-      -- a completion literal parks itself (never a stack atom)
-      match parkPending (.normal [typeOfV pv]) w with
-      | none => .reject (.kEval (.const (.compl Bool.false pv))) "double-parked completion"
-      | some w' => checkSeq sigs r w' rest
+      -- a completion literal is an ordinary value: it pushes
+      checkSeq sigs r { w with σ := [VTy.complN (typeOfV pv)] :: w.σ } rest
   | sigs, r, w, .kEval (.const (.compl Bool.true _)) :: rest =>
-      match parkPending .throw w with
-      | none => .reject (.kEval (.const (.compl Bool.true JSValue.undefined))) "double-parked completion"
-      | some w' => checkSeq sigs r w' rest
+      checkSeq sigs r { w with σ := [VTy.complT] :: w.σ } rest
   | sigs, r, w, .kEval (.varNotPresent x) :: rest =>
       -- presence test: unbound means NOT present (verdict true);
       -- a binding splits (then: notPresent, else: the alternatives)
@@ -892,7 +917,7 @@ decreasing_by
       | (rename_i l; exact absurd rfl (by intro _; exact l.elim))
 
 def typecheckSeq (sigs : SigTable) (r : Ty) (Γ : TyEnv) (seq : List Instr) : TCResult :=
-  checkSeq sigs r { Γ := Γ, σ := [], pending := none } seq
+  checkSeq sigs r { Γ := Γ, σ := [] } seq
 
 def typecheckAO (sigs : SigTable)
     (name : «String») (params : List «String») (body : List Instr) : Option TCResult :=
@@ -904,7 +929,7 @@ def typecheckAO (sigs : SigTable)
       if params.length != paramTys.length then
         some (.reject (body.head?.getD .kRet)
           (name ++ ": registry arity/signature arity mismatch"))
-      else match typecheckSeq sigs (complPayload retj) (zipTy params paramTys) body with
+      else match typecheckSeq sigs (complTy retj) (zipTy params paramTys) body with
         | .flows f =>
             -- JUDGEMENT CONSISTENCY: a body that can exit via a throw
             -- must carry throw in its declared completion judgement
