@@ -1402,12 +1402,22 @@ theorem frameTyped_kEval_const {sigs : SigTable} {v : JSValue} {rest : List Inst
     state, r ANY destiny.
       pre     = h inserted as the next step before s
       pre_t   = the typed abstraction of pre (frameWorld, inside
-                frameTyped/stateTyped — no new abstraction functions)
+                frameTyped/frameChecks — no new abstraction functions)
       post    = fstep reg pre (the machine computes it — never
-                transcribed, heap/nl/post-shape all the machine's)
+                transcribed)
       post_t  = the typed abstraction of post
-    SR_arm h s r = (pre_t proven to evaluate inside r) →
-                   (post_t proven to evaluate inside r). -/
+    SR_arm h s r = registry premise → (pre_t inside r) →
+                   (post_t inside r).
+
+    stateTyped is the honest state abstraction: every frame at its
+    OWN destiny (machineRet ties the bottom frame's destiny to r);
+    the frame DIRECTLY UNDER a running callee carries the
+    UNION-ANTICIPATED judgment — literally what the caller's own
+    kCall check established (complTy of the callee's declared
+    judgement pushed on the caller's stack) — so the kCall arm
+    transfers it VERBATIM, no monotonicity needed. The refinement
+    (anticipated union → delivered singleton) is the kRet arm's
+    business. -/
 
 /-- Insert h as the next instruction of the head frame (identity on
     done/fell — no head frame to extend). -/
@@ -1417,34 +1427,84 @@ def withHead (h : Instr) (m : FM) : FM :=
       .frames ({ f with stmts := h :: f.stmts } :: fs) heap nl
   | _ => m
 
-/-- The deeper frames check at their OWN destinies. -/
-def stateTailTyped (sigs : SigTable) : List Fr → Prop
-  | [] => True
-  | f :: fs => frameTyped sigs (sigRetTy sigs f.ret) f ∧ stateTailTyped sigs fs
+/-- Judgment for a frame DIRECTLY UNDER a running callee: the
+    union-anticipated check — exactly what the caller's own kCall
+    check established. -/
+def frameOkUnder (sigs : SigTable) (callee : «String») (f : Fr) : Prop :=
+  match checkSeq sigs (sigRetTy sigs f.ret)
+    { Γ := envTyOf f.env,
+      σ := complTy (sigCompls sigs callee) :: f.eval.map (fun v => [typeOfV v]) }
+    f.stmts with
+  | .flows fb => terminal fb = Bool.true
+  | _ => False
 
-/-- The type machine's judgement on a WHOLE value state: the head
-    frame's program evaluates inside r, deeper frames at their own
-    destinities, the final answer's abstraction inside r; a stuck
-    machine (fell, empty frames) is untyped. -/
+/-- Each frame at its own destiny; the frame under f anticipates
+    f's declared completions. -/
+def framesTypedFrom (sigs : SigTable) (above : Option «String») : List Fr → Prop
+  | [] => True
+  | f :: fs =>
+      (match above with
+       | none => frameChecks sigs f
+       | some n => frameOkUnder sigs n f)
+      ∧ framesTypedFrom sigs (some f.ret) fs
+
+/-- The type machine's judgment on a WHOLE value state: every frame
+    typed (heads at own destinies, under-callees anticipated), the
+    bottom frame's destiny = r, the final answer inside r, stuck
+    states untyped. -/
 def stateTyped (sigs : SigTable) (r : Ty) (m : FM) : Prop :=
   match m with
-  | .frames (f :: fs) _ _ => frameTyped sigs r f ∧ stateTailTyped sigs fs
+  | .frames [] _ _ => False
+  | .frames (f :: fs) _ _ =>
+      framesTypedFrom sigs none (f :: fs) ∧ machineRet sigs (f :: fs) = r
   | .fdone v _ _ _ _ => tmoves [typeOfV v] r = Bool.true
-  | _ => False
+  | .fell _ _ _ _ => False
 
 /-- THE SR PREDICATE — one shape; every arm theorem instantiates it.
     The registry premise is part of the predicate: the callee's
     body is the one thing the caller's check never sees, so the
     kCall arm draws its post-frame typing from the registry's
-    certificates (registryCertified). -/
+    certificates. -/
+
 def SR_arm (sigs : SigTable) (reg : AOReg) (h : Instr) (s : FM) (r : Ty) : Prop :=
   registryCertified sigs reg →
     stateTyped sigs r (withHead h s) →
       stateTyped sigs r (fstep reg (withHead h s))
 
-/-- The kIte arm: ∀ s, r. The case analysis is the machine's own
-    match (boolean / non-boolean / empty stack); the loud posts are
-    excluded by the type machine itself. -/
+/- Machine-ret stability: swapping the head frame's non-ret fields
+    (a same-frame step) does not change the machine's answer type;
+    pushing a frame above does not either. -/
+theorem getLast?_cons_cons {x y : Fr} {fs : List Fr} :
+    (x :: y :: fs).getLast? = (y :: fs).getLast? := by
+  cases fs <;> rfl
+
+theorem machineRet_cons_cons {sigs : SigTable} {x y : Fr} {fs : List Fr} :
+    machineRet sigs (x :: y :: fs) = machineRet sigs (y :: fs) := by
+  simp only [machineRet, getLast?_cons_cons]
+
+theorem machineRet_head_swap {sigs : SigTable} {s₁ e₁ v₁ s₂ e₂ v₂ : _} {ret : «String»}
+    {fs : List Fr} :
+    machineRet sigs (⟨s₁, e₁, v₁, ret⟩ :: fs)
+      = machineRet sigs (⟨s₂, e₂, v₂, ret⟩ :: fs) := by
+  cases fs <;> simp [machineRet]
+
+/-- The bridge commutes with zip: the machine's env-zipping is the
+    certificate's Γ-zipping. -/
+theorem envTyOf_zipTy : ∀ (ps : List «String») (vs : List JSValue),
+    envTyOf (ps.zip vs) = zipTy ps (vs.map (fun v => [typeOfV v])) := by
+  intro ps
+  induction ps with
+  | nil => intro vs; cases vs <;> simp [envTyOf, zipTy]
+  | cons p pst ih =>
+      intro vs
+      cases vs with
+      | nil => simp [List.zip, envTyOf, zipTy]
+      | cons v vt =>
+          show envTyOf ((p, v) :: pst.zip vt)
+            = (p, [typeOfV v]) :: zipTy pst (vt.map (fun v => [typeOfV v]))
+          rw [envTyOf_cons, ih]
+
+/-- The kIte arm. -/
 theorem SR_kIte (sigs : SigTable) (reg : AOReg) (t e : List Instr) (s : FM) (r : Ty) :
     SR_arm sigs reg (.kIte t e) s r := by
   intro _ hpre
@@ -1456,43 +1516,77 @@ theorem SR_kIte (sigs : SigTable) (reg : AOReg) (t e : List Instr) (s : FM) (r :
       | nil => exact hpre
       | cons f fs' =>
           obtain ⟨stmts, env, eval, ret⟩ := f
-          simp only [withHead, stateTyped] at hpre ⊢
+          simp only [withHead, stateTyped, framesTypedFrom] at hpre ⊢
           cases eval with
           | nil =>
-              rw [frameTyped_kIte_reject_nil] at hpre
-              exact hpre.1.elim
+              have h1 : frameTyped sigs (sigRetTy sigs ret)
+                  ⟨.kIte t e :: stmts, env, [], ret⟩ := hpre.1.1
+              rw [frameTyped_kIte_reject_nil] at h1
+              exact h1.elim
           | cons v eval' =>
               cases v with
               | boolean b =>
-                  show frameTyped sigs r ⟨(if b then t else e) ++ stmts, env, eval', ret⟩
-                    ∧ stateTailTyped sigs fs'
-                  exact ⟨frameTyped_kIte hpre.1, hpre.2⟩
+                  refine ⟨⟨frameTyped_kIte hpre.1.1, hpre.1.2⟩, ?_⟩
+                  rw [machineRet_head_swap]
+                  exact hpre.2
               | undefined =>
-                  rw [frameTyped_kIte_reject_nonbool (by intro b hb; exact JSValue.noConfusion hb)] at hpre
-                  exact hpre.1.elim
+                  exfalso
+                  have h1 : frameTyped sigs (sigRetTy sigs ret)
+                      ⟨.kIte t e :: stmts, env, .undefined :: eval', ret⟩ := hpre.1.1
+                  rw [frameTyped_kIte_reject_nonbool
+                    (by intro b hb; exact JSValue.noConfusion hb)] at h1
+                  exact h1.elim
               | null =>
-                  rw [frameTyped_kIte_reject_nonbool (by intro b hb; exact JSValue.noConfusion hb)] at hpre
-                  exact hpre.1.elim
-              | number _ =>
-                  rw [frameTyped_kIte_reject_nonbool (by intro b hb; exact JSValue.noConfusion hb)] at hpre
-                  exact hpre.1.elim
-              | str _ =>
-                  rw [frameTyped_kIte_reject_nonbool (by intro b hb; exact JSValue.noConfusion hb)] at hpre
-                  exact hpre.1.elim
-              | obj _ =>
-                  rw [frameTyped_kIte_reject_nonbool (by intro b hb; exact JSValue.noConfusion hb)] at hpre
-                  exact hpre.1.elim
-              | listV _ =>
-                  rw [frameTyped_kIte_reject_nonbool (by intro b hb; exact JSValue.noConfusion hb)] at hpre
-                  exact hpre.1.elim
-              | descV _ =>
-                  rw [frameTyped_kIte_reject_nonbool (by intro b hb; exact JSValue.noConfusion hb)] at hpre
-                  exact hpre.1.elim
+                  exfalso
+                  have h1 : frameTyped sigs (sigRetTy sigs ret)
+                      ⟨.kIte t e :: stmts, env, .null :: eval', ret⟩ := hpre.1.1
+                  rw [frameTyped_kIte_reject_nonbool
+                    (by intro b hb; exact JSValue.noConfusion hb)] at h1
+                  exact h1.elim
+              | number m =>
+                  exfalso
+                  have h1 : frameTyped sigs (sigRetTy sigs ret)
+                      ⟨.kIte t e :: stmts, env, .number m :: eval', ret⟩ := hpre.1.1
+                  rw [frameTyped_kIte_reject_nonbool
+                    (by intro b hb; exact JSValue.noConfusion hb)] at h1
+                  exact h1.elim
+              | str m =>
+                  exfalso
+                  have h1 : frameTyped sigs (sigRetTy sigs ret)
+                      ⟨.kIte t e :: stmts, env, .str m :: eval', ret⟩ := hpre.1.1
+                  rw [frameTyped_kIte_reject_nonbool
+                    (by intro b hb; exact JSValue.noConfusion hb)] at h1
+                  exact h1.elim
+              | obj m =>
+                  exfalso
+                  have h1 : frameTyped sigs (sigRetTy sigs ret)
+                      ⟨.kIte t e :: stmts, env, .obj m :: eval', ret⟩ := hpre.1.1
+                  rw [frameTyped_kIte_reject_nonbool
+                    (by intro b hb; exact JSValue.noConfusion hb)] at h1
+                  exact h1.elim
+              | listV m =>
+                  exfalso
+                  have h1 : frameTyped sigs (sigRetTy sigs ret)
+                      ⟨.kIte t e :: stmts, env, .listV m :: eval', ret⟩ := hpre.1.1
+                  rw [frameTyped_kIte_reject_nonbool
+                    (by intro b hb; exact JSValue.noConfusion hb)] at h1
+                  exact h1.elim
+              | descV m =>
+                  exfalso
+                  have h1 : frameTyped sigs (sigRetTy sigs ret)
+                      ⟨.kIte t e :: stmts, env, .descV m :: eval', ret⟩ := hpre.1.1
+                  rw [frameTyped_kIte_reject_nonbool
+                    (by intro b hb; exact JSValue.noConfusion hb)] at h1
+                  exact h1.elim
               | compl a b =>
-                  rw [frameTyped_kIte_reject_nonbool (by intro b hb; exact JSValue.noConfusion hb)] at hpre
-                  exact hpre.1.elim
+                  exfalso
+                  have h1 : frameTyped sigs (sigRetTy sigs ret)
+                      ⟨.kIte t e :: stmts, env, .compl a b :: eval', ret⟩ := hpre.1.1
+                  rw [frameTyped_kIte_reject_nonbool
+                    (by intro b hb; exact JSValue.noConfusion hb)] at h1
+                  exact h1.elim
 
-/-- The kPop arm: ∀ s, r. -/
+/-- The kPop arm. -/
 theorem SR_kPop (sigs : SigTable) (reg : AOReg) (s : FM) (r : Ty) :
     SR_arm sigs reg .kPop s r := by
   intro _ hpre
@@ -1504,16 +1598,19 @@ theorem SR_kPop (sigs : SigTable) (reg : AOReg) (s : FM) (r : Ty) :
       | nil => exact hpre
       | cons f fs' =>
           obtain ⟨stmts, env, eval, ret⟩ := f
-          simp only [withHead, stateTyped] at hpre ⊢
+          simp only [withHead, stateTyped, framesTypedFrom] at hpre ⊢
           cases eval with
           | nil =>
-              rw [frameTyped_kPop_reject_nil] at hpre
-              exact hpre.1.elim
+              have h1 : frameTyped sigs (sigRetTy sigs ret)
+                  ⟨.kPop :: stmts, env, [], ret⟩ := hpre.1.1
+              rw [frameTyped_kPop_reject_nil] at h1
+              exact h1.elim
           | cons w eval' =>
-              show frameTyped sigs r ⟨stmts, env, eval', ret⟩ ∧ stateTailTyped sigs fs'
-              exact ⟨frameTyped_kPop hpre.1, hpre.2⟩
+              refine ⟨⟨frameTyped_kPop hpre.1.1, hpre.1.2⟩, ?_⟩
+              rw [machineRet_head_swap]
+              exact hpre.2
 
-/-- The kSet arm: ∀ s, r. -/
+/-- The kSet arm. -/
 theorem SR_kSet (sigs : SigTable) (reg : AOReg) (x : «String») (s : FM) (r : Ty) :
     SR_arm sigs reg (.kSet x) s r := by
   intro _ hpre
@@ -1525,18 +1622,19 @@ theorem SR_kSet (sigs : SigTable) (reg : AOReg) (x : «String») (s : FM) (r : T
       | nil => exact hpre
       | cons f fs' =>
           obtain ⟨stmts, env, eval, ret⟩ := f
-          simp only [withHead, stateTyped] at hpre ⊢
+          simp only [withHead, stateTyped, framesTypedFrom] at hpre ⊢
           cases eval with
           | nil =>
-              rw [frameTyped_kSet_reject_nil] at hpre
-              exact hpre.1.elim
+              have h1 : frameTyped sigs (sigRetTy sigs ret)
+                  ⟨.kSet x :: stmts, env, [], ret⟩ := hpre.1.1
+              rw [frameTyped_kSet_reject_nil] at h1
+              exact h1.elim
           | cons w eval' =>
-              show frameTyped sigs r ⟨stmts, (x, w) :: env, eval', ret⟩
-                ∧ stateTailTyped sigs fs'
-              exact ⟨frameTyped_kSet hpre.1, hpre.2⟩
+              refine ⟨⟨frameTyped_kSet hpre.1.1, hpre.1.2⟩, ?_⟩
+              rw [machineRet_head_swap]
+              exact hpre.2
 
-/-- The kEval-const arm: ∀ s, r (a pushing arm — no stack shape
-    demanded; the machine's own arm fires on any eval). -/
+/-- The kEval-const arm (a pushing arm; all value shapes). -/
 theorem SR_kEval_const (sigs : SigTable) (reg : AOReg) (v : JSValue) (s : FM) (r : Ty) :
     SR_arm sigs reg (.kEval (.const v)) s r := by
   intro _ hpre
@@ -1548,9 +1646,31 @@ theorem SR_kEval_const (sigs : SigTable) (reg : AOReg) (v : JSValue) (s : FM) (r
       | nil => exact hpre
       | cons f fs' =>
           obtain ⟨stmts, env, eval, ret⟩ := f
-          simp only [withHead, stateTyped] at hpre ⊢
-          show frameTyped sigs r ⟨stmts, env, v :: eval, ret⟩ ∧ stateTailTyped sigs fs'
-          exact ⟨frameTyped_kEval_const hpre.1, hpre.2⟩
+          simp only [withHead, stateTyped, framesTypedFrom] at hpre ⊢
+          refine ⟨⟨frameTyped_kEval_const hpre.1.1, hpre.1.2⟩, ?_⟩
+          rw [machineRet_head_swap]
+          exact hpre.2
+
+/- ## kCall roadmap (the arm this shape was built for)
+
+    Post = callee :: callerPost :: fs' (registry hit), and the
+    obligations map exactly onto the existing machinery:
+    1. callee frameChecks = certifies sigs fname ps' ts body at
+       ts := (eval.take n).reverse.map singleton — leTy ts params
+       from the checker's popArgs (via map_take/reverse_map), the
+       callee's Γ = envTyOf (ps'.zip …) = zipTy ps' ts
+       (envTyOf_zipTy).
+    2. callerPost frameOkUnder fname — VERBATIM the checker's kCall
+       arm: it pushed complTy (sigCompls fname) onto σ.drop n; the
+       bridge lemma is checkSeq_kCall_inv (the inversion of the
+       catch-all + step1's single-world kCall).
+    3. machineRet — cons_cons + head_swap.
+    4. Vacuous arms: underflow (popArgs rejects), unknown callee
+       (sigFind none → checker rejects), reg-miss non-native
+       (closedRegistry). The reg-miss NATIVE arm needs either the
+       native names answered by the registry (a completeness
+       premise) or the refinement lemma (anticipated union →
+       native singleton) — the same monotonicity kRet needs. -/
 
 /- ## Next: the specialization capstone (pointwise)
 
