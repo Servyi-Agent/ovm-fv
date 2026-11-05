@@ -191,6 +191,24 @@ mutual
         match revExpr reg n e env heap nl with
         | .ok v heap' nl' => .ok (applyPrim heap' (.pIsType ty) v) heap' nl'
         | r => r
+    | n, .isNormalC e, env, heap, nl =>
+        match revExpr reg n e env heap nl with
+        | .ok (.compl Bool.false _) heap' nl' => .ok (.boolean Bool.true) heap' nl'
+        | .ok _ heap' nl' => .ok (.boolean Bool.false) heap' nl'
+        | r => r
+    | n, .isThrowC e, env, heap, nl =>
+        match revExpr reg n e env heap nl with
+        | .ok (.compl Bool.true _) heap' nl' => .ok (.boolean Bool.true) heap' nl'
+        | .ok _ heap' nl' => .ok (.boolean Bool.false) heap' nl'
+        | r => r
+    | n, .complValue e, env, heap, nl =>
+        match revExpr reg n e env heap nl with
+        | .ok (.compl Bool.false v) heap' nl' => .ok v heap' nl'
+        | r => r
+    | n, .completionOf e, env, heap, nl =>
+        match revExpr reg n e env heap nl with
+        | .ok v heap' nl' => .ok (.compl Bool.false v) heap' nl'
+        | r => r
     | n, .hasField nm e, env, heap, nl =>
         match revExpr reg n e env heap nl with
         | .ok v heap' nl' => .ok (applyPrim heap' (.pHasField nm) v) heap' nl'

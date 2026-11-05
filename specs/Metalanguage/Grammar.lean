@@ -540,6 +540,13 @@ inductive Expr where
   | varNotPresent (name : «String»)
   | call (name : «String») (args : List Expr)
   | listE (es : List Expr)
+  /- FIRST-CLASS COMPLETION OPS (the IteratorClose corner): a
+     completion is an ordinary value; these test its kind and
+     convert between the completion and bare layers. -/
+  | isNormalC (e : Expr)     -- "e is a normal completion"
+  | isThrowC (e : Expr)      -- "e is a throw completion"
+  | complValue (e : Expr)    -- e.[[Value]] (normal only)
+  | completionOf (e : Expr)  -- Completion(e) (bare only)
   deriving Repr
 
 /- Clean, label-free AST (what the interpreter consumes). -/
@@ -702,6 +709,9 @@ inductive Prim where              -- bedrock predicates (the axiom stratum)
   | pDescField (s : «String»)
   | pIsStr (s : «String»)
   | pPred (f : «String») (b : Bool)   -- correlated AO predicate (IsDataDescriptor(x) is b)
+  | pIsNormalC                        -- v is a normal completion
+  | pIsThrowC                         -- v is a throw completion
+  | pUnwrapC                          -- complN v -> v (loud on throw)
   deriving Repr
 
 

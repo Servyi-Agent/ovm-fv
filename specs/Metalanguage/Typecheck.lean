@@ -250,12 +250,52 @@ def typesOf (sigs : SigTable) (Γ : TyEnv) : List Expr → Option (List Ty)
       | _, _ => none
 termination_by es => sizeOf es
 
+/-- The completion-kind decider for the splitP1 stratum. -/
+def primDecide : Prim → Option (VTy → Option Bool)
+  | .pIsNormalC =>
+      some (fun t => match t with
+        | .complN _ => some Bool.true
+        | .complT => some Bool.false
+        | _ => none)
+  | .pIsThrowC =>
+      some (fun t => match t with
+        | .complN _ => some Bool.false
+        | .complT => some Bool.true
+        | _ => none)
+  | _ => none
+
+/-- complN-only slot -> payload atoms (none if mixed/bare). -/
+def payloadOf : Ty → Option Ty
+  | [] => none
+  | [.complN p] => some [p]
+  | .complN p :: rest =>
+      match payloadOf rest with
+      | some ps => some (p :: ps)
+      | none => none
+  | _ => none
+
+/-- bare-only slot -> atoms (none if any completion atom). -/
+def bareOf : Ty → Option Ty
+  | [] => some []
+  | a :: rest =>
+      match isBareVTy a with
+      | Bool.true => (bareOf rest).map (fun ps => a :: ps)
+      | Bool.false => none
+
 def typeOfE (sigs : SigTable) (Γ : TyEnv) : Expr → Option Ty
   | .nv x => tyLookup Γ x
   | .nat n => some [.isValue (.number ↑n)]
-  | .const (.compl _ _) => none    -- completions are parked, never typed
   | .const v => some [typeOfV v]
   | .varNotPresent _ => some [.anyValue .bool]
+  | .isNormalC _ | .isThrowC _ => some [.anyValue .bool]
+  | .complValue e =>
+      match typeOfE sigs Γ e with
+      | some t => payloadOf t
+      | none => none
+  | .completionOf e =>
+      match typeOfE sigs Γ e with
+      | some t => bareOf t |>.map (fun bt => bt.map VTy.complN)
+      | none => none
   | .call f as =>
       match sigFind sigs f with
       | some (ps, retj) =>
@@ -326,7 +366,8 @@ def exprCanThrow (sigs : SigTable) : Expr → Bool
         || exprsCanThrow sigs args
   | .isObject e | .isNotObject e | .isNotUndefined e | .hasCall e
   | .hasCtor e | .isU e | .isBoolVal _ e | .isStrVal _ e
-  | .isNullOrUnd e | .isNull e | .isType _ e | .hasField _ e =>
+  | .isNullOrUnd e | .isNull e | .isType _ e | .hasField _ e
+  | .isNormalC e | .isThrowC e | .complValue e | .completionOf e =>
       exprCanThrow sigs e
   | .listE es => exprsCanThrow sigs es
   | _ => Bool.false
@@ -371,8 +412,10 @@ def popArgs (ps σ : List Ty) : Bool :=
 
 def primTys (p : Prim) : Option (Ty × Ty) :=
   match p with
-  | .pThrowC => none                     -- t ↦ pending throw, inline
-  | .pWrapC => none                      -- t ↦ pending normal t, inline
+  | .pThrowC => none                     -- t ↦ throw completion, inline
+  | .pWrapC => none                      -- t ↦ complN t, inline
+  | .pUnwrapC => none                    -- complN t ↦ t, inline (typeOfE .complValue)
+  | .pIsNormalC | .pIsThrowC => none     -- correlated split, inline
   | .pIsObj | .pIsNotObj | .pIsNotU | .pHasCall | .pHasCtor | .pIsU
   | .pIsTrue | .pIsFalse | .pNullOrUnd | .pIsNull
   | .pIsType _ | .pHasField _ | .pIsStr _ => some (anyT, [.anyValue .bool])
@@ -444,6 +487,7 @@ def efuel : Expr → Nat
   | .isObject e | .isNotObject e | .isNotUndefined e | .hasCall e
   | .hasCtor e | .isU e | .isBoolVal _ e | .isStrVal _ e
   | .isNullOrUnd e | .isNull e | .isType _ e | .hasField _ e
+  | .isNormalC e | .isThrowC e | .complValue e | .completionOf e
   | .ifield _ e => efuel e + 1
   | .call _ as => (as.map efuel).sum + 2
   | .imeth _ r as => efuel r + (as.map efuel).sum + 2
@@ -804,6 +848,10 @@ def checkSeq : SigTable → Ty → World → List Instr → TCResult
       checkSeq sigs r w (.kTestVar x .pIsFalse :: rest)
   | sigs, r, w, .kEval (.isStrVal s (.nv x)) :: rest =>
       checkSeq sigs r w (.kTestVar x (.pIsStr s) :: rest)
+  | sigs, r, w, .kEval (.isNormalC (.nv x)) :: rest =>
+      checkSeq sigs r w (.kTestVar x .pIsNormalC :: rest)
+  | sigs, r, w, .kEval (.isThrowC (.nv x)) :: rest =>
+      checkSeq sigs r w (.kTestVar x .pIsThrowC :: rest)
   | sigs, r, w, .kEval (.isType ty (.nv x)) :: rest =>
       checkSeq sigs r w (.kTestVar x (.pIsType ty) :: rest)
   | sigs, r, w, .kEval (.hasField nm (.nv x)) :: rest =>
@@ -840,6 +888,16 @@ def checkSeq : SigTable → Ty → World → List Instr → TCResult
       match p with
       | .pPred f _ =>
           match predDecide f with
+          | some dec =>
+              forkTC (.kTestVar x p) (splitP1 x dec w)
+                (fun u => checkSeq sigs r u rest)
+          | none =>
+              match tyLookup w.Γ x with
+              | none => .reject (.kTestVar x p) "unbound variable"
+              | some _ =>
+                  checkSeq sigs r { w with σ := [.anyValue .bool] :: w.σ } rest
+      | .pIsNormalC | .pIsThrowC =>
+          match primDecide p with
           | some dec =>
               forkTC (.kTestVar x p) (splitP1 x dec w)
                 (fun u => checkSeq sigs r u rest)
