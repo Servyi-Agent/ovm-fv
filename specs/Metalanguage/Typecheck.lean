@@ -837,11 +837,6 @@ def checkSeq : SigTable → Ty → World → List Instr → TCResult
                      (checkSeq sigs r { w with σ := σ' } (e ++ rest))
                | _ => .reject (.kIte t e) "kIte: verdict is not boolean"))
             vacOk
-  | sigs, r, w, .kEval (.const (.compl Bool.false pv)) :: rest =>
-      -- a completion literal is an ordinary value: it pushes
-      checkSeq sigs r { w with σ := [VTy.complN (typeOfV pv)] :: w.σ } rest
-  | sigs, r, w, .kEval (.const (.compl Bool.true _)) :: rest =>
-      checkSeq sigs r { w with σ := [VTy.complT] :: w.σ } rest
   | sigs, r, w, .kEval (.varNotPresent x) :: rest =>
       -- presence test: unbound means NOT present (verdict true);
       -- a binding splits (then: notPresent, else: the alternatives)

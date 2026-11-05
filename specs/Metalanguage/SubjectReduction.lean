@@ -445,13 +445,10 @@ theorem markThrow_const (sigs : SigTable) (v : JSValue) (res : TCResult) :
   | reject site why => rfl
 
 theorem checkSeq_kEval_const {sigs : SigTable} {r : Ty} {W : World} {v : JSValue}
-    {rest : List Instr} (hv : isCompl v = Bool.false) :
+    {rest : List Instr} :
     checkSeq sigs r W (.kEval (.const v) :: rest)
       = checkSeq sigs r { W with σ := [typeOfV v] :: W.σ } rest := by
-  cases v with
-  | compl b pv => simp [isCompl] at hv
-  | undefined | null | boolean _ | number _ | str _ | obj _ | listV _ | descV _ =>
-      simp only [checkSeq, typeOfE, typeOfV, markThrow_const]
+  simp only [checkSeq, typeOfE, typeOfV, markThrow_const]
 
 
 /-- kEval of a nat literal: push the singleton number. -/
@@ -773,25 +770,25 @@ theorem checkSeq_exits (sigs : SigTable) (r : Ty) (w : World) (seq : List Instr)
     subst hinj
     rfl
   case case7 =>
-    rename_i sigs r w pv rest ih1
-    intro fb h hf
-    simp only [checkSeq] at h
-    exact ih1 fb h hf
-  case case8 =>
-    rename_i sigs r w v rest ih1
-    intro fb h hf
-    simp only [checkSeq] at h
-    exact ih1 fb h hf
-  case case9 =>
     rename_i sigs r w x rest hlook ih1
     intro fb h hf
     simp only [checkSeq, hlook] at h
     exact ih1 fb h hf
-  case case10 =>
+  case case8 =>
     rename_i sigs r w x rest S hlook ih1
     intro fb h hf
     simp only [checkSeq, hlook] at h
     exact forkTC_exits h hf ih1
+  case case9 =>
+    rename_i sigs r w x rest ih1
+    intro fb h hf
+    rw [checkSeq.eq_5] at h
+    exact ih1 fb h hf
+  case case10 =>
+    rename_i sigs r w x rest ih1
+    intro fb h hf
+    rw [checkSeq.eq_6] at h
+    exact ih1 fb h hf
   case case11 =>
     rename_i sigs r w x rest ih1
     intro fb h hf
@@ -833,7 +830,7 @@ theorem checkSeq_exits (sigs : SigTable) (r : Ty) (w : World) (seq : List Instr)
     rw [checkSeq.eq_14] at h
     exact ih1 fb h hf
   case case19 =>
-    rename_i sigs r w x rest ih1
+    rename_i sigs r w s x rest ih1
     intro fb h hf
     rw [checkSeq.eq_15] at h
     exact ih1 fb h hf
@@ -843,36 +840,26 @@ theorem checkSeq_exits (sigs : SigTable) (r : Ty) (w : World) (seq : List Instr)
     rw [checkSeq.eq_16] at h
     exact ih1 fb h hf
   case case21 =>
-    rename_i sigs r w s x rest ih1
+    rename_i sigs r w x rest ih1
     intro fb h hf
     rw [checkSeq.eq_17] at h
     exact ih1 fb h hf
   case case22 =>
-    rename_i sigs r w x rest ih1
+    rename_i sigs r w ty x rest ih1
     intro fb h hf
     rw [checkSeq.eq_18] at h
     exact ih1 fb h hf
   case case23 =>
-    rename_i sigs r w x rest ih1
+    rename_i sigs r w nm x rest ih1
     intro fb h hf
     rw [checkSeq.eq_19] at h
     exact ih1 fb h hf
   case case24 =>
-    rename_i sigs r w ty x rest ih1
-    intro fb h hf
-    rw [checkSeq.eq_20] at h
-    exact ih1 fb h hf
-  case case25 =>
-    rename_i sigs r w nm x rest ih1
-    intro fb h hf
-    rw [checkSeq.eq_21] at h
-    exact ih1 fb h hf
-  case case26 =>
     rename_i sigs r w b f x rest hfused ih1
     intro fb h hf
-    rw [checkSeq.eq_22, if_pos hfused] at h
+    rw [checkSeq.eq_20, if_pos hfused] at h
     exact ih1 fb h hf
-  case case27 =>
+  case case25 =>
     rename_i sigs r w b f x rest hfused hty
     intro fb h hf
     simp only [checkSeq] at h
@@ -881,7 +868,7 @@ theorem checkSeq_exits (sigs : SigTable) (r : Ty) (w : World) (seq : List Instr)
     · rw [hty] at h
       dsimp only at h
       exact TCResult.noConfusion h
-  case case28 =>
+  case case26 =>
     rename_i sigs r w b f x rest hfused S hty ih1
     intro fb h hf
     simp only [checkSeq] at h
@@ -890,7 +877,7 @@ theorem checkSeq_exits (sigs : SigTable) (r : Ty) (w : World) (seq : List Instr)
     · rw [hty] at h
       dsimp only at h
       exact markThrow_exits h hf ih1
-  case case29 =>
+  case case27 =>
     rename_i sigs r w c body rest t hty hbool ih2 ih1
     intro fb h hf
     simp only [checkSeq, hty] at h
@@ -925,94 +912,94 @@ theorem checkSeq_exits (sigs : SigTable) (r : Ty) (w : World) (seq : List Instr)
                     simp
           · exact TCResult.noConfusion h
     · exact absurd hbool (by assumption)
-  case case30 =>
+  case case28 =>
     rename_i sigs r w c body rest t hty hnt
     intro fb h hf
     simp only [checkSeq, hty] at h
     split at h
     · next hcond => exact absurd hcond hnt
     · exact TCResult.noConfusion h
-  case case31 =>
+  case case29 =>
     rename_i sigs r w c body rest hty
     intro fb h hf
     simp only [checkSeq, hty] at h
     exact TCResult.noConfusion h
-  case case32 =>
+  case case30 =>
     rename_i sigs r w ex rest hdisj hty
     intro fb h hf
     simp only [checkSeq, hty] at h
     exact TCResult.noConfusion h
-  case case33 =>
+  case case31 =>
     rename_i sigs r w ex rest hdisj S hty ih1
     intro fb h hf
     simp only [checkSeq, hty] at h
     exact markThrow_exits h hf ih1
-  case case34 =>
+  case case32 =>
     rename_i sigs r w x rest f b dec hdec ih1
     intro fb h hf
-    rw [checkSeq.eq_25, hdec] at h
+    rw [checkSeq.eq_23, hdec] at h
     exact forkTC_exits h hf ih1
-  case case35 =>
+  case case33 =>
     rename_i sigs r w x rest f b hdec hlook
     intro fb h hf
-    rw [checkSeq.eq_25, hdec, hlook] at h
+    rw [checkSeq.eq_23, hdec, hlook] at h
     dsimp only at h
     exact TCResult.noConfusion h
-  case case36 =>
+  case case34 =>
     rename_i sigs r w x rest f b hdec S hlook ih1
     intro fb h hf
-    rw [checkSeq.eq_25, hdec, hlook] at h
+    rw [checkSeq.eq_23, hdec, hlook] at h
     first
     | exact ih1 fb h hf
     | (dsimp only at h; exact ih1 fb h hf)
     | exact ih1 fb (by dsimp only at h; exact h) hf
-  case case37 =>
+  case case35 =>
     rename_i sigs r w x rest dec hdec ih1
     intro fb h hf
-    rw [checkSeq.eq_26] at h
+    rw [checkSeq.eq_24] at h
     exact forkTC_exits h hf ih1
-  case case38 =>
+  case case36 =>
     rename_i sigs r w x rest hdec hlook
     intro fb h hf
     exact absurd hlook (by simp [primDecide])
-  case case39 =>
+  case case37 =>
     rename_i sigs r w x rest hdec S hlook ih1
+    intro fb h hf
+    exact absurd hlook (by simp [primDecide])
+  case case38 =>
+    rename_i sigs r w x rest dec hdec ih1
+    intro fb h hf
+    rw [checkSeq.eq_25] at h
+    exact forkTC_exits h hf ih1
+  case case39 =>
+    rename_i sigs r w x rest hdec hlook
     intro fb h hf
     exact absurd hlook (by simp [primDecide])
   case case40 =>
-    rename_i sigs r w x rest dec hdec ih1
-    intro fb h hf
-    rw [checkSeq.eq_27] at h
-    exact forkTC_exits h hf ih1
-  case case41 =>
-    rename_i sigs r w x rest hdec hlook
-    intro fb h hf
-    exact absurd hlook (by simp [primDecide])
-  case case42 =>
     rename_i sigs r w x rest hdec S hlook ih1
     intro fb h hf
     exact absurd hlook (by simp [primDecide])
-  case case43 =>
+  case case41 =>
     rename_i sigs r w x p rest ps hT hpred hn hc ih1
     intro fb h hf
     simp only [checkSeq, hpred, hn, hc, hT] at h
     exact forkTC_exits h hf ih1
-  case case44 =>
+  case case42 =>
     rename_i sigs r w x p rest hT hlook hpred hn hc
     intro fb h hf
     simp only [checkSeq, hpred, hn, hc, hT, hlook] at h
     exact TCResult.noConfusion h
-  case case45 =>
+  case case43 =>
     rename_i sigs r w x p rest hT S hlook hpred hn hc ih1
     intro fb h hf
     simp only [checkSeq, hpred, hn, hc, hT, hlook] at h
     exact ih1 fb h hf
-  case case46 =>
+  case case44 =>
     rename_i sigs r w c body rest hpop
     intro fb h hf
     simp only [checkSeq, hpop] at h
     exact TCResult.noConfusion h
-  case case47 =>
+  case case45 =>
     rename_i sigs r w c body rest σ' hpop ih2 ih1
     intro fb h hf
     simp only [checkSeq, hpop] at h
@@ -1045,12 +1032,12 @@ theorem checkSeq_exits (sigs : SigTable) (r : Ty) (w : World) (seq : List Instr)
                   rw [fold_noFlows_exits ih1 _ fr hkf hfr (by simp [hfalls])]
                   simp
         · exact TCResult.noConfusion h
-  case case48 =>
+  case case46 =>
     rename_i sigs r w x body rest hpop
     intro fb h hf
     simp only [checkSeq, hpop] at h
     exact TCResult.noConfusion h
-  case case49 =>
+  case case47 =>
     rename_i sigs r w x body rest σ' hpop ih2 ih1
     intro fb h hf
     simp only [checkSeq, hpop] at h
@@ -1083,7 +1070,7 @@ theorem checkSeq_exits (sigs : SigTable) (r : Ty) (w : World) (seq : List Instr)
                   rw [fold_noFlows_exits ih1 _ fr hkf hfr (by simp [hfalls])]
                   simp
         · exact TCResult.noConfusion h
-  case case50 =>
+  case case48 =>
     rename_i sigs r w x elems body rest ih2 ih1
     intro fb h hf
     simp only [checkSeq] at h
@@ -1116,12 +1103,12 @@ theorem checkSeq_exits (sigs : SigTable) (r : Ty) (w : World) (seq : List Instr)
                   rw [fold_noFlows_exits ih1 _ fr hkf hfr (by simp [hfalls])]
                   simp
         · exact TCResult.noConfusion h
-  case case51 =>
+  case case49 =>
     rename_i sigs r w rest hσ
     intro fb h hf
     simp only [checkSeq, hσ] at h
     exact TCResult.noConfusion h
-  case case52 =>
+  case case50 =>
     rename_i sigs r w rest ts σ' hσ ih1
     intro fb h hf
     simp only [checkSeq, hσ] at h
@@ -1130,12 +1117,12 @@ theorem checkSeq_exits (sigs : SigTable) (r : Ty) (w : World) (seq : List Instr)
     have hinj := TCResult.flows.inj h
     subst hinj
     rfl
-  case case53 =>
+  case case51 =>
     rename_i sigs r w i rest hdisj hstep
     intro fb h hf
     simp only [checkSeq, hstep] at h
     exact TCResult.noConfusion h
-  case case54 =>
+  case case52 =>
     rename_i sigs r w i rest hdisj ws' hstep ih1
     intro fb h hf
     simp only [checkSeq, hstep] at h
@@ -1385,16 +1372,9 @@ theorem frameTyped_kEval_const {sigs : SigTable} {v : JSValue} {rest : List Inst
     {env : Env} {eval : List JSValue} {ret : «String»} {r : Ty}
     (h : frameTyped sigs r ⟨.kEval (.const v) :: rest, env, eval, ret⟩) :
     frameTyped sigs r ⟨rest, env, v :: eval, ret⟩ := by
-  cases v with
-  | compl a b =>
-      cases a <;>
-        simp only [frameTyped, frameWorld, Fr.stmts, Fr.env, Fr.eval, checkSeq,
-          List.map_cons, typeOfV] at h ⊢
-      all_goals exact h
-  | undefined | null | boolean _ | number _ | str _ | obj _ | listV _ | descV _ =>
-      simp only [frameTyped, frameWorld, Fr.stmts, Fr.env, Fr.eval, List.map_cons] at h ⊢
-      rw [checkSeq_kEval_const rfl] at h
-      exact h
+  simp only [frameTyped, frameWorld, Fr.stmts, Fr.env, Fr.eval, List.map_cons] at h ⊢
+  rw [checkSeq_kEval_const] at h
+  exact h
 
 /- ## Proof layer XVIII: THE SR_arm PREDICATE and the arm theorems
 
