@@ -887,13 +887,20 @@ def checkSeq : SigTable → Ty → World → List Instr → TCResult
             markThrow sigs (.isBoolVal b (.call f [.nv x]))
               (checkSeq sigs r { w with σ := t :: w.σ } rest)
   | sigs, r, w, .kRepeatWhile c body :: rest =>
-      match typeOfE sigs w.Γ c with
-      | some t =>
-          if tmoves t [.anyValue .bool] then
-            checkLoopBody (checkSeq sigs r w body) (.kRepeatWhile c body)
-              w.σ (fun wsf => wsf.foldl (fun acc u => mergeTC acc (checkSeq sigs r u rest)) noFlows)
-          else .reject (.kRepeatWhile c body) "loop condition is not boolean"
-      | none => .reject (.kRepeatWhile c body) "loop condition is not boolean"
+      -- LOOPS RUN ON THE EMPTY STACK: loop-local state lives in Γ
+      -- (kSet/kEval pairs are net-zero on σ). The neutrality
+      -- demand is then the constant "falls are empty" — no
+      -- entry-derived invariant, so refinement cannot flip it.
+      match w.σ with
+      | [] =>
+          match typeOfE sigs w.Γ c with
+          | some t =>
+              if tmoves t [.anyValue .bool] then
+                  checkLoopBody (checkSeq sigs r w body) (.kRepeatWhile c body)
+                    [] (fun wsf => wsf.foldl (fun acc u => mergeTC acc (checkSeq sigs r u rest)) noFlows)
+              else .reject (.kRepeatWhile c body) "loop condition is not boolean"
+          | none => .reject (.kRepeatWhile c body) "loop condition is not boolean"
+      | _ => .reject (.kRepeatWhile c body) "loop entry stack is not empty"
   | sigs, r, w, .kEval ex :: rest =>
       -- summary arm: the call/imeth/list/ifield dust's NET world effect
       -- (args pushed then popped, payload parked then unwrapped) equals
@@ -938,20 +945,25 @@ def checkSeq : SigTable → Ty → World → List Instr → TCResult
   | sigs, r, w, .kRepeatTest c body :: rest =>
       match popTy [.anyValue .bool] w.σ with
       | none => .reject (.kRepeatTest c body) "loop verdict is not boolean"
-      | some σ' =>
-          checkLoopBody (checkSeq sigs r { w with σ := σ' } body) (.kRepeatTest c body)
-            σ' (fun wsf => wsf.foldl (fun acc u => mergeTC acc (checkSeq sigs r u rest)) noFlows)
+      | some [] =>
+          checkLoopBody (checkSeq sigs r { w with σ := [] } body) (.kRepeatTest c body)
+            [] (fun wsf => wsf.foldl (fun acc u => mergeTC acc (checkSeq sigs r u rest)) noFlows)
+      | some (_ :: _) => .reject (.kRepeatTest c body) "loop entry stack is not empty"
   | sigs, r, w, .kForStart x body :: rest =>
       match popA (.anyValue .list) w.σ with
       | none => .reject (.kForStart x body) "for-each over a non-list"
-      | some σ' =>
+      | some [] =>
           checkLoopBody (checkSeq sigs r
-            { w with Γ := (x, langT) :: w.Γ, σ := σ' } body) (.kForStart x body)
-            σ' (fun wsf => wsf.foldl (fun acc u => mergeTC acc (checkSeq sigs r u rest)) noFlows)
+            { w with Γ := (x, langT) :: w.Γ, σ := [] } body) (.kForStart x body)
+            [] (fun wsf => wsf.foldl (fun acc u => mergeTC acc (checkSeq sigs r u rest)) noFlows)
+      | some (_ :: _) => .reject (.kForStart x body) "loop entry stack is not empty"
   | sigs, r, w, .kForBody x _ body :: rest =>
-      checkLoopBody (checkSeq sigs r { w with Γ := (x, langT) :: w.Γ } body)
-        (.kForBody x [] body)
-        w.σ (fun wsf => wsf.foldl (fun acc u => mergeTC acc (checkSeq sigs r u rest)) noFlows)
+      match w.σ with
+      | [] =>
+          checkLoopBody (checkSeq sigs r { w with Γ := (x, langT) :: w.Γ } body)
+            (.kForBody x [] body)
+            [] (fun wsf => wsf.foldl (fun acc u => mergeTC acc (checkSeq sigs r u rest)) noFlows)
+      | _ => .reject (.kForBody x [] body) "loop entry stack is not empty"
   | sigs, r, w, .kAssert :: rest =>
       -- assert, per VERDICT ATOM, machine-aligned (the machine
       -- continues ONLY on .boolean true; false, non-boolean and
