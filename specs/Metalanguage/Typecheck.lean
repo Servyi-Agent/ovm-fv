@@ -254,6 +254,10 @@ def typesOf (sigs : SigTable) (Γ : TyEnv) : List Expr → Option (List Ty)
       | _, _ => none
 termination_by es => sizeOf es
 
+/-- The payloads of the complN atoms, as one flat type. -/
+def payloadsOf (t : Ty) : Ty :=
+  t.flatMap (fun a => match a with | .complN p => [p] | _ => [])
+
 /-- The completion-kind decider for the splitP1 stratum. -/
 def primDecide : Prim → Option (VTy → Option Bool)
   | .pIsNormalC =>
@@ -336,10 +340,7 @@ def typeOfE (sigs : SigTable) (Γ : TyEnv) : Expr → Option Ty
             -- bare part reads as the field MOP. A refined
             -- pure-complN slot then refines this union.
             | none =>
-                some ((t.filterMap (fun a =>
-                  match a with
-                  | .complN p => some [p]
-                  | _ => none)).flatten ++ mopPayload nm)
+                some (payloadsOf t ++ mopPayload nm)
         | none => none
       else
         if (typeOfE sigs Γ x).isSome then some (mopPayload nm) else none

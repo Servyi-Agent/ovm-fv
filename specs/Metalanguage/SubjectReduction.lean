@@ -560,10 +560,6 @@ theorem isBareVTy_of_cover {a' a : VTy}
       | complN p | complT => simp [tmovesV] at h
       | anyValue c' | isValue _ | desc _ | notPresent => rfl
 
-/-- The payloads of the complN atoms, as one flat type. -/
-def payloadsOf (t : Ty) : Ty :=
-  t.flatMap (fun a => match a with | .complN p => [p] | _ => [])
-
 theorem payloadOf_pure : ∀ (t : Ty) (ps : Ty), payloadOf t = some ps →
     ∀ a ∈ t, ∃ p, a = .complN p := by
   intro t
@@ -766,6 +762,22 @@ theorem isObject_result_le (r : Ty)
       | inl h => subst h; unfold tyLe tmoves; simp [tmovesV, tagOf]
       | inr h => subst h; exact tmoves_refl _
 
+theorem removeTy_nil_imp {t T : Ty} (hr : removeTy t T = []) :
+    tmoves t T = Bool.true := by
+  unfold tmoves
+  simp only [List.all_eq_true]
+  intro a ha
+  have hni : a ∉ removeTy t T := by
+    rw [hr]
+    intro hc
+    cases hc
+  cases hp : T.any (fun b => tmovesV a b) with
+  | false =>
+      exact absurd (by
+        simp only [removeTy, List.mem_filter]
+        exact ⟨ha, by simp [hp]⟩) hni
+  | true => rfl
+
 theorem removeTy_nil_cov {t' t T : Ty} (h : slotLe t' t)
     (hr : removeTy t T = []) : removeTy t' T = [] := by
   cases hr' : removeTy t' T with
@@ -879,6 +891,655 @@ theorem filterMap_payloads (t : Ty) :
             | .complN q => some [q] | _ => none)).flatten
             = payloadsOf rest
           exact ih
+
+
+/-- THE EXPRESSION-SUMMARY COVARIANCE: a refined environment gives a
+    refined (or equally-none) summary push — the type machine's
+    expression judgement is monotone in Γ. Joint induction with the
+    typesOf side (the functional-induction motive). -/
+theorem typeOfE_cov (sigs : SigTable) (Γ' Γ : TyEnv) :
+    ∀ (e : Expr), envLe Γ' Γ →
+      ∀ t, typeOfE sigs Γ e = some t →
+        ∃ t', typeOfE sigs Γ' e = some t' ∧ slotLe t' t := by
+  intro e
+  induction e using typeOfE.induct (sigs := sigs) (Γ := Γ)
+    (motive1 := fun es => envLe Γ' Γ →
+      ∀ ts, typesOf sigs Γ es = some ts →
+        ∃ ts', typesOf sigs Γ' es = some ts' ∧ slotsLe ts' ts) with
+  | case1 =>
+      rename_i _ ts ht
+      simp only [typesOf] at ht
+      simp only [Option.some.injEq] at ht
+      subst ht
+      exact ⟨[], by simp [typesOf], True.intro⟩
+
+  | case2 =>
+      rename_i x xs t0 ts0 hxs hx ih2 ih1 hle ts ht
+      simp only [typesOf, hx, hxs, Option.some.injEq] at ht
+      subst ht
+      obtain ⟨tx', htx', hslotx⟩ := ih2 hle t0 hx
+      obtain ⟨txs', htxs', hslotxs⟩ := ih1 hle ts0 hxs
+      exact ⟨tx' :: txs', by
+        simp only [typesOf, htx', htxs'], hslotx, hslotxs⟩
+
+  | case3 =>
+      rename_i x xs hcontra ih2 ih1 hle ts ht
+      exfalso
+      cases hx : typeOfE sigs Γ x with
+      | none =>
+          rw [show typesOf sigs Γ (x :: xs) = none from by
+            simp only [typesOf, hx]] at ht
+          simp at ht
+      | some tx =>
+          cases hxs : typesOf sigs Γ xs with
+          | none =>
+              rw [show typesOf sigs Γ (x :: xs) = none from by
+                simp only [typesOf, hx, hxs]] at ht
+              simp at ht
+          | some txs =>
+              rw [show typesOf sigs Γ (x :: xs) = some (tx :: txs) from by
+                simp only [typesOf, hx, hxs]] at ht
+              simp only [Option.some.injEq] at ht
+              subst ht
+              exact hcontra tx txs hx hxs
+
+  | case4 =>
+      rename_i x
+      intro hle t ht
+      simp only [typeOfE] at ht
+      obtain ⟨t', ht', hle', hne'⟩ := envLe_lookup_cov_full hle ht
+      exact ⟨t', by simp only [typeOfE]; exact ht', hle', hne'⟩
+
+  | case5 =>
+      intro _ t ht
+      refine ⟨t, ?_, slotLe_refl t⟩
+      simp only [typeOfE] at ht ⊢
+      exact ht
+
+  | case6 =>
+      intro _ t ht
+      refine ⟨t, ?_, slotLe_refl t⟩
+      simp only [typeOfE] at ht ⊢
+      exact ht
+
+  | case7 =>
+      intro _ t ht
+      refine ⟨t, ?_, slotLe_refl t⟩
+      simp only [typeOfE] at ht ⊢
+      exact ht
+
+  | case8 =>
+      intro _ t ht
+      refine ⟨t, ?_, slotLe_refl t⟩
+      simp only [typeOfE] at ht ⊢
+      exact ht
+
+  | case9 =>
+      intro _ t ht
+      refine ⟨t, ?_, slotLe_refl t⟩
+      simp only [typeOfE] at ht ⊢
+      exact ht
+
+  | case10 =>
+      rename_i e ps hps ih
+      intro hle t ht
+      simp only [typeOfE, hps] at ht
+      cases hpay : payloadOf ps with
+      | none => rw [hpay] at ht; simp at ht
+      | some psv =>
+          rw [hpay] at ht
+          simp only [Option.some.injEq] at ht
+          subst ht
+          obtain ⟨ps', hps', hslot⟩ := ih hle ps hps
+          obtain ⟨t', ht', hslot'⟩ := payloadOf_cov hslot hpay
+          exact ⟨t', by simp only [typeOfE, hps', ht'], hslot'⟩
+
+  | case11 =>
+      rename_i e hnone ih
+      intro _ t ht
+      simp only [typeOfE, hnone] at ht
+      exact absurd ht (by simp)
+
+  | case12 =>
+      rename_i e ps hps ih
+      intro hle t ht
+      simp only [typeOfE, hps] at ht
+      cases hb : bareOf ps with
+      | none => rw [hb] at ht; simp at ht
+      | some bs =>
+          rw [hb] at ht
+          simp only [Option.map_some, Option.some.injEq] at ht
+          subst ht
+          obtain ⟨ps', hps', hslot⟩ := ih hle ps hps
+          obtain ⟨hb', hbs'⟩ := bareOf_cov hslot hb
+          exact ⟨ps'.map VTy.complN, by
+            simp only [typeOfE, hps', hb', Option.map_some],
+            complN_map_cov hbs'⟩
+
+  | case13 =>
+      rename_i e hnone ih
+      intro _ t ht
+      simp only [typeOfE, hnone] at ht
+      exact absurd ht (by simp)
+
+  | case14 =>
+      rename_i f as ps snd hsig ts hts hguard ih1
+      intro hle t ht
+      simp only [typeOfE, hsig, hts] at ht
+      rw [if_pos hguard] at ht
+      simp only [Option.some.injEq] at ht
+      subst ht
+      obtain ⟨ts', hts', hslots⟩ := ih1 hle ts hts
+      have hguard' : (leTy ts' ps || as.length == ps.length - 1
+          && leTy ts' ps.dropLast) = Bool.true := by
+        rw [Bool.or_eq_true] at hguard
+        cases hguard with
+        | inl hA =>
+            have h1 : leTy ts' ps = Bool.true := leTy_cov hslots hA
+            simp only [h1, Bool.true_or]
+        | inr hB =>
+            rw [Bool.and_eq_true] at hB
+            obtain ⟨hlen, hdl⟩ := hB
+            have h2 : leTy ts' ps.dropLast = Bool.true := leTy_cov hslots hdl
+            simp only [hlen, h2, Bool.and_true, Bool.true_and, Bool.or_true]
+      exact ⟨complPayload snd, by
+        simp only [typeOfE, hsig, hts', if_pos hguard'], slotLe_refl _⟩
+
+  | case15 =>
+      rename_i f as ps snd hsig ts hts hguard ih1
+      intro _ t ht
+      rw [show typeOfE sigs Γ (.call f as) = none from by
+        simp only [typeOfE, hsig, hts, if_neg hguard]] at ht
+      exact absurd ht (by simp)
+
+  | case16 =>
+      rename_i f as ps snd hsig hnone ih1
+      intro _ t ht
+      rw [show typeOfE sigs Γ (.call f as) = none from by
+        simp only [typeOfE, hsig, hnone]] at ht
+      exact absurd ht (by simp)
+
+  | case17 =>
+      rename_i f as hsig
+      intro _ t ht
+      simp only [typeOfE, hsig] at ht
+      exact absurd ht (by simp)
+
+  | case18 =>
+      rename_i nm recv args k harity hguard ih2 ih1
+      intro hle t ht
+      rw [Bool.and_eq_true] at hguard
+      obtain ⟨hAB, h3⟩ := hguard
+      rw [Bool.and_eq_true] at hAB
+      obtain ⟨h1, h2⟩ := hAB
+      cases hrecv : typeOfE sigs Γ recv with
+      | none => rw [hrecv] at h2; simp at h2
+      | some tr =>
+          rw [hrecv] at h2
+          simp only at h2
+          obtain ⟨tr', htr', hslotr⟩ := ih2 hle tr hrecv
+          have h2' : (match typeOfE sigs Γ' recv with
+              | some t2 => tmoves t2 [VTy.anyValue Ctor.obj]
+              | none => Bool.false) = Bool.true := by
+            rw [htr']
+            exact tmoves_trans hslotr.1 h2
+          have htr'move : tmoves tr' [VTy.anyValue Ctor.obj] = Bool.true :=
+            tmoves_trans hslotr.1 h2
+          have h3' : (typesOf sigs Γ' args).isSome = Bool.true := by
+            cases hc : typesOf sigs Γ args with
+            | none => rw [hc] at h3; simp at h3
+            | some sv =>
+                obtain ⟨sv', hsv', _⟩ := ih1 hle sv hc
+                rw [hsv']
+                rfl
+          have hguard' : ((args.length == k &&
+              (match typeOfE sigs Γ' recv with
+              | some t2 => tmoves t2 [VTy.anyValue Ctor.obj]
+              | none => Bool.false)) && (typesOf sigs Γ' args).isSome)
+              = Bool.true :=
+            by
+              simp only [htr', htr'move, h1, h3', Bool.true_and, Bool.and_true]
+          simp only [typeOfE, harity] at ht
+          rw [if_pos (by
+            simp only [hrecv, h1, h2, h3, Bool.true_and, Bool.and_true])] at ht
+          simp only [Option.some.injEq] at ht
+          subst ht
+          refine ⟨mopPayload nm, ?_, slotLe_refl _⟩
+          rw [show typeOfE sigs Γ' (Expr.imeth nm recv args)
+              = some (mopPayload nm) from by
+            simp only [typeOfE, harity, htr', htr'move, h1, h3',
+              Bool.true_and, Bool.and_true, if_true]]
+
+  | case19 =>
+      rename_i nm recv args k harity hguard ih2 ih1
+      intro _ t ht
+      simp only [typeOfE, harity] at ht
+      rw [if_neg hguard] at ht
+      exact absurd ht (by simp)
+
+  | case20 =>
+      rename_i nm recv args hnone
+      intro _ t ht
+      simp only [typeOfE, hnone] at ht
+      exact absurd ht (by simp)
+
+  | case21 =>
+      rename_i nm x hval ps1 hx1 ps hpay ih
+      intro hle t ht
+      simp only [typeOfE, if_pos hval, hx1, hpay] at ht
+      simp only [Option.some.injEq] at ht
+      subst ht
+      obtain ⟨ps1', hx1', hslot⟩ := ih hle ps1 hx1
+      obtain ⟨ps', hpay', hslot'⟩ := payloadOf_cov hslot hpay
+      exact ⟨ps', by
+        simp only [typeOfE, if_pos hval, hx1', hpay'], hslot'⟩
+
+  | case22 =>
+      rename_i nm x hval ps1 hx1 hpnone ih
+      intro hle t ht
+      simp only [typeOfE, if_pos hval, hx1, hpnone] at ht
+      simp only [Option.some.injEq] at ht
+      subst ht
+      obtain ⟨ps1', hx1', hslot⟩ := ih hle ps1 hx1
+      have hmopne : mopPayload nm ≠ [] := by
+        have hv : nm = "Value" := beq_iff_eq.mp hval
+        subst hv
+        have hmp : mopPayload "Value" = langT := rfl
+        intro hc
+        rw [hmp] at hc
+        simp [langT, anyOf, langTags] at hc
+      cases hpay' : payloadOf ps1' with
+      | some ps' =>
+          obtain ⟨heq, hne1'⟩ := payloadOf_eq' hpay'
+          have hpure1' := payloadOf_pure ps1' ps' hpay'
+          refine ⟨ps', by
+            simp only [typeOfE, if_pos hval, hx1', hpay'], ?_⟩
+          refine ⟨?_, ?_⟩
+          · rw [heq]
+            unfold tyLe tmoves
+            simp only [List.all_eq_true, List.any_eq_true, List.mem_append]
+            intro a ha
+            obtain ⟨b, hb, hab⟩ := payloadsOf_cov (tyLe_cov_atoms hslot.1) a
+              (heq ▸ ha)
+            exact ⟨b, Or.inl hb, hab⟩
+          · intro _
+            rw [heq]
+            exact payloadsOf_ne hne1' hpure1'
+      | none =>
+          refine ⟨payloadsOf ps1' ++ mopPayload nm, by
+            simp only [typeOfE, if_pos hval, hx1', hpay'], ?_⟩
+          refine ⟨?_, ?_⟩
+          · unfold tyLe tmoves
+            simp only [List.all_eq_true, List.any_eq_true, List.mem_append]
+            intro a ha
+            rcases ha with h | h
+            · obtain ⟨b, hb, hab⟩ :=
+                payloadsOf_cov (tyLe_cov_atoms hslot.1) a h
+              exact ⟨b, Or.inl hb, hab⟩
+            · exact ⟨a, Or.inr h, tmovesV_refl a⟩
+          · intro _
+            intro hnil
+            cases hpl : payloadsOf ps1' with
+            | cons y ys => rw [hpl] at hnil; simp at hnil
+            | nil =>
+                rw [hpl] at hnil
+                simp only [List.nil_append] at hnil
+                exact hmopne hnil
+
+  | case23 =>
+      rename_i nm x hval hnone ih
+      intro _ t ht
+      simp only [typeOfE, if_pos hval, hnone] at ht
+      exact absurd ht (by simp)
+
+  | case24 =>
+      rename_i nm x hnv hsame ih
+      intro hle t ht
+      simp only [typeOfE, if_neg hnv, if_pos hsame] at ht
+      simp only [Option.some.injEq] at ht
+      subst ht
+      have hx' : (typeOfE sigs Γ' x).isSome = Bool.true := by
+        cases hc : typeOfE sigs Γ x with
+        | none => rw [hc] at hsame; simp at hsame
+        | some sv =>
+            obtain ⟨sv', hsv', _⟩ := ih hle sv hc
+            rw [hsv']
+            rfl
+      exact ⟨mopPayload nm, by
+        simp only [typeOfE, if_neg hnv, if_pos hx'], slotLe_refl _⟩
+
+  | case25 =>
+      rename_i nm x hnv hnone ih
+      intro _ t ht
+      simp only [typeOfE, if_neg hnv] at ht
+      rw [if_neg hnone] at ht
+      exact absurd ht (by simp)
+
+  | case26 =>
+      rename_i es hsame ih1
+      intro hle t ht
+      simp only [typeOfE, if_pos hsame] at ht
+      simp only [Option.some.injEq] at ht
+      subst ht
+      have hx' : (typesOf sigs Γ' es).isSome = Bool.true := by
+        cases hc : typesOf sigs Γ es with
+        | none => rw [hc] at hsame; simp at hsame
+        | some sv =>
+            obtain ⟨sv', hsv', _⟩ := ih1 hle sv hc
+            rw [hsv']
+            rfl
+      exact ⟨[.anyValue .list], by
+        simp only [typeOfE, if_pos hx'], slotLe_refl _⟩
+
+  | case27 =>
+      rename_i es hnone ih1
+      intro _ t ht
+      simp only [typeOfE] at ht
+      rw [if_neg hnone] at ht
+      exact absurd ht (by simp)
+
+  | case28 =>
+      rename_i x ps hx hobj ih
+      intro hle t ht
+      simp only [typeOfE, hx, if_pos hobj] at ht
+      simp only [Option.some.injEq] at ht
+      subst ht
+      obtain ⟨ps', hx', hslot⟩ := ih hle ps hx
+      refine ⟨[.isValue (.boolean Bool.true)], ?_, slotLe_refl _⟩
+      simp only [typeOfE, hx']
+      rw [if_pos (show tmoves ps' [VTy.anyValue Ctor.obj] = Bool.true
+        from tmoves_trans hslot.1 hobj)]
+
+  | case29 =>
+      rename_i x ps hx hnobj hf ih
+      exfalso
+      rw [Bool.and_eq_true] at hf
+      obtain ⟨hrne, hpne⟩ := hf
+      have hnil : removeTy ps [VTy.anyValue Ctor.obj] = [] := by
+        simpa using hrne
+      exact absurd (removeTy_nil_imp hnil) hnobj
+
+  | case30 =>
+      rename_i x ps hx hnobj hnf ih
+      intro hle t ht
+      simp only [typeOfE, hx, if_neg hnobj, if_neg hnf] at ht
+      simp only [Option.some.injEq] at ht
+      subst ht
+      obtain ⟨ps', hx', hslot⟩ := ih hle ps hx
+      by_cases h1 : tmoves ps' [VTy.anyValue Ctor.obj] = Bool.true
+      · refine ⟨[.isValue (.boolean Bool.true)], ?_,
+          ⟨isObject_result_le _ (Or.inl rfl), by intro _; simp⟩⟩
+        simp only [typeOfE, hx']
+        rw [if_pos h1]
+      · by_cases h2 : (List.isEmpty (removeTy ps' [VTy.anyValue Ctor.obj])
+            && !List.isEmpty ps') = Bool.true
+        · refine ⟨[.isValue (.boolean Bool.false)], ?_,
+            ⟨isObject_result_le _ (Or.inr (Or.inl rfl)), by intro _; simp⟩⟩
+          simp only [typeOfE, hx']
+          rw [if_neg h1, if_pos h2]
+        · refine ⟨[.anyValue .bool], ?_, slotLe_refl _⟩
+          simp only [typeOfE, hx']
+          rw [if_neg h1, if_neg h2]
+
+  | case31 =>
+      rename_i x hnone ih
+      intro _ t ht
+      simp only [typeOfE, hnone] at ht
+      exact absurd ht (by simp)
+
+  | case32 =>
+      rename_i x hsame ih
+      intro hle t ht
+      simp only [typeOfE, if_pos hsame] at ht
+      simp only [Option.some.injEq] at ht
+      subst ht
+      have hx' : (typeOfE sigs Γ' x).isSome = Bool.true := by
+        cases hc : typeOfE sigs Γ x with
+        | none => rw [hc] at hsame; simp at hsame
+        | some sv =>
+            obtain ⟨sv', hsv', _⟩ := ih hle sv hc
+            rw [hsv']
+            rfl
+      exact ⟨[.anyValue .bool], by
+        simp only [typeOfE, if_pos hx'], slotLe_refl _⟩
+
+  | case33 =>
+      rename_i x hnone ih
+      intro _ t ht
+      simp only [typeOfE] at ht
+      rw [if_neg hnone] at ht
+      exact absurd ht (by simp)
+
+  | case34 =>
+      rename_i x hsame ih
+      intro hle t ht
+      simp only [typeOfE, if_pos hsame] at ht
+      simp only [Option.some.injEq] at ht
+      subst ht
+      have hx' : (typeOfE sigs Γ' x).isSome = Bool.true := by
+        cases hc : typeOfE sigs Γ x with
+        | none => rw [hc] at hsame; simp at hsame
+        | some sv =>
+            obtain ⟨sv', hsv', _⟩ := ih hle sv hc
+            rw [hsv']
+            rfl
+      exact ⟨[.anyValue .bool], by
+        simp only [typeOfE, if_pos hx'], slotLe_refl _⟩
+
+  | case35 =>
+      rename_i x hnone ih
+      intro _ t ht
+      simp only [typeOfE] at ht
+      rw [if_neg hnone] at ht
+      exact absurd ht (by simp)
+
+  | case36 =>
+      rename_i x hsame ih
+      intro hle t ht
+      simp only [typeOfE, if_pos hsame] at ht
+      simp only [Option.some.injEq] at ht
+      subst ht
+      have hx' : (typeOfE sigs Γ' x).isSome = Bool.true := by
+        cases hc : typeOfE sigs Γ x with
+        | none => rw [hc] at hsame; simp at hsame
+        | some sv =>
+            obtain ⟨sv', hsv', _⟩ := ih hle sv hc
+            rw [hsv']
+            rfl
+      exact ⟨[.anyValue .bool], by
+        simp only [typeOfE, if_pos hx'], slotLe_refl _⟩
+
+  | case37 =>
+      rename_i x hnone ih
+      intro _ t ht
+      simp only [typeOfE] at ht
+      rw [if_neg hnone] at ht
+      exact absurd ht (by simp)
+
+  | case38 =>
+      rename_i x hsame ih
+      intro hle t ht
+      simp only [typeOfE, if_pos hsame] at ht
+      simp only [Option.some.injEq] at ht
+      subst ht
+      have hx' : (typeOfE sigs Γ' x).isSome = Bool.true := by
+        cases hc : typeOfE sigs Γ x with
+        | none => rw [hc] at hsame; simp at hsame
+        | some sv =>
+            obtain ⟨sv', hsv', _⟩ := ih hle sv hc
+            rw [hsv']
+            rfl
+      exact ⟨[.anyValue .bool], by
+        simp only [typeOfE, if_pos hx'], slotLe_refl _⟩
+
+  | case39 =>
+      rename_i x hnone ih
+      intro _ t ht
+      simp only [typeOfE] at ht
+      rw [if_neg hnone] at ht
+      exact absurd ht (by simp)
+
+  | case40 =>
+      rename_i x hsame ih
+      intro hle t ht
+      simp only [typeOfE, if_pos hsame] at ht
+      simp only [Option.some.injEq] at ht
+      subst ht
+      have hx' : (typeOfE sigs Γ' x).isSome = Bool.true := by
+        cases hc : typeOfE sigs Γ x with
+        | none => rw [hc] at hsame; simp at hsame
+        | some sv =>
+            obtain ⟨sv', hsv', _⟩ := ih hle sv hc
+            rw [hsv']
+            rfl
+      exact ⟨[.anyValue .bool], by
+        simp only [typeOfE, if_pos hx'], slotLe_refl _⟩
+
+  | case41 =>
+      rename_i x hnone ih
+      intro _ t ht
+      simp only [typeOfE] at ht
+      rw [if_neg hnone] at ht
+      exact absurd ht (by simp)
+
+  | case42 =>
+      rename_i b x hsame ih
+      intro hle t ht
+      simp only [typeOfE, if_pos hsame] at ht
+      simp only [Option.some.injEq] at ht
+      subst ht
+      have hx' : (typeOfE sigs Γ' x).isSome = Bool.true := by
+        cases hc : typeOfE sigs Γ x with
+        | none => rw [hc] at hsame; simp at hsame
+        | some sv =>
+            obtain ⟨sv', hsv', _⟩ := ih hle sv hc
+            rw [hsv']
+            rfl
+      exact ⟨[.anyValue .bool], by
+        simp only [typeOfE, if_pos hx'], slotLe_refl _⟩
+
+  | case43 =>
+      rename_i b x hnone ih
+      intro _ t ht
+      simp only [typeOfE] at ht
+      rw [if_neg hnone] at ht
+      exact absurd ht (by simp)
+
+  | case44 =>
+      rename_i s x hsame ih
+      intro hle t ht
+      simp only [typeOfE, if_pos hsame] at ht
+      simp only [Option.some.injEq] at ht
+      subst ht
+      have hx' : (typeOfE sigs Γ' x).isSome = Bool.true := by
+        cases hc : typeOfE sigs Γ x with
+        | none => rw [hc] at hsame; simp at hsame
+        | some sv =>
+            obtain ⟨sv', hsv', _⟩ := ih hle sv hc
+            rw [hsv']
+            rfl
+      exact ⟨[.anyValue .bool], by
+        simp only [typeOfE, if_pos hx'], slotLe_refl _⟩
+
+  | case45 =>
+      rename_i s x hnone ih
+      intro _ t ht
+      simp only [typeOfE] at ht
+      rw [if_neg hnone] at ht
+      exact absurd ht (by simp)
+
+  | case46 =>
+      rename_i x hsame ih
+      intro hle t ht
+      simp only [typeOfE, if_pos hsame] at ht
+      simp only [Option.some.injEq] at ht
+      subst ht
+      have hx' : (typeOfE sigs Γ' x).isSome = Bool.true := by
+        cases hc : typeOfE sigs Γ x with
+        | none => rw [hc] at hsame; simp at hsame
+        | some sv =>
+            obtain ⟨sv', hsv', _⟩ := ih hle sv hc
+            rw [hsv']
+            rfl
+      exact ⟨[.anyValue .bool], by
+        simp only [typeOfE, if_pos hx'], slotLe_refl _⟩
+
+  | case47 =>
+      rename_i x hnone ih
+      intro _ t ht
+      simp only [typeOfE] at ht
+      rw [if_neg hnone] at ht
+      exact absurd ht (by simp)
+
+  | case48 =>
+      rename_i x hsame ih
+      intro hle t ht
+      simp only [typeOfE, if_pos hsame] at ht
+      simp only [Option.some.injEq] at ht
+      subst ht
+      have hx' : (typeOfE sigs Γ' x).isSome = Bool.true := by
+        cases hc : typeOfE sigs Γ x with
+        | none => rw [hc] at hsame; simp at hsame
+        | some sv =>
+            obtain ⟨sv', hsv', _⟩ := ih hle sv hc
+            rw [hsv']
+            rfl
+      exact ⟨[.anyValue .bool], by
+        simp only [typeOfE, if_pos hx'], slotLe_refl _⟩
+
+  | case49 =>
+      rename_i x hnone ih
+      intro _ t ht
+      simp only [typeOfE] at ht
+      rw [if_neg hnone] at ht
+      exact absurd ht (by simp)
+
+  | case50 =>
+      rename_i ty x hsame ih
+      intro hle t ht
+      simp only [typeOfE, if_pos hsame] at ht
+      simp only [Option.some.injEq] at ht
+      subst ht
+      have hx' : (typeOfE sigs Γ' x).isSome = Bool.true := by
+        cases hc : typeOfE sigs Γ x with
+        | none => rw [hc] at hsame; simp at hsame
+        | some sv =>
+            obtain ⟨sv', hsv', _⟩ := ih hle sv hc
+            rw [hsv']
+            rfl
+      exact ⟨[.anyValue .bool], by
+        simp only [typeOfE, if_pos hx'], slotLe_refl _⟩
+
+  | case51 =>
+      rename_i ty x hnone ih
+      intro _ t ht
+      simp only [typeOfE] at ht
+      rw [if_neg hnone] at ht
+      exact absurd ht (by simp)
+
+  | case52 =>
+      rename_i name x hsame ih
+      intro hle t ht
+      simp only [typeOfE, if_pos hsame] at ht
+      simp only [Option.some.injEq] at ht
+      subst ht
+      have hx' : (typeOfE sigs Γ' x).isSome = Bool.true := by
+        cases hc : typeOfE sigs Γ x with
+        | none => rw [hc] at hsame; simp at hsame
+        | some sv =>
+            obtain ⟨sv', hsv', _⟩ := ih hle sv hc
+            rw [hsv']
+            rfl
+      exact ⟨[.anyValue .bool], by
+        simp only [typeOfE, if_pos hx'], slotLe_refl _⟩
+
+  | case53 =>
+      rename_i name x hnone ih
+      intro _ t ht
+      simp only [typeOfE] at ht
+      rw [if_neg hnone] at ht
+      exact absurd ht (by simp)
+
 
 /- ## Proof layer II: the abstraction commutes with machine pushes -/
 
