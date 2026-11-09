@@ -314,7 +314,10 @@ def typeOfE (sigs : SigTable) (Γ : TyEnv) : Expr → Option Ty
   | .imeth nm recv args =>
       match mopArity nm with
       | some k =>
-          if args.length == k && typeOfE sigs Γ recv == some [.anyValue .obj]
+          if args.length == k
+             && (match typeOfE sigs Γ recv with
+                 | some t => tmoves t [.anyValue .obj]
+                 | none => Bool.false)
              && (typesOf sigs Γ args).isSome
           then some (mopPayload nm) else none
       | none => none
@@ -328,7 +331,9 @@ def typeOfE (sigs : SigTable) (Γ : TyEnv) : Expr → Option Ty
         | some t =>
             match payloadOf t with
             | some ps => some ps
-            | none => some (mopPayload nm)
+            -- a mixed slot: the read is polymorphic (payload OR
+            -- descriptor read) - anyT, never a class-filtered guess
+            | none => some anyT
         | none => none
       else
         if (typeOfE sigs Γ x).isSome then some (mopPayload nm) else none
