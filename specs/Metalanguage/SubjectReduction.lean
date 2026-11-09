@@ -285,19 +285,35 @@ def registryCertified (sigs : SigTable) (reg : AOReg) : Prop :=
 /-- Pointwise refinement of flat types: every atom below some atom. -/
 def tyLe (t u : Ty) : Prop := tmoves t u = Bool.true
 
-/-- Pointwise refinement of type environments: every refined atom is
-    covered by some coarse atom (the ∃-form gives existence
-    covariance: a nonempty refined lookup implies a nonempty coarse
-    lookup - needed by the split arms). -/
-def envLe (Γ Δ : TyEnv) : Prop :=
-  ∀ (x : «String»), ∀ t ∈ tyLookup Γ x, ∃ u ∈ tyLookup Δ x, tyLe t u
+/- ## Proof layer I': the refinement relations, strengthened.
 
-def stackLe (σ τ : List Ty) : Prop :=
-  σ.length = τ.length ∧
-    ∀ (i : Nat), ∀ t ∈ σ[i]?, ∀ u ∈ τ[i]?, tyLe t u
+    Plain ∃-atom covariance admits refined EMPTY slots/bindings
+    ([] ⊑ anything vacuously) - and an empty binding makes the
+    refined split reject (meetTy [] T = []) while the coarse is
+    terminal. Three components close exactly those holes:
+      - atom covariance (∀-∃),
+      - lookup EXISTENCE preservation (no refined-only unbounds),
+      - coarse-nonempty → refined-nonempty (no refined bottoms). -/
 
-def worldLe (w u : World) : Prop :=
-  envLe w.Γ u.Γ ∧ stackLe w.σ u.σ
+/-- Slot refinement: atom covariance + no refined bottom slot
+    (a nonempty coarse slot keeps a nonempty refined slot). -/
+def slotLe (t' t : Ty) : Prop :=
+  tyLe t' t ∧ (t ≠ [] → t' ≠ [])
+
+/-- Pointwise refinement of type environments. -/
+def envLe (Γ' Γ : TyEnv) : Prop :=
+  (∀ (x : «String»), (tyLookup Γ' x).isSome = (tyLookup Γ x).isSome)
+  ∧ (∀ (x : «String»), ∀ t' ∈ tyLookup Γ' x, ∃ t ∈ tyLookup Γ x, tyLe t' t)
+  ∧ (∀ (x : «String»), ∀ t ∈ tyLookup Γ x, t ≠ [] →
+       ∃ t' ∈ tyLookup Γ' x, t' ≠ [] ∧ tyLe t' t)
+
+def stackLe : List Ty → List Ty → Prop
+  | [], [] => True
+  | t' :: σ', t :: σ => slotLe t' t ∧ stackLe σ' σ
+  | _, _ => False
+
+def worldLe (w' w : World) : Prop :=
+  envLe w'.Γ w.Γ ∧ stackLe w'.σ w.σ
 
 /-- Subtyping is a preorder on the flat lattice (the atom grid is
     essentially discrete: identity, singleton-into-class, and
@@ -414,6 +430,73 @@ theorem tmoves_trans {t u v : Ty}
 
 theorem tyLe_of_eq {t u : Ty} (h : t = u) : tyLe t u := by
   rw [h]; exact tmoves_refl u
+
+/- ## Proof layer I'': plumbing for the strengthened relations -/
+
+theorem envLe_refl (Γ : TyEnv) : envLe Γ Γ := by
+  refine ⟨fun _ => rfl, fun _ t' ht' => ⟨t', ht', tyLe_of_eq rfl⟩, ?_⟩
+  intro x t ht hne
+  exact ⟨t, ht, hne, tyLe_of_eq rfl⟩
+
+theorem stackLe_refl : ∀ (σ : List Ty), stackLe σ σ
+  | [] => trivial
+  | t :: σ => ⟨⟨tmoves_refl _, fun h => h⟩, stackLe_refl σ⟩
+
+theorem worldLe_refl (w : World) : worldLe w w :=
+  ⟨envLe_refl w.Γ, stackLe_refl w.σ⟩
+
+theorem envLe_cons {Γ' Γ : TyEnv} {x : «String»} {t' t : Ty}
+    (hΓ : envLe Γ' Γ) (hslot : slotLe t' t) :
+    envLe ((x, t') :: Γ') ((x, t) :: Γ) := by
+  obtain ⟨hex, hcov, hne⟩ := hΓ
+  refine ⟨?_, ?_, ?_⟩
+  · intro y
+    by_cases h : x = y
+    · subst h
+      simp [tyLookup]
+    · simp only [tyLookup, if_neg (fun he => h (beq_iff_eq.mp he))]
+      exact hex y
+  · intro y s' hs'
+    by_cases h : x = y
+    · subst h
+      simp only [tyLookup, beq_self_eq_true, if_true, Option.mem_some,
+        List.mem_singleton] at hs'
+      subst hs'
+      simp only [tyLookup, beq_self_eq_true, if_true, Option.mem_some,
+        List.mem_singleton]
+      exact ⟨t, rfl, hslot.1⟩
+    · simp only [tyLookup, if_neg (fun he => h (beq_iff_eq.mp he))] at hs'
+      obtain ⟨s, hs, hle⟩ := hcov y s' hs'
+      refine ⟨s, ?_, hle⟩
+      simp only [tyLookup, if_neg (fun he => h (beq_iff_eq.mp he))]
+      exact hs
+  · intro y s hs hne2
+    by_cases h : x = y
+    · subst h
+      simp only [tyLookup, beq_self_eq_true, if_true, Option.mem_some,
+        List.mem_singleton] at hs
+      refine ⟨t', by simp [tyLookup], hslot.2 (by rw [hs]; exact hne2),
+        by rw [← hs]; exact hslot.1⟩
+    · simp only [tyLookup, if_neg (fun he => h (beq_iff_eq.mp he))] at hs
+      obtain ⟨w, hw, hne_w, hle_w⟩ := hne y s hs hne2
+      refine ⟨w, ?_, hne_w, hle_w⟩
+      simp only [tyLookup, if_neg (fun he => h (beq_iff_eq.mp he))]
+      exact hw
+
+theorem stackLe_cons {a' a : Ty} {σ' σ : List Ty}
+    (h : stackLe (a' :: σ') (a :: σ)) : slotLe a' a ∧ stackLe σ' σ := h
+
+theorem stackLe_cons_intro {a' a : Ty} {σ' σ : List Ty}
+    (hslot : slotLe a' a) (h : stackLe σ' σ) : stackLe (a' :: σ') (a :: σ) :=
+  ⟨hslot, h⟩
+
+theorem envLe_lookup_cov {Γ' Γ : TyEnv} (h : envLe Γ' Γ) {x : «String»}
+    {t : Ty} (ht : tyLookup Γ x = some t) (hne : t ≠ []) :
+    ∃ t', tyLookup Γ' x = some t' ∧ tyLe t' t := by
+  obtain ⟨-, -, hne3⟩ := h
+  obtain ⟨t', ht', -, hle⟩ := hne3 x t ht hne
+  exact ⟨t', ht', hle⟩
+
 
 /- ## Proof layer II: the abstraction commutes with machine pushes -/
 
