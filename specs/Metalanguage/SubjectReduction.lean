@@ -498,6 +498,183 @@ theorem envLe_lookup_cov {Γ' Γ : TyEnv} (h : envLe Γ' Γ) {x : «String»}
   exact ⟨t', ht', hle⟩
 
 
+/- ## Proof layer IX: covariance of the expression summary -/
+
+def slotsLe : List Ty → List Ty → Prop
+  | [], [] => True
+  | t :: ts, u :: us => slotLe t u ∧ slotsLe ts us
+  | _, _ => False
+
+theorem slotLe_refl (t : Ty) : slotLe t t :=
+  ⟨tmoves_refl t, fun h => h⟩
+
+theorem slotLe_tyLe {t' t : Ty} (h : slotLe t' t) : tyLe t' t := h.1
+
+/-- The atom-cover form of tyLe. -/
+theorem tyLe_cov_atoms {t' t : Ty} (h : tyLe t' t) :
+    ∀ a' ∈ t', ∃ a ∈ t, tmovesV a' a = Bool.true := by
+  unfold tyLe tmoves at h
+  simp only [List.all_eq_true, List.any_eq_true] at h
+  exact h
+
+/-- A complN atom only covers complN atoms. -/
+theorem tmovesV_complN_inv {p : VTy} {b : VTy}
+    (h : tmovesV (.complN p) b = Bool.true) : ∃ q, b = .complN q := by
+  cases b with
+  | complN q => exact ⟨q, rfl⟩
+  | complT | anyValue _ | isValue _ | desc _ | notPresent =>
+      simp [tmovesV] at h
+
+/-- Under complN, coverage is payload coverage. -/
+theorem tmovesV_complN {p q : VTy} :
+    tmovesV (.complN p) (.complN q) = tmovesV p q := rfl
+
+/-- A bare atom never covers a completion atom. -/
+theorem isBareVTy_of_cover {a' a : VTy}
+    (hb : isBareVTy a = Bool.true) (h : tmovesV a' a = Bool.true) :
+    isBareVTy a' = Bool.true := by
+  cases a with
+  | complN p => simp [isBareVTy] at hb
+  | complT => simp [isBareVTy] at hb
+  | anyValue c =>
+      cases a' with
+      | complN p => simp [tmovesV] at h
+      | complT => simp [tmovesV] at h
+      | anyValue c' | isValue _ | desc _ | notPresent => rfl
+  | isValue v =>
+      cases a' with
+      | complN p => simp [tmovesV] at h
+      | complT => simp [tmovesV] at h
+      | anyValue c' | isValue _ | desc _ | notPresent => rfl
+  | desc fs =>
+      cases a' with
+      | complN p => simp [tmovesV] at h
+      | complT => simp [tmovesV] at h
+      | anyValue c' =>
+          cases c' with
+          | desc => rfl
+          | undef | null | bool | num | str | obj | list => simp [tmovesV] at h
+      | isValue _ | desc _ | notPresent => rfl
+  | notPresent =>
+      cases a' with
+      | complN p | complT => simp [tmovesV] at h
+      | anyValue c' | isValue _ | desc _ | notPresent => rfl
+
+/-- The payloads of the complN atoms, as one flat type. -/
+def payloadsOf (t : Ty) : Ty :=
+  t.flatMap (fun a => match a with | .complN p => [p] | _ => [])
+
+theorem payloadOf_pure : ∀ (t : Ty) (ps : Ty), payloadOf t = some ps →
+    ∀ a ∈ t, ∃ p, a = .complN p := by
+  intro t
+  induction t with
+  | nil => intro ps hp a ha; cases ha
+  | cons b rest ih =>
+      intro ps hp a ha
+      cases b with
+      | complN p =>
+          cases rest with
+          | nil =>
+              simp only [payloadOf] at hp
+              match List.mem_cons.mp ha with
+              | Or.inl he => exact ⟨p, he⟩
+              | Or.inr hr => cases hr
+          | cons c rest' =>
+              simp only [payloadOf] at hp
+              cases hrest : payloadOf (c :: rest') with
+              | none => rw [hrest] at hp; simp at hp
+              | some rs =>
+                  rw [hrest] at hp
+                  simp only [Option.some.injEq] at hp
+                  match List.mem_cons.mp ha with
+                  | Or.inl he => exact ⟨p, he⟩
+                  | Or.inr hr => exact ih rs hrest a hr
+      | complT | anyValue _ | isValue _ | desc _ | notPresent =>
+          simp only [payloadOf] at hp; simp at hp
+
+theorem payloadsOf_ne {t : Ty} (hne : t ≠ [])
+    (hpure : ∀ a ∈ t, ∃ p, a = .complN p) : payloadsOf t ≠ [] := by
+  match t, hne, hpure with
+  | a :: rest, _, hpure =>
+      obtain ⟨p, hp⟩ := hpure a (List.mem_cons_self ..)
+      subst hp
+      simp [payloadsOf]
+
+theorem payloadOf_eq : ∀ (t : Ty), (∀ a ∈ t, ∃ p, a = .complN p) →
+    t ≠ [] → payloadOf t = some (payloadsOf t) := by
+  intro t
+  induction t with
+  | nil => intro _ hne; exact absurd rfl hne
+  | cons a rest ih =>
+      intro hpure hne
+      obtain ⟨p, hp⟩ := hpure a (List.mem_cons_self ..)
+      subst hp
+      cases rest with
+      | nil => simp [payloadOf, payloadsOf]
+      | cons b rest' =>
+          have hrestne : b :: rest' ≠ [] := fun hc => by cases hc
+          have hpurerest : ∀ x ∈ b :: rest', ∃ p, x = .complN p :=
+            fun x hx => hpure x (List.mem_cons_of_mem _ hx)
+          simp only [payloadOf]
+          rw [ih hpurerest hrestne]
+          simp [payloadsOf]
+
+theorem payloadsOf_cov {t' t : Ty} (hcov : ∀ a' ∈ t', ∃ a ∈ t,
+    tmovesV a' a = Bool.true) : ∀ p' ∈ payloadsOf t', ∃ p ∈ payloadsOf t,
+    tmovesV p' p = Bool.true := by
+  intro p' hp'
+  simp only [payloadsOf, List.mem_flatMap] at hp'
+  obtain ⟨a', ha', hmem'⟩ := hp'
+  obtain ⟨a, ha, haa⟩ := hcov a' ha'
+  cases a with
+  | complN q =>
+      refine ⟨q, ?_, ?_⟩
+      · simp only [payloadsOf, List.mem_flatMap]
+        exact ⟨.complN q, ha, by simp⟩
+      · cases a' with
+        | complN r =>
+            have heq : p' = r := by simpa using hmem'
+            rw [← tmovesV_complN, heq]
+            exact haa
+        | complT | anyValue _ | isValue _ | desc _ | notPresent =>
+            simp [tmovesV] at haa
+  | complT | anyValue _ | isValue _ | desc _ | notPresent =>
+      cases a' with
+      | complN r => simp [tmovesV] at haa
+      | complT | anyValue _ | isValue _ | desc _ | notPresent =>
+          have hnil : p' ∈ ([] : Ty) := hmem'
+          exact absurd hnil (by simp)
+
+/-- payloadOf is covariant on pure slots. -/
+theorem payloadOf_cov {t' t : Ty} (h : slotLe t' t) {ps : Ty}
+    (hp : payloadOf t = some ps) : ∃ ps', payloadOf t' = some ps'
+      ∧ slotLe ps' ps := by
+  have hpure : ∀ a ∈ t, ∃ p, a = .complN p :=
+    payloadOf_pure t ps hp
+  have hne : t ≠ [] := by
+    intro hc
+    subst hc
+    simp [payloadOf] at hp
+  rw [payloadOf_eq t hpure hne] at hp
+  simp only [Option.some.injEq] at hp
+  subst hp
+  have hne' : t' ≠ [] := fun hc => h.2 hne hc
+  have hpure' : ∀ a' ∈ t', ∃ p, a' = .complN p := by
+    intro a' ha'
+    obtain ⟨a, ha, haa⟩ := tyLe_cov_atoms h.1 a' ha'
+    obtain ⟨q, hq⟩ := hpure a ha
+    rw [hq] at haa
+    cases a' with
+    | complN p' => exact ⟨p', rfl⟩
+    | complT | anyValue _ | isValue _ | desc _ | notPresent =>
+        simp [tmovesV] at haa
+  refine ⟨payloadsOf t', payloadOf_eq t' hpure' hne', ?_, ?_⟩
+  · unfold tyLe tmoves
+    simp only [List.all_eq_true, List.any_eq_true]
+    exact payloadsOf_cov (fun a' ha' => tyLe_cov_atoms h.1 a' ha')
+  · intro _
+    exact payloadsOf_ne hne' hpure'
+
 /- ## Proof layer II: the abstraction commutes with machine pushes -/
 
 /-- frameOk at above = none is exactly frameChecks. -/
