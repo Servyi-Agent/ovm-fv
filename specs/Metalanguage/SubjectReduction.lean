@@ -841,6 +841,45 @@ theorem leTy_cov : ∀ {ts' ts ps : List Ty}, slotsLe ts' ts →
               obtain ⟨hp1, hp2⟩ := (Bool.and_eq_true _ _) |>.mp hle
               exact (Bool.and_eq_true _ _) |>.mpr ⟨tmoves_trans hslot.1 hp1, ih hs1 hp2⟩
 
+
+/-- payloadOf on a defined slot yields exactly the payload union. -/
+theorem payloadOf_eq' {t ps : Ty} (hp : payloadOf t = some ps) :
+    ps = payloadsOf t ∧ t ≠ [] := by
+  have hpure := payloadOf_pure t ps hp
+  have hne : t ≠ [] := by
+    intro hc
+    subst hc
+    simp [payloadOf] at hp
+  rw [payloadOf_eq t hpure hne] at hp
+  simp only [Option.some.injEq] at hp
+  exact ⟨hp.symm, hne⟩
+
+theorem payloadsOf_slotLe {t' t : Ty} (h : slotLe t' t) :
+    tyLe (payloadsOf t') (payloadsOf t) := by
+  unfold tyLe tmoves
+  simp only [List.all_eq_true, List.any_eq_true]
+  exact payloadsOf_cov (tyLe_cov_atoms h.1)
+
+/-- The checker's ifield fallback term is payloadsOf (bridge). -/
+theorem filterMap_payloads (t : Ty) :
+    (t.filterMap (fun a => match a with
+      | .complN p => some [p] | _ => none)).flatten = payloadsOf t := by
+  induction t with
+  | nil => rfl
+  | cons a rest ih =>
+      cases a with
+      | complN p =>
+          show [p] ++ (rest.filterMap (fun a => match a with
+            | .complN q => some [q] | _ => none)).flatten
+            = payloadsOf (.complN p :: rest)
+          rw [ih]
+          rfl
+      | complT | anyValue _ | isValue _ | desc _ | notPresent =>
+          show (rest.filterMap (fun a => match a with
+            | .complN q => some [q] | _ => none)).flatten
+            = payloadsOf rest
+          exact ih
+
 /- ## Proof layer II: the abstraction commutes with machine pushes -/
 
 /-- frameOk at above = none is exactly frameChecks. -/
