@@ -1541,6 +1541,42 @@ theorem typeOfE_cov (sigs : SigTable) (Γ' Γ : TyEnv) :
       exact absurd ht (by simp)
 
 
+
+/- ## Proof layer X: covariance of one machine step -/
+
+theorem stackLe_take : ∀ {σ' σ : List Ty} (n : Nat),
+    stackLe σ' σ → stackLe (σ'.take n) (σ.take n)
+  | _, _, 0, _ => True.intro
+  | [], [], _, _ => by simp only [List.take_nil]; exact True.intro
+  | a' :: σ', a :: σ, n + 1, h => by
+      obtain ⟨hslot, hrest⟩ := h
+      exact ⟨hslot, stackLe_take n hrest⟩
+termination_by σ' => sizeOf σ'
+decreasing_by all_goals simp_wf <;> omega
+
+theorem stackLe_drop : ∀ {σ' σ : List Ty} (n : Nat),
+    stackLe σ' σ → stackLe (σ'.drop n) (σ.drop n)
+  | _, _, 0, _ => by simpa using ‹_›
+  | [], [], _, _ => by simp only [List.drop_nil]; exact True.intro
+  | a' :: σ', a :: σ, n + 1, h => by
+      obtain ⟨-, hrest⟩ := h
+      exact stackLe_drop n hrest
+termination_by σ' => sizeOf σ'
+decreasing_by all_goals simp_wf <;> omega
+
+theorem popTy_cov {T t' t : Ty} {σ' σ : List Ty}
+    (hslot : slotLe t' t) (hrest : stackLe σ' σ) {σ0 : List Ty}
+    (hp : popTy T (t :: σ) = some σ0) : popTy T (t' :: σ') = some σ' := by
+  simp only [popTy] at hp ⊢
+  cases hif : tmoves t T with
+  | false => rw [hif] at hp; simp at hp
+  | true =>
+      rw [hif] at hp
+      simp only [reduceIte, Option.some.injEq] at hp
+      subst hp
+      rw [if_pos (show tmoves t' T = Bool.true from
+        tmoves_trans hslot.1 hif)]
+
 /- ## Proof layer II: the abstraction commutes with machine pushes -/
 
 /-- frameOk at above = none is exactly frameChecks. -/
