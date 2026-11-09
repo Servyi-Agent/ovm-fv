@@ -331,9 +331,15 @@ def typeOfE (sigs : SigTable) (Γ : TyEnv) : Expr → Option Ty
         | some t =>
             match payloadOf t with
             | some ps => some ps
-            -- a mixed slot: the read is polymorphic (payload OR
-            -- descriptor read) - anyT, never a class-filtered guess
-            | none => some anyT
+            -- a mixed slot: the read, when normal, is SOME declared
+            -- payload (union of the complN atoms' payloads); the
+            -- bare part reads as the field MOP. A refined
+            -- pure-complN slot then refines this union.
+            | none =>
+                some ((t.filterMap (fun a =>
+                  match a with
+                  | .complN p => some [p]
+                  | _ => none)).flatten ++ mopPayload nm)
         | none => none
       else
         if (typeOfE sigs Γ x).isSome then some (mopPayload nm) else none
