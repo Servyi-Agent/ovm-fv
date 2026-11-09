@@ -1577,6 +1577,231 @@ theorem popTy_cov {T t' t : Ty} {σ' σ : List Ty}
       rw [if_pos (show tmoves t' T = Bool.true from
         tmoves_trans hslot.1 hif)]
 
+
+theorem popTyN_cov (n : Nat) : ∀ (T : Ty) {σ' σ σ0 : List Ty},
+    stackLe σ' σ → popTyN n T σ = some σ0 →
+    ∃ σ0', popTyN n T σ' = some σ0' ∧ stackLe σ0' σ0 := by
+  induction n with
+  | zero =>
+      intro T σ' σ σ0 h hp
+      simp only [popTyN] at hp
+      cases hp
+      exact ⟨σ', rfl, h⟩
+  | succ m ih =>
+      intro T σ' σ σ0 h hp
+      cases σ with
+      | nil =>
+          cases σ' with
+          | nil =>
+              simp only [popTyN, popTy] at hp
+              simp at hp
+          | cons a' r' => exact absurd h (by simp [stackLe])
+      | cons a r =>
+          cases σ' with
+          | nil => exact absurd h (by simp [stackLe])
+          | cons a' r' =>
+              obtain ⟨hslot, hrest⟩ := h
+              cases hpop : tmoves a T with
+              | false =>
+                  simp only [popTyN, popTy, hpop, reduceIte] at hp
+                  simp at hp
+              | true =>
+                  have haT : tmoves a' T = Bool.true := tmoves_trans hslot.1 hpop
+                  simp only [popTyN, popTy, hpop, reduceIte] at hp
+                  simp only [popTyN, popTy, haT, reduceIte] at ⊢
+                  obtain ⟨σ0', hp', hle'⟩ := ih T hrest hp
+                  exact ⟨σ0', hp', hle'⟩
+
+theorem stackLe_slotsLe : ∀ {σ' σ : List Ty}, stackLe σ' σ →
+    slotsLe σ' σ
+  | [], [], _ => True.intro
+  | a' :: σ', a :: σ, h => by
+      obtain ⟨h1, h2⟩ := h
+      exact ⟨h1, stackLe_slotsLe h2⟩
+
+theorem stackLe_length : ∀ {σ' σ : List Ty}, stackLe σ' σ →
+    σ'.length = σ.length
+  | [], [], _ => rfl
+  | a' :: σ', a :: σ, h => by
+      obtain ⟨-, hrest⟩ := h
+      rw [List.length_cons, List.length_cons, stackLe_length hrest]
+
+theorem stackLe_append : ∀ {a' a b' b : List Ty},
+    stackLe a' a → stackLe b' b → stackLe (a' ++ b') (a ++ b)
+  | [], [], b', b, _, hb => hb
+  | a1 :: ar, b1 :: br, b', b, ha, hb => ⟨ha.1, stackLe_append ha.2 hb⟩
+  | [], _ :: _, _, _, h, _ => absurd h (by simp [stackLe])
+  | _ :: _, [], _, _, h, _ => absurd h (by simp [stackLe])
+
+theorem stackLe_reverse : ∀ {σ' σ : List Ty}, stackLe σ' σ →
+    stackLe σ'.reverse σ.reverse
+  | [], [], _ => True.intro
+  | a' :: σ', a :: σ, h => by
+      obtain ⟨h1, h2⟩ := h
+      rw [List.reverse_cons, List.reverse_cons]
+      exact stackLe_append (stackLe_reverse h2) ⟨h1, True.intro⟩
+
+theorem popArgs_cov {ps : List Ty} {σ' σ : List Ty}
+    (h : stackLe σ' σ) (hp : popArgs ps σ = Bool.true) :
+    popArgs ps σ' = Bool.true := by
+  simp only [popArgs] at hp ⊢
+  rw [Bool.and_eq_true] at hp
+  obtain ⟨hlen, hle⟩ := hp
+  have hge : σ.length ≥ ps.length := of_decide_eq_true hlen
+  have hlen' : σ'.length = σ.length := stackLe_length h
+  refine (Bool.and_eq_true _ _) |>.mpr ⟨?_, ?_⟩
+  · simp only [decide_eq_true_eq, ge_iff_le]
+    omega
+  · exact leTy_cov
+        (stackLe_slotsLe (stackLe_reverse (stackLe_take ps.length h))) hle
+
+theorem bareSlot_pure : ∀ (t wt : Ty), bareSlot t = some wt →
+    ∀ a ∈ t, isBareVTy a = Bool.true := by
+  intro t
+  induction t with
+  | nil => intro wt hb a ha; cases ha
+  | cons b rest ih =>
+      intro wt hb a ha
+      simp only [bareSlot] at hb
+      cases hib : isBareVTy b with
+      | false => rw [hib] at hb; simp at hb
+      | true =>
+          rw [hib] at hb
+          cases hrest : bareSlot rest with
+          | none => rw [hrest] at hb; simp at hb
+          | some rs =>
+              rw [hrest] at hb
+              simp only [Option.map_some, Option.some.injEq] at hb
+              subst hb
+              match List.mem_cons.mp ha with
+              | Or.inl he => rw [he]; exact hib
+              | Or.inr hr => exact ih rs hrest a hr
+
+theorem bareSlot_eq_self : ∀ (t : Ty), (∀ a ∈ t, isBareVTy a = Bool.true) →
+    bareSlot t = some t
+  | [], _ => rfl
+  | a :: rest, hp => by
+      have hrest : ∀ x ∈ rest, isBareVTy x = Bool.true :=
+        fun x hx => hp x (List.mem_cons_of_mem _ hx)
+      simp only [bareSlot, hp a (List.mem_cons_self ..),
+        bareSlot_eq_self rest hrest]
+      rfl
+
+theorem bareSlot_cov {t' t : Ty} (h : slotLe t' t) {wt : Ty}
+    (hb : bareSlot t = some wt) :
+    bareSlot t' = some t' ∧ slotLe (t'.map VTy.complN) (wt.map VTy.complN) := by
+  have hpure := bareSlot_pure t wt hb
+  have hpure' : ∀ a' ∈ t', isBareVTy a' = Bool.true := by
+    intro a' ha'
+    obtain ⟨a, ha, haa⟩ := tyLe_cov_atoms h.1 a' ha'
+    exact isBareVTy_of_cover (hpure a ha) haa
+  have hwt : wt = t := by
+    have hs := bareSlot_eq_self t hpure
+    rw [hs] at hb
+    simp only [Option.some.injEq] at hb
+    exact hb.symm
+  subst hwt
+  exact ⟨bareSlot_eq_self t' hpure', complN_map_cov h⟩
+
+theorem unwrapSlot_pure : ∀ (t ps : Ty), unwrapSlot t = some ps →
+    ∀ a ∈ t, ∃ p, a = .complN p := by
+  intro t
+  induction t with
+  | nil => intro ps hu a ha; cases ha
+  | cons b rest ih =>
+      intro ps hu a ha
+      cases b with
+      | complN p =>
+          rw [show unwrapSlot (VTy.complN p :: rest) =
+            Option.map (fun ps => p :: ps) (unwrapSlot rest) from rfl] at hu
+          cases hrest : unwrapSlot rest with
+          | none =>
+              rw [hrest] at hu
+              have hnone : none = some ps := hu
+              cases hnone
+          | some rs =>
+              rw [hrest] at hu
+              simp only [Option.map_some, Option.some.injEq] at hu
+              match List.mem_cons.mp ha with
+              | Or.inl he => exact ⟨p, he⟩
+              | Or.inr hr => exact ih rs hrest a hr
+      | complT | anyValue _ | isValue _ | desc _ | notPresent =>
+          simp only [unwrapSlot] at hu
+          simp at hu
+
+theorem unwrapSlot_eq {t ps : Ty} (hu : unwrapSlot t = some ps) :
+    ps = payloadsOf t := by
+  induction t generalizing ps with
+  | nil =>
+      simp only [unwrapSlot, payloadsOf] at hu ⊢
+      simp only [Option.some.injEq] at hu
+      exact hu.symm
+  | cons b rest ih =>
+      cases b with
+      | complN p =>
+          rw [show unwrapSlot (VTy.complN p :: rest) =
+            Option.map (fun ps => p :: ps) (unwrapSlot rest) from rfl] at hu
+          cases hrest : unwrapSlot rest with
+          | none =>
+              rw [hrest] at hu
+              have hnone : none = some ps := hu
+              cases hnone
+          | some rs =>
+              rw [hrest] at hu
+              simp only [Option.map_some, Option.some.injEq] at hu
+              subst hu
+              simp only [payloadsOf, List.flatMap_cons]
+              congr 1
+              exact ih hrest
+      | complT | anyValue _ | isValue _ | desc _ | notPresent =>
+          simp only [unwrapSlot] at hu
+          simp at hu
+
+theorem unwrapSlot_eq_self : ∀ (t : Ty), (∀ a ∈ t, ∃ p, a = .complN p) →
+    unwrapSlot t = some (payloadsOf t)
+  | [], _ => rfl
+  | a :: rest, hp => by
+      cases a with
+      | complN p =>
+          have hrest := unwrapSlot_eq_self rest
+            (fun x hx => hp x (List.mem_cons_of_mem _ hx))
+          rw [show unwrapSlot (VTy.complN p :: rest) =
+            Option.map (fun ps => p :: ps) (unwrapSlot rest) from rfl, hrest]
+          simp [payloadsOf]
+      | complT | anyValue _ | isValue _ | desc _ | notPresent =>
+          obtain ⟨q, hq⟩ := hp _ (List.mem_cons_self ..)
+          exact VTy.noConfusion hq
+
+theorem unwrapSlot_cov {t' t : Ty} (h : slotLe t' t) {ps : Ty}
+    (hu : unwrapSlot t = some ps) :
+    unwrapSlot t' = some (payloadsOf t') ∧ slotLe (payloadsOf t') ps := by
+  have hpure := unwrapSlot_pure t ps hu
+  have hps : ps = payloadsOf t := unwrapSlot_eq hu
+  subst hps
+  have hpure' : ∀ a' ∈ t', ∃ p, a' = .complN p := by
+    intro a' ha'
+    obtain ⟨a, ha, haa⟩ := tyLe_cov_atoms h.1 a' ha'
+    obtain ⟨q, hq⟩ := hpure a ha
+    rw [hq] at haa
+    cases a' with
+    | complN p' => exact ⟨p', rfl⟩
+    | complT | anyValue _ | isValue _ | desc _ | notPresent =>
+        simp [tmovesV] at haa
+  have heq' : unwrapSlot t' = some (payloadsOf t') :=
+    unwrapSlot_eq_self t' hpure'
+  refine ⟨heq', ?_, ?_⟩
+  · unfold tyLe tmoves
+    simp only [List.all_eq_true, List.any_eq_true]
+    exact payloadsOf_cov (tyLe_cov_atoms h.1)
+  · intro hpsne
+    have hne : t ≠ [] := by
+      intro hc
+      subst hc
+      simp only [payloadsOf, List.flatMap_nil] at hpsne
+      exact hpsne rfl
+    have hne' : t' ≠ [] := h.2 hne
+    exact payloadsOf_ne hne' hpure'
+
 /- ## Proof layer II: the abstraction commutes with machine pushes -/
 
 /-- frameOk at above = none is exactly frameChecks. -/
