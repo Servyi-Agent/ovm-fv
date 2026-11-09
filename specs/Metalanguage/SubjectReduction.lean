@@ -675,6 +675,172 @@ theorem payloadOf_cov {t' t : Ty} (h : slotLe t' t) {ps : Ty}
   · intro _
     exact payloadsOf_ne hne' hpure'
 
+
+/-- Whole-slot lookup covariance: existence + cover + no refined bottom. -/
+theorem envLe_lookup_cov_full {Γ' Γ : TyEnv} (h : envLe Γ' Γ) {x : «String»}
+    {t : Ty} (ht : tyLookup Γ x = some t) :
+    ∃ t', tyLookup Γ' x = some t' ∧ slotLe t' t := by
+  obtain ⟨hex, hcov, hne⟩ := h
+  have h1 : (tyLookup Γ' x).isSome = Bool.true := by
+    rw [hex, ht]; rfl
+  cases hl' : tyLookup Γ' x with
+  | none => rw [hl'] at h1; simp at h1
+  | some t' =>
+      refine ⟨t', rfl, ?_, ?_⟩
+      · obtain ⟨t0, ht0, hle0⟩ := hcov x t' (by rw [hl']; exact Option.mem_some_self t')
+        rw [ht] at ht0
+        have heq0 : t = t0 := by simpa using ht0
+        rw [heq0]
+        exact hle0
+      · intro hne0
+        obtain ⟨t1, ht1, hne1, _⟩ := hne x t (by rw [ht]; exact Option.mem_some_self t) hne0
+        rw [hl'] at ht1
+        have heq1 : t' = t1 := by simpa using ht1
+        rw [heq1]
+        exact hne1
+
+theorem bareOf_pure : ∀ (t bs : Ty), bareOf t = some bs →
+    ∀ a ∈ t, isBareVTy a = Bool.true := by
+  intro t
+  induction t with
+  | nil => intro bs hb a ha; cases ha
+  | cons b rest ih =>
+      intro bs hb a ha
+      simp only [bareOf] at hb
+      cases hib : isBareVTy b with
+      | false => rw [hib] at hb; simp at hb
+      | true =>
+          rw [hib] at hb
+          simp only [Option.map_eq_some_iff] at hb
+          obtain ⟨bs', hbs', heq⟩ := hb
+          match List.mem_cons.mp ha with
+          | Or.inl he => rw [he]; exact hib
+          | Or.inr hr => exact ih bs' hbs' a hr
+
+theorem bareOf_eq_self {t : Ty} (hpure : ∀ a ∈ t, isBareVTy a = Bool.true) :
+    bareOf t = some t := by
+  induction t with
+  | nil => rfl
+  | cons a rest ih =>
+      have hrest : ∀ x ∈ rest, isBareVTy x = Bool.true :=
+        fun x hx => hpure x (List.mem_cons_of_mem _ hx)
+      simp only [bareOf, hpure a (List.mem_cons_self ..), ih hrest]
+      rfl
+
+theorem bareOf_cov {t' t : Ty} (h : slotLe t' t) {bs : Ty}
+    (hb : bareOf t = some bs) : bareOf t' = some t' ∧ slotLe t' bs := by
+  have hpure := bareOf_pure t bs hb
+  have hbs : t = bs := by
+    have := bareOf_eq_self (t := t) hpure
+    rw [this, Option.some.injEq] at hb
+    exact hb
+  subst hbs
+  have hpure' : ∀ a' ∈ t', isBareVTy a' = Bool.true := by
+    intro a' ha'
+    obtain ⟨a, ha, haa⟩ := tyLe_cov_atoms h.1 a' ha'
+    exact isBareVTy_of_cover (hpure a ha) haa
+  refine ⟨bareOf_eq_self hpure', h⟩
+
+theorem complN_map_cov {t' t : Ty} (h : slotLe t' t) :
+    slotLe (t'.map VTy.complN) (t.map VTy.complN) := by
+  refine ⟨?_, ?_⟩
+  · unfold tyLe tmoves
+    simp only [List.all_eq_true, List.any_eq_true, List.mem_map]
+    intro a ha
+    obtain ⟨a', ha', rfl⟩ := ha
+    obtain ⟨b, hb, hbb⟩ := tyLe_cov_atoms h.1 a' ha'
+    exact ⟨.complN b, by simp [hb], by
+      rw [tmovesV_complN]; exact hbb⟩
+  · intro hne hnil
+    exact absurd (List.map_eq_nil_iff.mp hnil) (h.2 (fun hc => hne (by rw [hc]; rfl)))
+
+/-- The three possible isObject verdicts are all below [.anyValue .bool]. -/
+theorem isObject_result_le (r : Ty)
+    (h : r = [.isValue (.boolean Bool.true)]
+      ∨ r = [.isValue (.boolean Bool.false)] ∨ r = [.anyValue .bool]) :
+    tyLe r [.anyValue .bool] := by
+  cases h with
+  | inl h => subst h; unfold tyLe tmoves; simp [tmovesV, tagOf]
+  | inr h =>
+      cases h with
+      | inl h => subst h; unfold tyLe tmoves; simp [tmovesV, tagOf]
+      | inr h => subst h; exact tmoves_refl _
+
+theorem removeTy_nil_cov {t' t T : Ty} (h : slotLe t' t)
+    (hr : removeTy t T = []) : removeTy t' T = [] := by
+  cases hr' : removeTy t' T with
+  | nil => rfl
+  | cons a' rest' =>
+      exfalso
+      have hmem : a' ∈ removeTy t' T := by
+        rw [hr']; exact List.mem_cons_self ..
+      simp only [removeTy, List.mem_filter] at hmem
+      obtain ⟨ha', hpred⟩ := hmem
+      simp only [Bool.not_eq_true'] at hpred
+      obtain ⟨a, ha, haa⟩ := tyLe_cov_atoms h.1 a' ha'
+      cases hp : T.any (fun b => tmovesV a b) with
+      | false =>
+          have hfilta : a ∈ removeTy t T := by
+            simp only [removeTy, List.mem_filter]
+            exact ⟨ha, by simp [hp]⟩
+          rw [hr] at hfilta
+          cases hfilta
+      | true =>
+          obtain ⟨b, hb, hab⟩ := List.any_eq_true.mp hp
+          have hcontra : T.any (fun b => tmovesV a' b) = Bool.true :=
+            List.any_eq_true.mpr ⟨b, hb, tmovesV_trans haa hab⟩
+          rw [hcontra] at hpred
+          exact Bool.noConfusion hpred
+
+theorem slotLe_append {a' a b' b : Ty} (ha : slotLe a' a) (hb : slotLe b' b) :
+    slotLe (a' ++ b') (a ++ b) := by
+  refine ⟨?_, ?_⟩
+  · unfold tyLe tmoves
+    simp only [List.all_eq_true, List.any_eq_true, List.mem_append]
+    intro x hx
+    rcases hx with h | h
+    · obtain ⟨c, hc, hcc⟩ := tyLe_cov_atoms ha.1 x h
+      exact ⟨c, Or.inl hc, hcc⟩
+    · obtain ⟨c, hc, hcc⟩ := tyLe_cov_atoms hb.1 x h
+      exact ⟨c, Or.inr hc, hcc⟩
+  · intro hne
+    intro hnil
+    have hsplit : a' = [] ∧ b' = [] := by
+      cases a' with
+      | nil =>
+          cases b' with
+          | nil => exact ⟨rfl, rfl⟩
+          | cons y ys => exact absurd hnil (by simp)
+      | cons y ys => exact absurd hnil (by simp)
+    obtain ⟨ha1', hb1'⟩ := hsplit
+    by_cases hc : a = []
+    · subst hc
+      have hbe : b ≠ [] := fun hcc => hne (by rw [hcc]; simp)
+      exact absurd hb1' (hb.2 hbe)
+    · exact absurd ha1' (ha.2 hc)
+
+theorem leTy_cov : ∀ {ts' ts ps : List Ty}, slotsLe ts' ts →
+    leTy ts ps = Bool.true → leTy ts' ps = Bool.true := by
+  intro ts' ts ps
+  induction ts' generalizing ts ps with
+  | nil =>
+      intro hs hle
+      cases ts with
+      | nil => cases ps <;> simp [leTy] at hle ⊢ <;> exact hle
+      | cons t ts1 => exact absurd hs (by simp [slotsLe])
+  | cons t' ts1' ih =>
+      intro hs hle
+      cases ts with
+      | nil => exact absurd hs (by simp [slotsLe])
+      | cons t ts1 =>
+          obtain ⟨hslot, hs1⟩ := hs
+          cases ps with
+          | nil => simp [leTy] at hle
+          | cons p ps1 =>
+              simp only [leTy] at hle ⊢
+              obtain ⟨hp1, hp2⟩ := (Bool.and_eq_true _ _) |>.mp hle
+              exact (Bool.and_eq_true _ _) |>.mpr ⟨tmoves_trans hslot.1 hp1, ih hs1 hp2⟩
+
 /- ## Proof layer II: the abstraction commutes with machine pushes -/
 
 /-- frameOk at above = none is exactly frameChecks. -/
