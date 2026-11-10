@@ -1958,6 +1958,58 @@ theorem meetTy_cov {S' S T : Ty}
       rw [hm]
       exact List.mem_singleton.mpr rfl
 
+/- ## Proof layer XII preamble: slot purity.
+
+    kTest covariance needs the coarse slot to be pure-completion:
+    every push in the checker is pure (complTy/completionOf push
+    pure-completion slots; all other pushes are pure-bare), and
+    purity is inherited downward under slotLe. -/
+
+def slotCompl (t : Ty) : Prop :=
+  ∀ a ∈ t, (∃ p, a = .complN p) ∨ a = .complT
+
+theorem slotCompl_of_cover {t' t : Ty} (h : slotLe t' t)
+    (ht : slotCompl t) : slotCompl t' := by
+  intro a' ha'
+  obtain ⟨a, ha, haa⟩ := tyLe_cov_atoms h.1 a' ha'
+  obtain ⟨p, hp⟩ | ht2 := ht a ha
+  · cases a' with
+    | complN p' => exact Or.inl ⟨p', rfl⟩
+    | complT => simp [tmovesV, hp] at haa
+    | anyValue _ | isValue _ | desc _ | notPresent => simp [tmovesV, hp] at haa
+  · cases a' with
+    | complT => exact Or.inr rfl
+    | complN p => exact Or.inl ⟨p, rfl⟩
+    | anyValue _ | isValue _ | desc _ | notPresent => simp [tmovesV, ht2] at haa
+
+theorem complTy_compl : ∀ (cs : List Pending), slotCompl (complTy cs)
+  | [] => by
+      intro a ha
+      simp only [complTy, List.filterMap_nil, List.flatten_nil,
+        List.append_nil, complCanThrow, List.any_nil, Bool.or_false,
+        if_false] at ha
+      cases ha
+  | c :: rest => by
+      intro a ha
+      have ih := complTy_compl rest
+      cases c with
+      | normal t =>
+          simp only [complTy, List.filterMap_cons, List.flatten_cons] at ha
+          rcases List.mem_append.mp ha with h1 | h2
+          · rcases List.mem_append.mp h1 with h3 | h4
+            · simp only [List.mem_map] at h3
+              obtain ⟨p, -, hpa⟩ := h3
+              exact Or.inl ⟨p, hpa.symm⟩
+            · exact ih a (List.mem_append.mpr (Or.inl h4))
+          · exact ih a (List.mem_append.mpr (Or.inr h2))
+      | throw =>
+          simp only [complTy, List.filterMap_cons, List.flatten_cons,
+            complCanThrow, List.any_cons, Bool.true_or, if_true] at ha
+          rcases List.mem_append.mp ha with h1 | h2
+          · exact ih a (List.mem_append.mpr (Or.inl h1))
+          · simp only [List.mem_singleton] at h2
+            exact Or.inr h2
+
 theorem removeTy_cov {t' t T : Ty}
     (hcov : ∀ a' ∈ t', ∃ a ∈ t, tmovesV a' a = Bool.true) :
     ∀ x' ∈ removeTy t' T, ∃ x ∈ removeTy t T, tmovesV x' x = Bool.true := by
