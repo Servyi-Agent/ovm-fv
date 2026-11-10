@@ -1814,6 +1814,150 @@ theorem tyLe_of_atom_cov {t' t : Ty}
   exact h
 
 
+/-- The three stubborn meetAtom combos, as standalone lemmas in
+    ORIGINAL form (for exact-wiring into the grid). -/
+
+theorem meetAtom_cov_aad {c1 c2 : Ctor} {fs : List Field} {m' : VTy}
+    (hcov : tmovesV (VTy.desc fs) (VTy.anyValue c1) = Bool.true)
+    (hm' : meetAtom (VTy.desc fs) (VTy.anyValue c2) = some m') :
+    ∃ m, meetAtom (VTy.anyValue c1) (VTy.anyValue c2) = some m
+      ∧ tmovesV m' m = Bool.true := by
+  cases c1 with
+  | desc =>
+      cases c2 with
+      | desc =>
+          simp only [meetAtom, Option.some.injEq] at hm'
+          subst hm'
+          exact ⟨.anyValue Ctor.desc, rfl, by simp [tmovesV]⟩
+      | undef | null | bool | num | str | obj | list =>
+          exact absurd hm' (by simp [meetAtom])
+  | undef | null | bool | num | str | obj | list =>
+      exact absurd hcov (by simp [tmovesV])
+
+theorem meetAtom_cov_aai {c1 c2 : Ctor} {v : JSValue} {m' : VTy}
+    (hcov : tmovesV (VTy.isValue v) (VTy.anyValue c1) = Bool.true)
+    (hm' : meetAtom (VTy.isValue v) (VTy.anyValue c2) = some m') :
+    ∃ m, meetAtom (VTy.anyValue c1) (VTy.anyValue c2) = some m
+      ∧ tmovesV m' m = Bool.true := by
+  simp only [meetAtom, tmovesV] at hm' hcov ⊢
+  split at hm'
+  · next hcond =>
+      have h1 : tagOf v = c1 := of_decide_eq_true hcov
+      simp only [Option.some.injEq] at hm'
+      subst hm'
+      refine ⟨VTy.anyValue c1, ?_, ?_⟩
+      · rw [if_pos (show c1 = c2 from h1.symm.trans hcond)]
+      · exact decide_eq_true h1
+  · exact absurd hm' (by simp)
+
+theorem meetAtom_cov_dad {fs2 : List Field} {c : Ctor} {fs : List Field} {m' : VTy}
+    (hcov : tmovesV (VTy.desc fs) (VTy.anyValue c) = Bool.true)
+    (hm' : meetAtom (VTy.desc fs) (VTy.desc fs2) = some m') :
+    ∃ m, meetAtom (VTy.anyValue c) (VTy.desc fs2) = some m
+      ∧ tmovesV m' m = Bool.true := by
+  simp only [meetAtom, tmovesV] at hm' hcov ⊢
+  split at hm'
+  · next hcond =>
+      simp only [Option.some.injEq] at hm'
+      subst hm'
+      cases c <;> simp_all [meetAtom, tmovesV, tmovesV_refl]
+  · exact absurd hm' (by simp)
+
+theorem meetAtom_cov_iii {v v' w : JSValue} {m' : VTy}
+    (hcov : tmovesV (VTy.isValue v') (VTy.isValue v) = Bool.true)
+    (hm' : meetAtom (VTy.isValue v') (VTy.isValue w) = some m') :
+    ∃ m, meetAtom (VTy.isValue v) (VTy.isValue w) = some m
+      ∧ tmovesV m' m = Bool.true := by
+  simp only [meetAtom, tmovesV, beq_iff_eq, decide_eq_true_eq,
+    Option.some.injEq] at hm' hcov ⊢
+  split at hm'
+  · next hcond =>
+      simp only [Option.some.injEq] at hm'
+      subst hm'
+      refine ⟨VTy.isValue v, ?_, ?_⟩
+      · rw [if_pos (show (v == w) = Bool.true by
+          rw [← hcov]
+          exact hcond)]
+      · simp [tmovesV, hcov]
+  · exact absurd hm' (by simp)
+
+theorem meetAtom_cov_iai {c : Ctor} {v w : JSValue} {m' : VTy}
+    (hcov : tmovesV (VTy.isValue v) (VTy.anyValue c) = Bool.true)
+    (hm' : meetAtom (VTy.isValue v) (VTy.isValue w) = some m') :
+    ∃ m, meetAtom (VTy.anyValue c) (VTy.isValue w) = some m
+      ∧ tmovesV m' m = Bool.true := by
+  simp only [meetAtom, tmovesV] at hm' hcov ⊢
+  split at hm'
+  · next hcond =>
+      have h1 : tagOf v = c := of_decide_eq_true hcov
+      have h2 : v = w := by simpa [beq_iff_eq] using hcond
+      simp only [Option.some.injEq] at hm'
+      subst hm'
+      refine ⟨VTy.isValue w, ?_, ?_⟩
+      · rw [if_pos (show (tagOf w = c) from h2 ▸ h1)]
+      · rw [h2]
+        exact tmovesV_refl _
+  · exact absurd hm' (by simp)
+
+set_option maxHeartbeats 4000000 in
+theorem meetAtom_cov {a' a b : VTy} (hcov : tmovesV a' a = Bool.true) {m' : VTy}
+    (hm' : meetAtom a' b = some m') :
+    ∃ m, meetAtom a b = some m ∧ tmovesV m' m = Bool.true := by
+  cases b with
+  | complN q | complT =>
+      simp only [meetAtom] at hm'
+      exact absurd hm' (by simp)
+  | notPresent =>
+      cases a <;> cases a' <;>
+        first
+        | (simp only [meetAtom, tmovesV, beq_iff_eq, decide_eq_true_eq,
+            Option.some.injEq] at hm' hcov ⊢
+           simp_all [tmovesV_refl])
+  | anyValue c2 =>
+      cases a <;> cases a' <;>
+        first
+        | exact meetAtom_cov_aai hcov hm'
+        | exact meetAtom_cov_aad hcov hm'
+        | (simp only [meetAtom, tmovesV, beq_iff_eq, decide_eq_true_eq,
+            Option.some.injEq] at hm' hcov ⊢
+           simp_all [tmovesV_refl])
+  | isValue w =>
+      cases a <;> cases a' <;>
+        first
+        | exact meetAtom_cov_iii hcov hm'
+        | exact meetAtom_cov_iai hcov hm'
+        | (simp only [meetAtom, tmovesV, beq_iff_eq, decide_eq_true_eq,
+            Option.some.injEq] at hm' hcov ⊢
+           simp_all [tmovesV_refl])
+  | desc fs2 =>
+      cases a <;> cases a' <;>
+        first
+        | exact meetAtom_cov_dad hcov hm'
+        | (simp only [meetAtom, tmovesV, beq_iff_eq, decide_eq_true_eq,
+            Option.some.injEq] at hm' hcov ⊢
+           simp_all [tmovesV_refl])
+
+theorem meetTy_cov {S' S T : Ty}
+    (hcov : ∀ a' ∈ S', ∃ a ∈ S, tmovesV a' a = Bool.true) :
+    ∀ m' ∈ meetTy S' T, ∃ m ∈ meetTy S T, tmovesV m' m = Bool.true := by
+  intro m' hm'
+  simp only [meetTy, List.mem_flatMap] at hm' ⊢
+  obtain ⟨a', ha', b, hb, hmem⟩ := hm'
+  cases hmeet : meetAtom a' b with
+  | none =>
+      exfalso
+      rw [hmeet] at hmem
+      cases hmem
+  | some w =>
+      rw [hmeet] at hmem
+      have hwm : m' = w := by simpa using hmem
+      subst hwm
+      obtain ⟨a, ha, haa⟩ := hcov _ ha'
+      obtain ⟨m, hm, hcover⟩ := meetAtom_cov haa hmeet
+      refine ⟨m, ⟨a, ha, ⟨b, hb, ?_⟩⟩, hcover⟩
+      rw [hm]
+      exact List.mem_singleton.mpr rfl
+
 theorem removeTy_cov {t' t T : Ty}
     (hcov : ∀ a' ∈ t', ∃ a ∈ t, tmovesV a' a = Bool.true) :
     ∀ x' ∈ removeTy t' T, ∃ x ∈ removeTy t T, tmovesV x' x = Bool.true := by
