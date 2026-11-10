@@ -2824,13 +2824,13 @@ theorem checkSeq_kTest_normal {sigs : SigTable} {r : Ty} {W : World} {p : VTy}
     {σ' : List Ty} {rest : List Instr} (hσ : W.σ = [VTy.complN p] :: σ') :
     checkSeq sigs r W (.kTest :: rest)
       = checkSeq sigs r { W with σ := [.isValue (.boolean Bool.false)] :: [VTy.complN p] :: σ' } rest := by
-  simp only [checkSeq, step1, hσ, complNormals, complHasThrow, List.filterMap_cons, List.filterMap_nil, List.any_cons, List.any_nil, Bool.true_or, List.isEmpty_cons, ite_true, if_true, Bool.false_or, Bool.true_and, List.cons_append, List.nil_append, forkTC, List.foldl, mergeTC_noFlows]
+  simp only [checkSeq, step1, hσ, complOnly, complNormals, complHasThrow, List.filterMap_cons, List.filterMap_nil, List.any_cons, List.any_nil, Bool.true_or, List.isEmpty_cons, ite_true, if_true, Bool.false_or, Bool.true_and, List.cons_append, List.nil_append, forkTC, List.foldl, mergeTC_noFlows]
 
 theorem checkSeq_kTest_throw {sigs : SigTable} {r : Ty} {W : World}
     {σ' : List Ty} {rest : List Instr} (hσ : W.σ = [VTy.complT] :: σ') :
     checkSeq sigs r W (.kTest :: rest)
       = checkSeq sigs r { W with σ := [.isValue (.boolean Bool.true)] :: [VTy.complT] :: σ' } rest := by
-  simp only [checkSeq, step1, hσ, complNormals, complHasThrow, List.filterMap_cons, List.filterMap_nil, List.any_cons, List.any_nil, Bool.true_or, List.isEmpty_cons, ite_true, if_true, Bool.false_or, Bool.true_and, List.cons_append, List.nil_append, forkTC, List.foldl, mergeTC_noFlows]
+  simp only [checkSeq, step1, hσ, complOnly, complNormals, complHasThrow, List.filterMap_cons, List.filterMap_nil, List.any_cons, List.any_nil, Bool.true_or, List.isEmpty_cons, ite_true, if_true, Bool.false_or, Bool.true_and, List.cons_append, List.nil_append, forkTC, List.foldl, mergeTC_noFlows]
 
 theorem checkSeq_kUnwrap {sigs : SigTable} {r : Ty} {W : World} {p : VTy}
     {σ' : List Ty} {rest : List Instr} (hσ : W.σ = [VTy.complN p] :: σ') :
@@ -2851,7 +2851,7 @@ theorem checkSeq_pThrowC {sigs : SigTable} {r : Ty} {W : World} {v : JSValue}
     {σ' : List Ty} {rest : List Instr} (hσ : W.σ = [typeOfV v] :: σ') :
     checkSeq sigs r W (.kPrim1 .pThrowC :: rest)
       = checkSeq sigs r { W with σ := [VTy.complT] :: σ' } rest := by
-  simp only [checkSeq, step1, hσ, complNormals, complHasThrow, List.filterMap_cons, List.filterMap_nil, List.any_cons, List.any_nil, Bool.true_or, List.isEmpty_cons, ite_true, if_true, Bool.false_or, Bool.true_and, List.cons_append, List.nil_append, forkTC, List.foldl, mergeTC_noFlows]
+  simp only [checkSeq, step1, hσ, complOnly, complNormals, complHasThrow, List.filterMap_cons, List.filterMap_nil, List.any_cons, List.any_nil, Bool.true_or, List.isEmpty_cons, ite_true, if_true, Bool.false_or, Bool.true_and, List.cons_append, List.nil_append, forkTC, List.foldl, mergeTC_noFlows]
 
 /- ## Proof layer VII: the completion-protocol sr arms
 

@@ -599,6 +599,15 @@ theorem sfuel_testvar_lt (e : Expr) (x : «String») (p : Prim)
   simp only [sfuel, ifuel, h]
   omega
 
+/-- A completion-only slot (no bare atoms). kTest accepts only
+    these, mirroring the machine's loud fall on bare values. -/
+def complOnly : Ty → Bool
+  | [] => Bool.true
+  | a :: rest =>
+      (match a with
+       | .complN _ | .complT => Bool.true
+       | _ => Bool.false) && complOnly rest
+
 /-- Split a slot type by completion kind: the normal side (complN
     atoms, payloads kept) and the throw side. -/
 def complNormals (t : Ty) : Ty :=
@@ -663,21 +672,26 @@ def step1 (sigs : SigTable) (i : Instr) (w : World) : Option Worlds :=
       | _ :: σ' => some [{ w with σ := σ' }]
       | [] => none
   | .kTest =>
-      -- peek the top slot: split by completion kind, push the verdict
+      -- peek the top slot: split by completion kind, push the
+      -- verdict. The machine is LOUD unless the top is a
+      -- completion, so acceptance requires a completion-only slot -
+      -- a possibly-bare slot is a loud run and rejects here.
       match w.σ with
       | t :: σ' =>
-          let normals := complNormals t
-          let normalSide : Worlds :=
-            match normals with
-            | [] => []
-            | _ => [{ w with σ := [.isValue (.boolean Bool.false)] :: normals :: σ' }]
-          let throwSide : Worlds :=
-            match complHasThrow t with
-            | Bool.true => [{ w with σ := [.isValue (.boolean Bool.true)] :: [VTy.complT] :: σ' }]
-            | Bool.false => []
+        if complOnly t then
+            let normals := complNormals t
+            let normalSide : Worlds :=
+              match normals with
+              | [] => []
+              | _ => [{ w with σ := [.isValue (.boolean Bool.false)] :: normals :: σ' }]
+            let throwSide : Worlds :=
+              match complHasThrow t with
+              | Bool.true => [{ w with σ := [.isValue (.boolean Bool.true)] :: [VTy.complT] :: σ' }]
+              | Bool.false => []
           match normalSide ++ throwSide with
           | [] => none
           | ws => some ws
+        else none
       | [] => none
   | .kUnwrap =>
       match w.σ with
