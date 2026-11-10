@@ -678,20 +678,16 @@ def step1 (sigs : SigTable) (i : Instr) (w : World) : Option Worlds :=
       -- a possibly-bare slot is a loud run and rejects here.
       match w.σ with
       | t :: σ' =>
-        if complOnly t then
-            let normals := complNormals t
-            let normalSide : Worlds :=
-              match normals with
-              | [] => []
-              | _ => [{ w with σ := [.isValue (.boolean Bool.false)] :: normals :: σ' }]
-            let throwSide : Worlds :=
-              match complHasThrow t with
-              | Bool.true => [{ w with σ := [.isValue (.boolean Bool.true)] :: [VTy.complT] :: σ' }]
-              | Bool.false => []
-          match normalSide ++ throwSide with
-          | [] => none
-          | ws => some ws
-        else none
+          if complOnly t then
+            match (match complNormals t with
+                   | [] => []
+                   | _ => [{ w with σ := [.isValue (.boolean Bool.false)] :: complNormals t :: σ' }])
+                ++ (match complHasThrow t with
+                    | Bool.true => [{ w with σ := [.isValue (.boolean Bool.true)] :: [VTy.complT] :: σ' }]
+                    | Bool.false => []) with
+            | [] => none
+            | ws => some ws
+          else none
       | [] => none
   | .kUnwrap =>
       match w.σ with
