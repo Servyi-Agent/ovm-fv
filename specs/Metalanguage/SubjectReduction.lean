@@ -2010,6 +2010,17 @@ theorem complTy_compl : ∀ (cs : List Pending), slotCompl (complTy cs)
           · simp only [List.mem_singleton] at h2
             exact Or.inr h2
 
+theorem complOnly_of_compl {t : Ty} (ht : slotCompl t) :
+    complOnly t = Bool.true := by
+  induction t with
+  | nil => rfl
+  | cons a rest ih =>
+      simp only [complOnly, Bool.and_eq_true]
+      refine ⟨?_, ih (fun b hb => ht b (List.mem_cons_of_mem _ hb))⟩
+      obtain ⟨p, hp⟩ | ht2 := ht a (List.mem_cons_self ..)
+      · subst hp; rfl
+      · subst ht2; rfl
+
 theorem complOnly_compl {t : Ty} (h : complOnly t = Bool.true) :
     slotCompl t := by
   induction t with
@@ -2411,6 +2422,488 @@ theorem markThrow_exits {sigs : SigTable} {ex : Expr} {res : TCResult} {fb : Flo
     of the checker — type_safety's frame demand (terminal) is
     of the checker — type_safety's frame demand (terminal) is
     transferable across instruction boundaries only because of it. -/
+theorem complNormals_empty_cov {t' t : Ty}
+    (hcov : ∀ a' ∈ t', ∃ a ∈ t, tmovesV a' a = Bool.true)
+    (hnorm : complNormals t = []) : complNormals t' = [] := by
+  cases hc : complNormals t' with
+  | nil => rfl
+  | cons x' xs =>
+      exfalso
+      obtain ⟨x, hx, -⟩ := complNormals_cov hcov x' (by rw [hc]; exact List.mem_cons_self ..)
+      rw [hnorm] at hx
+      cases hx
+
+theorem step1_cov (sigs : SigTable) (i : Instr) :
+    ∀ (w' w : World), worldLe w' w → ∀ ws, step1 sigs i w = some ws →
+      ∃ ws', step1 sigs i w' = some ws' ∧
+        ∀ u' ∈ ws', ∃ u ∈ ws, worldLe u' u := by
+  intro w' w hwl ws hstep
+  obtain ⟨Γ', σ'⟩ := w'
+  obtain ⟨Γ, σ⟩ := w
+  obtain ⟨hΓ, hσ⟩ := hwl
+  cases i with
+  | kEval e | kIte t e | kRet | kAssert | kTestVar x p
+  | kRepeatWhile c b | kRepeatTest c b | kForStart x b | kForBody x l b =>
+      simp only [step1, Option.some.injEq] at hstep
+      subst hstep
+      refine ⟨(⟨Γ', σ'⟩ : World) :: [], rfl, ?_⟩
+      intro u' hu'
+      simp only [List.mem_singleton] at hu'
+      subst hu'
+      exact ⟨⟨Γ, σ⟩, List.mem_singleton.mpr rfl, hΓ, hσ⟩
+  | kPop =>
+      cases σ with
+      | nil => exact absurd hstep (by simp [step1])
+      | cons t σr =>
+          cases σ' with
+          | nil => exact absurd hσ (by simp [stackLe])
+          | cons t' σr' =>
+              simp only [step1, Option.some.injEq] at hstep
+              subst hstep
+              refine ⟨(⟨Γ', σr'⟩ : World) :: [], rfl, ?_⟩
+              intro u' hu'
+              simp only [List.mem_singleton] at hu'
+              subst hu'
+              exact ⟨⟨Γ, σr⟩, List.mem_singleton.mpr rfl, hΓ, hσ.2⟩
+  | kSet x =>
+      cases σ with
+      | nil => exact absurd hstep (by simp [step1])
+      | cons t σr =>
+          cases σ' with
+          | nil => exact absurd hσ (by simp [stackLe])
+          | cons t' σr' =>
+              obtain ⟨hslot, hrest⟩ := hσ
+              simp only [step1, Option.some.injEq] at hstep
+              subst hstep
+              refine ⟨(⟨(x, t') :: Γ', σr'⟩ : World) :: [], rfl, ?_⟩
+              intro u' hu'
+              simp only [List.mem_singleton] at hu'
+              subst hu'
+              exact ⟨⟨(x, t) :: Γ, σr⟩, List.mem_singleton.mpr rfl,
+                envLe_cons hΓ hslot, hrest⟩
+  | kMkList n =>
+      simp only [step1] at hstep
+      cases hpop : popTyN n anyT σ with
+      | none => simp only [hpop] at hstep; exact absurd hstep (by simp)
+      | some mid =>
+          simp only [hpop, Option.some.injEq] at hstep
+          subst hstep
+          obtain ⟨mid', hpop', hle'⟩ := popTyN_cov n anyT hσ hpop
+          refine ⟨(⟨Γ', [.anyValue .list] :: mid'⟩ : World) :: [], ?_, ?_⟩
+          · simp only [step1, hpop']
+          · intro u' hu2
+            simp only [List.mem_singleton] at hu2
+            subst hu2
+            exact ⟨⟨Γ, [.anyValue .list] :: mid⟩, List.mem_singleton.mpr rfl,
+              hΓ, ⟨slotLe_refl _, hle'⟩⟩
+  | kNewSlot sn =>
+      simp only [step1] at hstep
+      cases hsn : slotOfName sn with
+      | none => simp only [hsn] at hstep; exact absurd hstep (by simp)
+      | some sl =>
+          simp only [hsn] at hstep
+          cases σ with
+          | nil => exact absurd hstep (by simp [popTy])
+          | cons t σr =>
+              cases σ' with
+              | nil => exact absurd hσ (by simp [stackLe])
+              | cons t' σr' =>
+                  obtain ⟨hslot, hrest⟩ := hσ
+                  cases hpop : popTy anyT (t :: σr) with
+                  | none => simp only [hpop] at hstep; exact absurd hstep (by simp)
+                  | some mid =>
+                      have hmid : mid = σr := by
+                        simp only [popTy] at hpop
+                        cases hif : tmoves t anyT with
+                        | false => rw [hif] at hpop; simp at hpop
+                        | true =>
+                            rw [hif] at hpop
+                            simp only [Option.some.injEq, reduceIte] at hpop
+                            exact hpop.symm
+                      subst hmid
+                      have hpop' : popTy anyT (t' :: σr') = some σr' :=
+                        popTy_cov hslot hrest hpop
+                      simp only [hpop, Option.some.injEq] at hstep
+                      subst hstep
+                      refine ⟨(⟨Γ', [.anyValue .obj] :: σr'⟩ : World) :: [], ?_, ?_⟩
+                      · simp only [step1, hsn, hpop']
+                      · intro u' hu2
+                        simp only [List.mem_singleton] at hu2
+                        subst hu2
+                        exact ⟨⟨Γ, [.anyValue .obj] :: mid⟩,
+                          List.mem_singleton.mpr rfl, hΓ,
+                          ⟨slotLe_refl _, hrest⟩⟩
+  | kUnwrap =>
+      cases σ with
+      | nil => exact absurd hstep (by simp [step1])
+      | cons t σr =>
+          cases σ' with
+          | nil => exact absurd hσ (by simp [stackLe])
+          | cons t' σr' =>
+              obtain ⟨hslot, hrest⟩ := hσ
+              simp only [step1] at hstep
+              cases hu : unwrapSlot t with
+              | none => simp only [hu] at hstep; exact absurd hstep (by simp)
+              | some ps =>
+                  simp only [hu, Option.map_some, Option.some.injEq] at hstep
+                  subst hstep
+                  obtain ⟨hu', hslot2⟩ := unwrapSlot_cov hslot hu
+                  simp only [step1, hu', Option.map_some]
+                  refine ⟨(⟨Γ', payloadsOf t' :: σr'⟩ : World) :: [], rfl, ?_⟩
+                  intro u' hu2
+                  simp only [List.mem_singleton] at hu2
+                  subst hu2
+                  exact ⟨⟨Γ, ps :: σr⟩, List.mem_singleton.mpr rfl, hΓ,
+                    ⟨hslot2, hrest⟩⟩
+  | kPrim1 p =>
+      cases hpt : primTys p with
+      | none =>
+          cases p with
+          | pWrapC =>
+              cases σ with
+              | nil => exact absurd hstep (by simp [step1])
+              | cons t σr =>
+                  cases σ' with
+                  | nil => exact absurd hσ (by simp [stackLe])
+                  | cons t' σr' =>
+                      obtain ⟨hslot, hrest⟩ := hσ
+                      simp only [step1] at hstep
+                      cases hb : bareSlot t with
+                      | none => simp only [hb] at hstep
+                                exact absurd hstep (by simp)
+                      | some wt =>
+                          simp only [hb, Option.map_some,
+                            Option.some.injEq] at hstep
+                          subst hstep
+                          obtain ⟨hb', hslot2⟩ := bareSlot_cov hslot hb
+                          simp only [step1, hb', Option.map_some]
+                          refine ⟨(⟨Γ', t'.map VTy.complN :: σr'⟩ : World) :: [], rfl, ?_⟩
+                          intro u' hu2
+                          simp only [List.mem_singleton] at hu2
+                          subst hu2
+                          exact ⟨⟨Γ, wt.map VTy.complN :: σr⟩,
+                            List.mem_singleton.mpr rfl, hΓ,
+                            ⟨hslot2, hrest⟩⟩
+          | pThrowC =>
+              cases σ with
+              | nil => exact absurd hstep (by simp [step1])
+              | cons t σr =>
+                  cases σ' with
+                  | nil => exact absurd hσ (by simp [stackLe])
+                  | cons t' σr' =>
+                      obtain ⟨-, hrest⟩ := hσ
+                      simp only [step1, Option.some.injEq] at hstep
+                      subst hstep
+                      refine ⟨(⟨Γ', [VTy.complT] :: σr'⟩ : World) :: [], rfl, ?_⟩
+                      intro u' hu2
+                      simp only [List.mem_singleton] at hu2
+                      subst hu2
+                      exact ⟨⟨Γ, [VTy.complT] :: σr⟩,
+                        List.mem_singleton.mpr rfl, hΓ,
+                        ⟨slotLe_refl _, hrest⟩⟩
+          | pIsObj | pIsNotObj | pIsNotU | pHasCall | pHasCtor | pIsU
+          | pIsTrue | pIsFalse | pNullOrUnd | pIsNull
+          | pIsType _ | pHasField _ | pIsStr _ | pDescField _
+          | pUnwrapC | pIsNormalC | pIsThrowC | pPred _ _ =>
+              simp only [step1, hpt, Option.some.injEq] at hstep
+              subst hstep
+              refine ⟨(⟨Γ', σ'⟩ : World) :: [], by
+                simp only [step1, hpt], ?_⟩
+              intro u' hu2
+              simp only [List.mem_singleton] at hu2
+              subst hu2
+              exact ⟨⟨Γ, σ⟩, List.mem_singleton.mpr rfl, hΓ, hσ⟩
+      | some tt =>
+          obtain ⟨tin, tout⟩ := tt
+          cases p with
+          | pWrapC | pThrowC => exact absurd hpt (by simp [primTys])
+          | pIsObj | pIsNotObj | pIsNotU | pHasCall | pHasCtor | pIsU
+          | pIsTrue | pIsFalse | pNullOrUnd | pIsNull
+          | pIsType _ | pHasField _ | pIsStr _ | pDescField _
+          | pUnwrapC | pIsNormalC | pIsThrowC | pPred _ _ =>
+          cases σ with
+          | nil => simp only [step1, hpt] at hstep
+                   exact absurd hstep (by simp [popTy])
+          | cons t σr =>
+              cases σ' with
+              | nil => exact absurd hσ (by simp [stackLe])
+              | cons t' σr' =>
+                  obtain ⟨hslot, hrest⟩ := hσ
+                  simp only [step1, hpt] at hstep
+                  cases hpop : popTy tin (t :: σr) with
+                  | none => simp only [hpop] at hstep
+                            exact absurd hstep (by simp)
+                  | some mid =>
+                      have hmid : mid = σr := by
+                        simp only [popTy] at hpop
+                        cases hif : tmoves t tin with
+                        | false => rw [hif] at hpop; simp at hpop
+                        | true =>
+                            rw [hif] at hpop
+                            simp only [Option.some.injEq, reduceIte] at hpop
+                            exact hpop.symm
+                      subst hmid
+                      have hpop' : popTy tin (t' :: σr') = some σr' :=
+                        popTy_cov hslot hrest hpop
+                      simp only [hpop, Option.some.injEq] at hstep
+                      subst hstep
+                      refine ⟨(⟨Γ', tout :: σr'⟩ : World) :: [], ?_, ?_⟩
+                      · simp only [step1, hpt, hpop']
+                      · intro u' hu2
+                        simp only [List.mem_singleton] at hu2
+                        subst hu2
+                        exact ⟨⟨Γ, tout :: mid⟩,
+                          List.mem_singleton.mpr rfl, hΓ,
+                          ⟨slotLe_refl _, hrest⟩⟩
+  | kCall f n =>
+      simp only [step1] at hstep
+      cases hsig : sigFind sigs f with
+      | none => simp only [hsig] at hstep; exact absurd hstep (by simp)
+      | some s =>
+          obtain ⟨ps, retj⟩ := s
+          simp only [hsig] at hstep
+          cases har : (ps.length == n) || (ps.length == n + 1) with
+          | false => simp only [har] at hstep; exact absurd hstep (by simp)
+          | true =>
+              simp only [har] at hstep
+              cases hpa : popArgs (if ps.length == n then ps else ps.take n) σ with
+              | false => simp only [hpa] at hstep
+                         exact absurd hstep (by simp)
+              | true =>
+                  simp only [hpa, Option.some.injEq] at hstep
+                  subst hstep
+                  have hpa' : popArgs (if ps.length == n then ps else ps.take n) σ'
+                      = Bool.true := popArgs_cov hσ hpa
+                  refine ⟨(⟨Γ', complTy retj :: σ'.drop n⟩ : World) :: [], ?_, ?_⟩
+                  · simp only [step1, hsig, har, hpa']
+                  · intro u' hu2
+                    simp only [List.mem_singleton] at hu2
+                    subst hu2
+                    exact ⟨⟨Γ, complTy retj :: σ.drop n⟩,
+                      List.mem_singleton.mpr rfl, hΓ,
+                      ⟨slotLe_refl _, stackLe_drop n hσ⟩⟩
+  | kIMeth nm n =>
+      simp only [step1] at hstep
+      cases har : mopArity nm == some n with
+      | false => simp only [har] at hstep; exact absurd hstep (by simp)
+      | true =>
+          simp only [har] at hstep
+          cases hpop : popTyN n anyT σ with
+          | none => simp only [hpop] at hstep
+                    exact absurd hstep (by simp)
+          | some mid =>
+              simp only [hpop] at hstep
+              cases mid with
+              | nil => exact absurd hstep (by simp [popA, popTy])
+              | cons m mr =>
+                  cases hpop2 : popA (VTy.anyValue Ctor.obj) (m :: mr) with
+                  | none => simp only [hpop2] at hstep
+                            exact absurd hstep (by simp)
+                  | some m2 =>
+                      have hm2 : m2 = mr := by
+                        simp only [popA, popTy] at hpop2
+                        cases hif : tmoves m [VTy.anyValue Ctor.obj] with
+                        | false => rw [hif] at hpop2; simp at hpop2
+                        | true =>
+                            rw [hif] at hpop2
+                            simp only [Option.some.injEq, reduceIte] at hpop2
+                            exact hpop2.symm
+                      subst hm2
+                      simp only [hpop2, Option.some.injEq] at hstep
+                      subst hstep
+                      obtain ⟨mid', hpop', hle'⟩ := popTyN_cov n anyT hσ hpop
+                      cases mid' with
+                      | nil => exact absurd hle' (by simp [stackLe])
+                      | cons m' mr' =>
+                          obtain ⟨hslotm, hrestm⟩ := hle'
+                          have hpa' : popA (VTy.anyValue Ctor.obj) (m' :: mr')
+                              = some mr' := popTy_cov hslotm hrestm hpop2
+                          refine ⟨(⟨Γ', complTy (mopResult nm) :: mr'⟩ : World) :: [], ?_, ?_⟩
+                          · simp only [step1, har, hpop']
+                            rw [hpa']
+                          · intro u' hu2
+                            simp only [List.mem_singleton] at hu2
+                            subst hu2
+                            exact ⟨⟨Γ, complTy (mopResult nm) :: m2⟩,
+                              List.mem_singleton.mpr rfl, hΓ,
+                              ⟨slotLe_refl _, hrestm⟩⟩
+  | kTest =>
+      cases σ with
+      | nil => exact absurd hstep (by simp [step1])
+      | cons t σr =>
+          cases σ' with
+          | nil => exact absurd hσ (by simp [stackLe])
+          | cons t' σr' =>
+              obtain ⟨hslot, hrest⟩ := hσ
+              simp only [step1] at hstep
+              cases hco : complOnly t with
+              | false => simp only [hco, reduceIte] at hstep
+                         exact absurd hstep (by simp)
+              | true =>
+                  simp only [hco, reduceIte] at hstep
+                  have hpure : slotCompl t := complOnly_compl hco
+                  have hpure' : slotCompl t' := slotCompl_of_cover hslot hpure
+                  have hcov : ∀ a' ∈ t', ∃ a ∈ t, tmovesV a' a = Bool.true :=
+                    tyLe_cov_atoms hslot.1
+                  have hne : t ≠ [] := by
+                    intro hc
+                    subst hc
+                    simp only [complNormals, List.filterMap_nil,
+                      complHasThrow, List.any_nil, Bool.or_false,
+                      List.nil_append, reduceIte] at hstep
+                    exact absurd hstep (by simp)
+                  have hne' : t' ≠ [] := hslot.2 hne
+                  cases hnorm : complNormals t with
+                  | nil =>
+                      have hnorm' : complNormals t' = [] :=
+                        complNormals_empty_cov hcov hnorm
+                      cases hthrow : complHasThrow t with
+                      | false =>
+                          simp only [hnorm, hthrow, List.append_nil,
+                            reduceIte] at hstep
+                          exact absurd hstep (by simp)
+                      | true =>
+                          simp only [hnorm, hthrow, List.nil_append, reduceIte,
+                            Option.some.injEq] at hstep
+                          subst hstep
+                          cases hthrow' : complHasThrow t' with
+                          | false =>
+                              rcases slotCompl_side hpure' hne' with H | H
+                              · rw [hnorm'] at H; exact absurd rfl H
+                              · rw [hthrow'] at H; exact Bool.noConfusion H
+                          | true =>
+                              have hco' : complOnly t' = Bool.true :=
+                                complOnly_of_compl hpure'
+                              simp only [step1, hco', hnorm', hthrow', reduceIte,
+                                List.nil_append]
+                              refine ⟨(⟨Γ', [.isValue (.boolean Bool.true)]
+                                :: [VTy.complT] :: σr'⟩ : World) :: [], rfl, ?_⟩
+                              intro u' hu2
+                              simp only [List.mem_singleton] at hu2
+                              subst hu2
+                              exact ⟨⟨Γ, [.isValue (.boolean Bool.true)]
+                                :: [VTy.complT] :: σr⟩,
+                                List.mem_singleton.mpr rfl, hΓ,
+                                ⟨slotLe_refl _, ⟨slotLe_refl _, hrest⟩⟩⟩
+                  | cons n1 ns =>
+                      cases hthrow : complHasThrow t with
+                      | false =>
+                          simp only [hnorm, hthrow, List.append_nil, reduceIte,
+                            Option.some.injEq] at hstep
+                          subst hstep
+                          have hnorm'ne : complNormals t' ≠ [] := by
+                            rcases slotCompl_side hpure' hne' with H | H
+                            · exact H
+                            · exact absurd (complHasThrow_cov hcov H)
+                                (by rw [hthrow]; simp)
+                          cases hnorm' : complNormals t' with
+                          | nil => exact absurd hnorm' hnorm'ne
+                          | cons h1 hs =>
+                              have hco' : complOnly t' = Bool.true :=
+                                complOnly_of_compl hpure'
+                              cases hthrow' : complHasThrow t' with
+                              | false =>
+                              simp only [step1, hco', hnorm', hthrow', reduceIte,
+                                List.append_nil]
+                              refine ⟨(⟨Γ', [.isValue (.boolean Bool.false)]
+                                :: (h1 :: hs) :: σr'⟩ : World) :: [], rfl, ?_⟩
+                              intro u' hu2
+                              simp only [List.mem_singleton] at hu2
+                              subst hu2
+                              refine ⟨⟨Γ, [.isValue (.boolean Bool.false)]
+                                :: (n1 :: ns) :: σr⟩,
+                                List.mem_singleton.mpr rfl, hΓ, ?_⟩
+                              refine ⟨slotLe_refl _, ⟨?_, hrest⟩⟩
+                              refine ⟨?_, ?_⟩
+                              · have hle := tyLe_of_atom_cov
+                                  (complNormals_cov hcov)
+                                rw [hnorm', hnorm] at hle
+                                exact hle
+                              · intro _ hc2
+                                exact List.cons_ne_nil h1 hs hc2
+                              | true =>
+                                  exact absurd (complHasThrow_cov hcov hthrow')
+                                    (by rw [hthrow]; simp)
+                      | true =>
+                          simp only [hnorm, hthrow, List.cons_append,
+                            List.nil_append, reduceIte,
+                            Option.some.injEq] at hstep
+                          subst hstep
+                          cases hnorm' : complNormals t' with
+                          | nil =>
+                              have hthrow' : complHasThrow t' = Bool.true := by
+                                rcases slotCompl_side hpure' hne' with H | H
+                                · rw [hnorm'] at H; exact absurd rfl H
+                                · exact H
+                              have hco' : complOnly t' = Bool.true :=
+                                complOnly_of_compl hpure'
+                              simp only [step1, hco', hnorm', hthrow', reduceIte,
+                                List.cons_append, List.nil_append]
+                              refine ⟨(⟨Γ', [.isValue (.boolean Bool.true)]
+                                :: [VTy.complT] :: σr'⟩ : World) :: [], rfl, ?_⟩
+                              intro u' hu2
+                              simp only [List.mem_singleton] at hu2
+                              subst hu2
+                              exact ⟨⟨Γ, [.isValue (.boolean Bool.true)]
+                                :: [VTy.complT] :: σr⟩,
+                                List.mem_cons.mpr (Or.inr
+                                  (List.mem_singleton.mpr rfl)), hΓ,
+                                ⟨slotLe_refl _, ⟨slotLe_refl _, hrest⟩⟩⟩
+                          | cons h1 hs =>
+                              have hco' : complOnly t' = Bool.true :=
+                                complOnly_of_compl hpure'
+                              cases hthrow' : complHasThrow t' with
+                              | false =>
+                                  simp only [step1, hco', hnorm', hthrow',
+                                    reduceIte, List.append_nil]
+                                  refine ⟨(⟨Γ', [.isValue (.boolean Bool.false)]
+                                    :: (h1 :: hs) :: σr'⟩ : World) :: [], rfl, ?_⟩
+                                  intro u' hu2
+                                  simp only [List.mem_singleton] at hu2
+                                  subst hu2
+                                  refine ⟨⟨Γ, [.isValue (.boolean Bool.false)]
+                                    :: (n1 :: ns) :: σr⟩,
+                                    List.mem_cons.mpr (Or.inl rfl), hΓ, ?_⟩
+                                  refine ⟨slotLe_refl _, ⟨?_, hrest⟩⟩
+                                  refine ⟨?_, ?_⟩
+                                  · have hle := tyLe_of_atom_cov
+                                      (complNormals_cov hcov)
+                                    rw [hnorm', hnorm] at hle
+                                    exact hle
+                                  · intro _ hc2
+                                    exact List.cons_ne_nil h1 hs hc2
+                              | true =>
+                                  simp only [step1, hco', hnorm', hthrow',
+                                    reduceIte, List.cons_append, List.nil_append]
+                                  refine ⟨(⟨Γ', [.isValue (.boolean Bool.false)]
+                                    :: (h1 :: hs) :: σr'⟩ : World)
+                                    :: (⟨Γ', [.isValue (.boolean Bool.true)]
+                                    :: [VTy.complT] :: σr'⟩ : World) :: [],
+                                    ?_, ?_⟩
+                                  · rfl
+                                  · intro u' hu2
+                                    simp only [List.mem_cons, List.mem_singleton] at hu2
+                                    rcases hu2 with rfl | hu2
+                                    · refine ⟨⟨Γ, [.isValue (.boolean Bool.false)]
+                                        :: (n1 :: ns) :: σr⟩,
+                                        List.mem_cons.mpr (Or.inl rfl), hΓ, ?_⟩
+                                      exact ⟨slotLe_refl _, ⟨by
+                                        have hle := tyLe_of_atom_cov
+                                          (complNormals_cov hcov)
+                                        rw [hnorm', hnorm] at hle
+                                        exact ⟨hle, by
+                                          intro _ hc
+                                          exact List.cons_ne_nil h1 hs hc⟩,
+                                        hrest⟩⟩
+                                    · rcases hu2 with h2 | h2
+                                      · subst h2
+                                        exact ⟨⟨Γ, [.isValue (.boolean Bool.true)]
+                                          :: [VTy.complT] :: σr⟩,
+                                          List.mem_cons.mpr
+                                            (Or.inr (List.mem_singleton.mpr rfl)),
+                                          hΓ, ⟨slotLe_refl _,
+                                          ⟨slotLe_refl _, hrest⟩⟩⟩
+                                      · cases h2
 /- ## THE NO-SILENT-FALLS INVARIANT: every checkSeq result that is
     flows with empty falls EXITED (re-derived on the flat
     completion universe). -/
