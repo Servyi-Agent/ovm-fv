@@ -2010,6 +2010,37 @@ theorem complTy_compl : ∀ (cs : List Pending), slotCompl (complTy cs)
           · simp only [List.mem_singleton] at h2
             exact Or.inr h2
 
+theorem complOnly_compl {t : Ty} (h : complOnly t = Bool.true) :
+    slotCompl t := by
+  induction t with
+  | nil => intro a ha; cases ha
+  | cons a rest ih =>
+      intro b hb
+      simp only [complOnly, Bool.and_eq_true] at h
+      obtain ⟨h1, h2⟩ := h
+      cases a with
+      | complN p =>
+          rcases List.mem_cons.mp hb with he | hr
+          · rw [he]; exact Or.inl ⟨p, rfl⟩
+          · exact ih h2 b hr
+      | complT =>
+          rcases List.mem_cons.mp hb with he | hr
+          · rw [he]; exact Or.inr rfl
+          · exact ih h2 b hr
+      | anyValue _ | isValue _ | desc _ | notPresent => simp at h1
+
+theorem slotCompl_side {t : Ty} (ht : slotCompl t) (hne : t ≠ []) :
+    complNormals t ≠ [] ∨ complHasThrow t = Bool.true := by
+  cases t with
+  | nil => exact absurd rfl hne
+  | cons a rest =>
+      obtain ⟨p, hp⟩ | ht2 := ht a (List.mem_cons_self ..)
+      · subst hp
+        exact Or.inl (fun hc => absurd hc (by simp [complNormals]))
+      · subst ht2
+        exact Or.inr (by
+          simp only [complHasThrow, List.any_cons, Bool.true_or])
+
 theorem removeTy_cov {t' t T : Ty}
     (hcov : ∀ a' ∈ t', ∃ a ∈ t, tmovesV a' a = Bool.true) :
     ∀ x' ∈ removeTy t' T, ∃ x ∈ removeTy t T, tmovesV x' x = Bool.true := by
