@@ -1802,6 +1802,81 @@ theorem unwrapSlot_cov {t' t : Ty} (h : slotLe t' t) {ps : Ty}
     have hne' : t' ≠ [] := h.2 hne
     exact payloadsOf_ne hne' hpure'
 
+
+/- ## Proof layer XI: meet/remove/completion-kind covariance (the
+    split sites' lattice behavior). The atom-cover (∀∃) interface:
+    refined split outputs are covered by coarse split outputs. -/
+
+theorem tyLe_of_atom_cov {t' t : Ty}
+    (h : ∀ a' ∈ t', ∃ a ∈ t, tmovesV a' a = Bool.true) : tyLe t' t := by
+  unfold tyLe tmoves
+  simp only [List.all_eq_true, List.any_eq_true]
+  exact h
+
+
+theorem removeTy_cov {t' t T : Ty}
+    (hcov : ∀ a' ∈ t', ∃ a ∈ t, tmovesV a' a = Bool.true) :
+    ∀ x' ∈ removeTy t' T, ∃ x ∈ removeTy t T, tmovesV x' x = Bool.true := by
+  intro x' hx'
+  simp only [removeTy, List.mem_filter] at hx'
+  obtain ⟨ha', hpred⟩ := hx'
+  simp only [Bool.not_eq_true'] at hpred
+  obtain ⟨a, ha, haa⟩ := hcov x' ha'
+  refine ⟨a, ?_, haa⟩
+  simp only [removeTy, List.mem_filter]
+  refine ⟨ha, ?_⟩
+  simp only [Bool.not_eq_true']
+  cases hp : T.any (fun b => tmovesV a b) with
+  | true =>
+      exfalso
+      obtain ⟨b, hb, hab⟩ := List.any_eq_true.mp hp
+      have hcontra : T.any (fun b => tmovesV x' b) = Bool.true :=
+        List.any_eq_true.mpr ⟨b, hb, tmovesV_trans haa hab⟩
+      rw [hcontra] at hpred
+      exact Bool.noConfusion hpred
+  | false => rfl
+
+theorem complNormals_cov {t' t : Ty}
+    (hcov : ∀ a' ∈ t', ∃ a ∈ t, tmovesV a' a = Bool.true) :
+    ∀ x' ∈ complNormals t', ∃ x ∈ complNormals t, tmovesV x' x = Bool.true := by
+  intro x' hx'
+  simp only [complNormals, List.mem_filterMap] at hx'
+  obtain ⟨a', ha', hmem⟩ := hx'
+  cases a' with
+  | complN p =>
+      have hxe : x' = .complN p := by
+        have h0 : (some (VTy.complN p) : Option VTy) = some x' := hmem
+        have h1 : VTy.complN p = x' := by simpa using h0
+        exact h1.symm
+      subst hxe
+      obtain ⟨a, ha, haa⟩ := hcov _ ha'
+      obtain ⟨q, hq⟩ := tmovesV_complN_inv haa
+      subst hq
+      exact ⟨.complN q, by
+        simp only [complNormals, List.mem_filterMap]
+        exact ⟨.complN q, ha, rfl⟩, haa⟩
+  | complT | anyValue _ | isValue _ | desc _ | notPresent =>
+      exfalso
+      have h0 : (none : Option VTy) = some x' := hmem
+      cases h0
+
+theorem complHasThrow_cov {t' t : Ty}
+    (hcov : ∀ a' ∈ t', ∃ a ∈ t, tmovesV a' a = Bool.true) :
+    complHasThrow t' = Bool.true → complHasThrow t = Bool.true := by
+  intro h
+  obtain ⟨a', ha', hab⟩ := List.any_eq_true.mp h
+  obtain ⟨a, ha, haa⟩ := hcov a' ha'
+  cases a' with
+  | complT =>
+      cases a with
+      | complT =>
+          exact List.any_eq_true.mpr ⟨.complT, ha, rfl⟩
+      | complN p | anyValue _ | isValue _ | desc _ | notPresent =>
+          simp [tmovesV] at haa
+  | complN p | anyValue _ | isValue _ | desc _ | notPresent =>
+      exfalso
+      simp at hab
+
 /- ## Proof layer II: the abstraction commutes with machine pushes -/
 
 /-- frameOk at above = none is exactly frameChecks. -/
