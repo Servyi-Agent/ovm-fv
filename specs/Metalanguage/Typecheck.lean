@@ -98,9 +98,21 @@ def typeOfV : JSValue → STy
   | v => .isValue v
 
 /- Unions appear only in signatures; flatten to union-free atoms for
-   the set operations. -/
+    the set operations. Canonical decomposition: a val mask's boolean
+    bits become the two singleton atoms — booleans are always
+    isValue-true | isValue-false atoms, in every spelling (any-bool −
+    is-true = is-false, representation-independent). -/
+def boolU : STy :=
+  .union [.isValue (.boolean Bool.true), .isValue (.boolean Bool.false)]
+
 def atoms : STy → List STy
   | .union ps => ps.flatMap atoms
+  | .val 0 => [.val 0]
+  | .val m =>
+      (if m &&& cTrue != 0 then [.isValue (.boolean Bool.true)] else [])
+        ++ (if m &&& cFalse != 0 then [.isValue (.boolean Bool.false)] else [])
+        ++ (let r := m - (m &&& boolV)
+            if r != 0 then [.val r] else [])
   | t => [t]
 
 def ofAtoms : List STy → STy
@@ -119,6 +131,7 @@ def tyNonempty : STy → Bool
   | .val m => m != 0
   | .oneOf vs => !vs.isEmpty
   | .union ps => tyNonemptyList ps
+  | .complN t => tyNonempty t     -- normal completion: payload decides
   | _ => true
 termination_by t => sizeOf t
 decreasing_by all_goals simp_wf <;> omega
@@ -143,6 +156,11 @@ def tyMeetAtom : STy → STy → STy
   | .descAny, .descAny => .descAny
   | .desc fs, .val m => if (m &&& cDesc) != 0 then .desc fs else .val 0
   | .descAny, .val m => if (m &&& cDesc) != 0 then .descAny else .val 0
+  /- completion wire shapes meet only themselves; the payload meet is
+     mask-only (val payloads) — union payloads fall through as empty
+     (conservative, same class as the val/isValue asymmetry) -/
+  | .complN (.val a), .complN (.val b) => .complN (.val (a &&& b))
+  | .complT, .complT => .complT
   | _, _ => .val 0
 
 def tyMeet (t t' : STy) : STy :=
@@ -168,6 +186,10 @@ def tyRemoveAtom : STy → STy → STy
   | .descAny, .desc _ => .descAny           -- conservative
   | .val a, .desc _ => .val a               -- conservative
   | .val a, .descAny => .val a              -- conservative
+  /- completion wire shapes: normal minus normal narrows the payload
+     mask; normal and throw are disjoint -/
+  | .complN (.val a), .complN (.val b) => .complN (.val (a - (a &&& b)))
+  | .complT, .complT => .val 0
   | t, _ => t
 
 def tyRemove (t t' : STy) : STy :=
@@ -240,7 +262,7 @@ def mopResult : «String» → STy
   | "Get" => .val langV          -- [[Get]] delivers a language value
   | "GetPrototypeOf" => .val (cNull + cObj)
   | "Value" | "Getter" | "Setter" => .val langV
-  | "Writable" | "Enumerable" | "Configurable" => .val boolV
+  | "Writable" | "Enumerable" | "Configurable" => boolU
   | "GetOwnProperty" =>
       -- stored descriptors are completed at write time: data-complete
       -- or accessor-complete (the spec's disjointness invariant)
@@ -274,7 +296,7 @@ def typeOfE (sigs : SigTable) (Γ : TyEnv) : Expr → Option STy
   | .nv x => tyLookup Γ x
   | .nat n => some (.isValue (.number n.toFloat))
   | .const v => some (.isValue v)
-  | .varNotPresent _ => some (.val boolV)
+  | .varNotPresent _ => some boolU
   | .call f as =>
       match sigFind sigs f with
       | some (ps, ret) =>
@@ -301,8 +323,9 @@ def typeOfE (sigs : SigTable) (Γ : TyEnv) : Expr → Option STy
       if (typesOf sigs Γ es).isSome then some (.val cList) else none
   | .isObject x | .isNotObject x | .isNotUndefined x | .hasCall x
   | .hasCtor x | .isU x | .isBoolVal _ x | .isStrVal _ x
-  | .isNullOrUnd x | .isNull x | .isType _ x | .hasField _ x =>
-      if (typeOfE sigs Γ x).isSome then some (.val boolV) else none
+  | .isNullOrUnd x | .isNull x | .isType _ x | .hasField _ x
+  | .isCompletion x =>
+      if (typeOfE sigs Γ x).isSome then some boolU else none
 termination_by e => sizeOf e
 end
 
@@ -348,9 +371,10 @@ def popArgs (ps σ : List STy) : Bool :=
 def primTys (p : Prim) : Option (STy × STy) :=
   match p with
   | .pThrowC => some (.val anyV, .complT)
+  | .pIsCompletion => none               -- any -> boolV, inline in stepWorlds
   | .pIsObj | .pIsNotObj | .pIsNotU | .pHasCall | .pHasCtor | .pIsU
   | .pIsTrue | .pIsFalse | .pNullOrUnd | .pIsNull
-  | .pIsType _ | .pHasField _ | .pIsStr _ => some (.val anyV, .val boolV)
+  | .pIsType _ | .pHasField _ | .pIsStr _ => some (.val anyV, boolU)
   | .pDescField _ => some (.val anyV, .val anyV)
   | .pWrapC => none                     -- t ↦ complN t, inline
 
@@ -375,8 +399,13 @@ def testType : Expr → Option STy
   | .isNullOrUnd _ => some (.val (cUndef + cNull))
   | .isBoolVal b _ => some (.isValue (.boolean b))
   | .isStrVal s _ => some (.isValue (.str s))
+  | .isType "Boolean" _ => some boolU
   | .isType ty _ => some (.val (typeMask ty))
   | .varNotPresent _ => some .notPresent
+  /- the then-side is the completion wire-shape family; with a
+     completion-typed variable the meet keeps the then-world and the
+     remove empties the false-world, so the split FORCES the verdict -/
+  | .isCompletion _ => some (.union [.complN (.val anyV), .complT])
   | _ => none
 
 /-- The variable a shape test inspects, if any. -/
@@ -384,6 +413,7 @@ def testedVar : Expr → Option «String»
   | .isObject (.nv x) | .isNotObject (.nv x) | .isU (.nv x)
   | .isNotUndefined (.nv x) | .isNull (.nv x) | .isNullOrUnd (.nv x)
   | .isBoolVal _ (.nv x) | .isStrVal _ (.nv x) | .isType _ (.nv x)
+  | .isCompletion (.nv x)
   | .varNotPresent x => some x
   | _ => none
 
@@ -401,6 +431,13 @@ def stepWorlds (sigs : SigTable) (ws : Worlds) (i : Instr) : Option Worlds :=
       ws.mapM (fun w =>
         match w.σ with
         | t :: σ' => some { w with σ := .complN t :: σ' }
+        | [] => none)
+  | .kPrim1 .pIsCompletion =>
+      /- accepts ANY top-of-stack, completions included (they have no
+         constructor bit, so the generic anyV row would reject them) -/
+      ws.mapM (fun w =>
+        match w.σ with
+        | _ :: σ' => some { w with σ := boolU :: σ' }
         | [] => none)
   | .kPrim1 p =>
       match primTys p with
@@ -430,8 +467,8 @@ def stepWorlds (sigs : SigTable) (ws : Worlds) (i : Instr) : Option Worlds :=
       -- verdict is EXACT: complN -> falseVal (not abrupt), complT -> trueVal
       ws.mapM (fun w =>
         match w.σ with
-        | .complN t :: σ' => some { w with σ := .val cFalse :: .complN t :: σ' }
-        | .complT :: σ' => some { w with σ := .val cTrue :: .complT :: σ' }
+        | .complN t :: σ' => some { w with σ := .isValue (.boolean Bool.false) :: .complN t :: σ' }
+        | .complT :: σ' => some { w with σ := .isValue (.boolean Bool.true) :: .complT :: σ' }
         | _ => none)
   | .kUnwrap =>
       ws.mapM (fun w =>
@@ -439,6 +476,17 @@ def stepWorlds (sigs : SigTable) (ws : Worlds) (i : Instr) : Option Worlds :=
         | .complN t :: σ' => some { w with σ := t :: σ' }
         | .complT :: σ' => some { w with σ := .val anyV :: σ' }  -- dead path
         | _ => none)
+  | .kWrapIfBare =>
+      /- completion-typed tops pass through unchanged; everything
+         else (payload unions included — sig ret types type payloads)
+         is a bare value and rides in a normal completion -/
+      ws.mapM (fun w =>
+        match w.σ with
+        | t :: σ' =>
+            match t with
+            | .complN _ | .complT => some w
+            | _ => some { w with σ := .complN t :: σ' }
+        | [] => none)
   | .kIMeth nm n =>
       if mopArity nm == some n then
         ws.mapM (fun w =>
@@ -518,8 +566,8 @@ def splitWorlds (x : «String») (T : STy) (ws : Worlds) : Option Worlds :=
         let elseS := tyRemove S T
         -- at least one side must be possible; emit verdict + refined Γ
         let out : List World :=
-          (if tyNonempty thenS then [{ Γ := (x, thenS) :: w.Γ, σ := .val cTrue :: w.σ }] else [])
-          ++ (if tyNonempty elseS then [{ Γ := (x, elseS) :: w.Γ, σ := .val cFalse :: w.σ }] else [])
+          (if tyNonempty thenS then [{ Γ := (x, thenS) :: w.Γ, σ := .isValue (.boolean Bool.true) :: w.σ }] else [])
+          ++ (if tyNonempty elseS then [{ Γ := (x, elseS) :: w.Γ, σ := .isValue (.boolean Bool.false) :: w.σ }] else [])
         if out.isEmpty then none else (some out : Option (List World))) with
   | none => none
   | some wss => some (List.flatten wss)
@@ -550,18 +598,28 @@ def checkSeq : SigTable → STy → Worlds → List Instr → TCResult
         .flows { exits := Bool.true, falls := [], assumes := [] }
       else .reject .kRet "kRet: payload does not match the frame's destiny r"
   | sigs, r, ws, .kIte t e :: rest =>
-      -- dispatch each world on its verdict; split both-verdict worlds
+      -- dispatch each world on its verdict; split both-verdict worlds.
+      -- Spelling-immune: the verdict type is decomposed canonically
+      -- (isValue-true/false singletons route; a boolean singleton-union
+      -- or boolV mask straddles; anything else is ill-formed)
       let dispatch (w : World) : Option (Worlds × Worlds) :=
         match w.σ with
-        | .isValue (.boolean Bool.true) :: σ' => some ([{ w with σ := σ' }], [])
-        | .isValue (.boolean Bool.false) :: σ' => some ([], [{ w with σ := σ' }])
-        | .val m :: σ' =>
-            if m == cTrue then some ([{ w with σ := σ' }], [])
-            else if m == cFalse then some ([], [{ w with σ := σ' }])
-            else if (m - (m &&& boolV)) == 0 then
-              some ([{ w with σ := σ' }], [{ w with σ := σ' }])
+        | t' :: σ' =>
+            let boolOnly := (atoms t').all (fun a =>
+              a == .isValue (.boolean Bool.true) || a == .isValue (.boolean Bool.false))
+            /- membership (ANY atom), not subtyping: a straddle
+               (boolU, or a boolV mask spelling) includes both sides -/
+            let isT := (atoms t').any (fun a =>
+              tmovesAtom a (.isValue (.boolean Bool.true)))
+            let isF := (atoms t').any (fun a =>
+              tmovesAtom a (.isValue (.boolean Bool.false)))
+            if boolOnly then
+              if isT && isF then some ([{ w with σ := σ' }], [{ w with σ := σ' }])
+              else if isT then some ([{ w with σ := σ' }], [])
+              else if isF then some ([], [{ w with σ := σ' }])
+              else none
             else none
-        | _ => none
+        | [] => none
       match ws.mapM dispatch with
       | none => .reject (.kIte t e) "kIte: verdict is not boolean"
       | some pairs =>
@@ -635,16 +693,20 @@ def checkSeq : SigTable → STy → Worlds → List Instr → TCResult
       checkLoopBody (checkSeq sigs r ws' body) (.kForBody x [] body)
         (ws'.head?.map World.σ |>.getD []) (fun wsf => checkSeq sigs r wsf rest)
   | sigs, r, ws, .kAssert :: rest =>
-      -- asserts: the trueVal worlds continue; falseVal worlds are
-      -- ASSUMED away (proof debt recorded); a both-verdict world
-      -- continues with its false side assumed away
+      -- asserts: the trueVal worlds continue; everything else boolean
+      -- is ASSUMED away (proof debt recorded). Spelling-immune verdict
+      -- (canonical atoms); a non-boolean verdict is a fell-world.
       let rec step (w : World) : World × Bool :=
         match w.σ with
-        | .isValue (.boolean Bool.true) :: σ' => ({ w with σ := σ' }, Bool.false)
-        | .val m :: σ' =>
-            if m == cTrue then ({ w with σ := σ' }, Bool.false)
-            else ({ w with σ := σ' }, Bool.true)
-        | _ => (w, Bool.true)   -- non-boolean verdict: fell-world
+        | t' :: σ' =>
+            let boolOnly := (atoms t').all (fun a =>
+              a == .isValue (.boolean Bool.true) || a == .isValue (.boolean Bool.false))
+            if boolOnly then
+              if tmoves t' (.isValue (.boolean Bool.true))
+              then ({ w with σ := σ' }, Bool.false)
+              else ({ w with σ := σ' }, Bool.true)
+            else (w, Bool.true)   -- non-boolean verdict: fell-world
+        | [] => (w, Bool.true)
       let stepped := ws.map step
       let ws' := stepped.map Prod.fst
       let anyAssumed := stepped.any Prod.snd

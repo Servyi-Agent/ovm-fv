@@ -74,6 +74,10 @@ def isObjV : JSValue → Bool
   | .obj _ => Bool.true
   | _ => Bool.false
 
+def isComplV : JSValue → Bool
+  | .compl _ _ => Bool.true
+  | _ => Bool.false
+
 def hasCallV (h : Heap) : JSValue → Bool
   | .obj loc => match h loc with
     | some o => match o.kind with | .builtin _ _ => Bool.true | _ => Bool.false
@@ -100,6 +104,7 @@ def applyPrim (h : Heap) : Prim → JSValue → JSValue
   | .pIsFalse, v => .boolean (v == .boolean Bool.false)
   | .pIsStr s, v => .boolean (v == .str s)
   | .pNullOrUnd, v => .boolean (isUndV v || isNullV v)
+  | .pIsCompletion, v => .boolean (isComplV v)
   | .pWrapC, v => .compl Bool.false v
   | .pThrowC, v => .compl Bool.true v
   | .pIsNull, v => .boolean (isNullV v)
@@ -162,6 +167,10 @@ def evalE2 (h : Heap) (env : Env) : Expr → Option JSValue
   | .isObject e =>
       match evalE2 h env e with
       | some v => some (.boolean (isObjV v))
+      | none => none
+  | .isCompletion e =>
+      match evalE2 h env e with
+      | some v => some (.boolean (isComplV v))
       | none => none
   | .isNotObject e =>
       match evalE2 h env e with
@@ -374,6 +383,8 @@ def fstep (reg : AOReg) : FM → FM
         done (⟨rest, env, .boolean (lookup env x).isNone :: eval, f.ret⟩ :: fs)
     | .kEval (.isObject e) :: _rest, _, _ =>
         done (⟨.kEval e :: .kPrim1 .pIsObj :: f.stmts.tail!, f.env, f.eval, f.ret⟩ :: fs)
+    | .kEval (.isCompletion e) :: rest, _, _ =>
+        done (⟨.kEval e :: .kPrim1 .pIsCompletion :: rest, f.env, f.eval, f.ret⟩ :: fs)
     | .kEval (.isNotObject e) :: _rest, _, _ =>
         done (⟨.kEval e :: .kPrim1 .pIsNotObj :: f.stmts.tail!, f.env, f.eval, f.ret⟩ :: fs)
     | .kEval (.isNotUndefined e) :: _rest, _, _ =>
@@ -499,6 +510,14 @@ def fstep (reg : AOReg) : FM → FM
     | .kUnwrap :: rest, env, .compl _ v :: eval =>
         done (⟨rest, env, v :: eval, f.ret⟩ :: fs)
     | .kUnwrap :: _, _, _ => .fell (f :: fs) heap nl 0        -- top not a completion: loud
+    | .kWrapIfBare :: rest, env, v :: eval =>
+        -- bare `Return x`: completion in → out unchanged; raw value
+        -- in → out in a fresh normal completion
+        let w := match v with
+          | .compl _ _ => v
+          | _ => .compl Bool.false v
+        done (⟨rest, env, w :: eval, f.ret⟩ :: fs)
+    | .kWrapIfBare :: _, _, [] => .fell (f :: fs) heap nl 0
     | .kRepeatWhile c body :: rest, env, eval =>
         done (⟨.kEval c :: .kRepeatTest c body :: rest, env, eval, f.ret⟩ :: fs)
     | .kRepeatTest c body :: rest, env, .boolean b :: eval =>
@@ -534,4 +553,3 @@ def agree2 (reg : AOReg) (p : Prog) : Bool :=
 def ftrace2 (reg : AOReg) : Nat → FM → List FM
   | 0, _ => []
   | n + 1, m => m :: ftrace2 reg n (fstep reg m)
-

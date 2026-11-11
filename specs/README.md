@@ -22,12 +22,13 @@ JavaScript engine.
     signature table; rejections carry the instruction, reason, and
     abstract stack.
 - `spec/<clause>/spec.lean` — one file per spec clause:
-  `spec/6/2/5/1/spec.lean` defines 6.2.5.1 `IsCallable`. Each is
+  `spec/7/2/3/spec.lean` defines 7.2.3 `IsCallable`. Each is
   standalone-checkable and contributes an `AO_<Name> : AOReg` registry
-  entry. Current corpus (10, all text-equal):
-  IsCallable, IsConstructor, IsDataDescriptor, IsAccessorDescriptor,
-  ToPrimitive, OrdinaryToPrimitive, ToObject, GetV, OrdinaryGet,
-  GetMethod.
+  entry. Current corpus (16, all text-equal):
+  Completion, RequireObjectCoercible, IsCallable, IsConstructor,
+  IsDataDescriptor, IsAccessorDescriptor, IsGenericDescriptor,
+  ToPrimitive, OrdinaryToPrimitive, ToNumeric, ToString, ToObject,
+  ToPropertyKey, GetV, GetMethod, OrdinaryGet.
 - `tools/diff_spec.py` — **text-equality audit**: char-compares every
   transcription against the spec's `emu-alg` (whitespace/`┊` stripped,
   canonical markers; documented deviations).

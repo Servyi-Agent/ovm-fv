@@ -52,6 +52,10 @@ syntax "a" "Number" : isTail
 syntax "a" "String" : isTail
 syntax "a" "Symbol" : isTail
 syntax "a" "BigInt" : isTail
+/- 5.2.4.1 Completion: the assert's predicate. Registers
+   "Completion" and "Record" as tokens — escape with «» to use the
+   name as an aoName («Completion»(x)). -/
+syntax "a" "Completion" "Record" : isTail
 syntax "~" "string" "~" : isTail
 syntax "~" "number" "~" : isTail
 syntax "either" "undefined" "or" "null" : isTail
@@ -80,13 +84,16 @@ syntax aoName "(" ")" : algExpr
 syntax aoName "(" callArgs ")" : algExpr
 /- Internal-method calls: obj.[[Get]](P, receiver) — MOP dispatch. -/
 /- ".[[" and "]]" as single tokens avoid the shared-prefix commit on "."
-   (which would break every statement's trailing period). -/
+    (which would break every statement's trailing period). -/
 /- Field read declared last; paren forms first so `]] (` commits there. -/
-/- 1+-arg calls parse and pattern-match; ZERO-arg internal-method calls
-   cannot be pattern-matched (empty parens are grouping in patterns), so
-   the sole zero-arg case, [[GetPrototypeOf]], is written in field-read
-   form — documented deviation at each transcription site. -/
+/- Zero-arg internal-method calls `x.[[M]]()` pattern-match fine with a
+    dedicated `( )` production (same shape as the plain aoName call
+    below); the old field-read workaround for [[GetPrototypeOf]] is
+    gone — the call form also makes the machine actually DISPATCH the
+    zero-arg MOP (the ifield desugaring returned undefined at
+    runtime). -/
 syntax algExpr ".[[" aoName "]" "]" "(" callArgs ")" : algExpr
+syntax algExpr ".[[" aoName "]" "]" "(" ")" : algExpr
 /- Record field read: desc.[[Value]]. -/
 syntax algExpr ".[[" aoName "]" "]" : algExpr
 
@@ -131,6 +138,10 @@ syntax kwLet var "be" "?" algExpr "." : stmt
 syntax kwLet var "be" algExpr "." : stmt
 syntax kwReturn algExpr "." : stmt
 syntax kwReturn "?" algExpr "." : stmt
+/- `Return ! X.` — abruptness-asserted return: elaborates like `?`
+   (test + propagate + unwrap); the never-abrupt claim is a proof
+   obligation, not runtime behavior. -/
+syntax kwReturn "!" algExpr "." : stmt
 syntax kwThrow "." : stmt
 syntax kwThrow "a" "TypeError" "exception" "." : stmt
 syntax kwAssert ":" algExpr "." : stmt
@@ -206,16 +217,22 @@ def sciNat (n : TSyntax `scientific) : Nat :=
   | _ => 0
 
 /- « "a", "b" » literals: the macro encodes the elements as one
-   unit-separated string; this decodes at runtime. -/
+    unit-separated string; this decodes at runtime. -/
+open Lean in
+def unquoteIdent (w : «String») : «String» :=
+  if w.startsWith "«" && w.endsWith "»" then
+    «String».ofList ((w.toList.drop 1).dropLast)
+  else w
+
 open Lean in
 def aoNameOf (x : TSyntax `aoName) : «String» :=
   let inner (w : Lean.Syntax) : «String» :=
     match w with
-    | .ident _ t _ _ => t.toString
+    | .ident _ t _ _ => unquoteIdent t.toString
     | .atom _ v => v
     | _ => "?"
   match x.raw with
-  | .ident _ s _ _ => s.toString
+  | .ident _ s _ _ => unquoteIdent s.toString
   | .atom _ v => v
   | .node _ _ args =>
     match (args[0]? : Option Lean.Syntax) with
@@ -317,6 +334,8 @@ macro_rules
   | `([e| $s:str]) => ``(Expr.const (JSValue.str $s))
   | `([e| $r:algExpr .[[ $m:aoName ] ] ( $as:callArgs )]) =>
       ``(Expr.imeth $(quote (aoNameOf m)) [e| $r] [ca| $as])
+  | `([e| $r:algExpr .[[ $m:aoName ] ] ( )]) =>
+      ``(Expr.imeth $(quote (aoNameOf m)) [e| $r] [])
   | `([e| $r:algExpr .[[ $m:aoName ] ]]) =>
       ``(Expr.ifield $(quote (aoNameOf m)) [e| $r])
   | `([e| ~ string ~]) => ``(Expr.const (JSValue.str "string"))
@@ -343,6 +362,7 @@ macro_rules
   | `([e| $e:algExpr is a String]) => ``(Expr.isType "String" [e| $e])
   | `([e| $e:algExpr is a Symbol]) => ``(Expr.isType "Symbol" [e| $e])
   | `([e| $e:algExpr is a BigInt]) => ``(Expr.isType "BigInt" [e| $e])
+  | `([e| $e:algExpr is a Completion Record]) => ``(Expr.isCompletion [e| $e])
   | `([e| $e:algExpr is not an Object]) => ``(Expr.isNotObject [e| $e])
   | `([e| $e:algExpr is not undefined]) => ``(Expr.isNotUndefined [e| $e])
   | `([e| $e:algExpr has a [[Call]] internal method]) => ``(Expr.hasCall [e| $e])
@@ -375,6 +395,8 @@ macro_rules
   | `([s| $_l:kwLet $x:var be $e:algExpr .]) =>
       ``(FBody.letE $(quote (varName x)) [e| $e])
   | `([s| $_r:kwReturn ? $e:algExpr .]) =>
+      ``(FBody.retE [e| $e])
+  | `([s| $_r:kwReturn ! $e:algExpr .]) =>
       ``(FBody.retE [e| $e])
   | `([s| $_r:kwReturn a new $_t:typeName object whose [ [ $s:aoName ] ]
       internal slot is set to $x:var .]) =>
@@ -589,4 +611,3 @@ macro_rules
 
 
 /- ===== A small interpreter over the clean Prog ===== -/
-

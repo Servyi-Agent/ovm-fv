@@ -52,6 +52,7 @@ inductive Expr where
   | nat (n : Nat)
   | const (v : JSValue)
   | isObject (e : Expr)
+  | isCompletion (e : Expr)
   | isNotObject (e : Expr)
   | isNotUndefined (e : Expr)
   | hasCall (e : Expr)
@@ -221,7 +222,7 @@ def checkRun (l : List LStep) : Bool := check l 1
 inductive Prim where              -- bedrock predicates (the axiom stratum)
   | pIsObj | pIsNotObj | pIsNotU | pHasCall
   | pHasCtor | pIsU | pIsTrue | pIsFalse
-  | pNullOrUnd
+  | pNullOrUnd | pIsCompletion
   | pWrapC
   | pThrowC
   | pIsNull
@@ -245,7 +246,8 @@ inductive Prim where              -- bedrock predicates (the axiom stratum)
 
 /-- Calls the machine answers natively when the registry misses. -/
 def nativeOps : List «String» :=
-  ["GetV", "Get", "Call", "GetMethod", "OrdinaryToPrimitive"]
+  ["GetV", "Get", "Call", "GetMethod", "OrdinaryToPrimitive",
+   "ToNumber", "Number::toString", "BigInt::toString"]
 
 /- Internal-slot universe: closed by construction (ES declares the set). -/
 inductive Slot where
@@ -311,6 +313,7 @@ inductive Instr where
   | kRet
   | kTest
   | kUnwrap
+  | kWrapIfBare
   | kIMeth (name : «String») (n : Nat)
   | kMkList (n : Nat)
   | kNewSlot (slotName : «String»)
@@ -323,7 +326,12 @@ inductive Instr where
 
 def compileSteps : List Step → List Instr
   | [] => []
-  | .ret v :: rest => .kEval v :: .kPrim1 .pWrapC :: .kRet :: compileSteps rest
+  | .ret v :: rest =>
+      -- `Return x`: x is a bare value OR a completion — return it
+      -- unchanged (bare values ride inside a fresh normal completion;
+      -- completion records pass through as-is, so the spec's
+      -- completion-identity `Return completionRecord.` is literal).
+      .kEval v :: .kWrapIfBare :: .kRet :: compileSteps rest
   | .retE e :: rest =>
       -- `Return ? e`: if e is a call/imeth its kEval decomposition already
       -- self-tests (propagating abrupt / unwrapping normal), so the value
@@ -349,4 +357,3 @@ def compileSteps : List Step → List Instr
   | .ifS c t e :: rest =>
       .kEval c :: .kIte (compileSteps t) (compileSteps e) :: compileSteps rest
   | .elseM _ :: rest => compileSteps rest   -- unreachable post-fuseL
-
