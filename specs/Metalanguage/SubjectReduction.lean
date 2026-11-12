@@ -981,6 +981,12 @@ theorem typeOfE_cov (sigs : SigTable) (Γ' Γ : TyEnv) :
       exact ht
 
   | case10 =>
+      intro _ t ht
+      refine ⟨t, ?_, slotLe_refl t⟩
+      simp only [typeOfE] at ht ⊢
+      exact ht
+
+  | case11 =>
       rename_i e ps hps ih
       intro hle t ht
       simp only [typeOfE, hps] at ht
@@ -994,13 +1000,13 @@ theorem typeOfE_cov (sigs : SigTable) (Γ' Γ : TyEnv) :
           obtain ⟨t', ht', hslot'⟩ := payloadOf_cov hslot hpay
           exact ⟨t', by simp only [typeOfE, hps', ht'], hslot'⟩
 
-  | case11 =>
+  | case12 =>
       rename_i e hnone ih
       intro _ t ht
       simp only [typeOfE, hnone] at ht
       exact absurd ht (by simp)
 
-  | case12 =>
+  | case13 =>
       rename_i e ps hps ih
       intro hle t ht
       simp only [typeOfE, hps] at ht
@@ -1016,13 +1022,13 @@ theorem typeOfE_cov (sigs : SigTable) (Γ' Γ : TyEnv) :
             simp only [typeOfE, hps', hb', Option.map_some],
             complN_map_cov hbs'⟩
 
-  | case13 =>
+  | case14 =>
       rename_i e hnone ih
       intro _ t ht
       simp only [typeOfE, hnone] at ht
       exact absurd ht (by simp)
 
-  | case14 =>
+  | case15 =>
       rename_i f as ps snd hsig ts hts hguard ih1
       intro hle t ht
       simp only [typeOfE, hsig, hts] at ht
@@ -1045,27 +1051,27 @@ theorem typeOfE_cov (sigs : SigTable) (Γ' Γ : TyEnv) :
       exact ⟨complPayload snd, by
         simp only [typeOfE, hsig, hts', if_pos hguard'], slotLe_refl _⟩
 
-  | case15 =>
+  | case16 =>
       rename_i f as ps snd hsig ts hts hguard ih1
       intro _ t ht
       rw [show typeOfE sigs Γ (.call f as) = none from by
         simp only [typeOfE, hsig, hts, if_neg hguard]] at ht
       exact absurd ht (by simp)
 
-  | case16 =>
+  | case17 =>
       rename_i f as ps snd hsig hnone ih1
       intro _ t ht
       rw [show typeOfE sigs Γ (.call f as) = none from by
         simp only [typeOfE, hsig, hnone]] at ht
       exact absurd ht (by simp)
 
-  | case17 =>
+  | case18 =>
       rename_i f as hsig
       intro _ t ht
       simp only [typeOfE, hsig] at ht
       exact absurd ht (by simp)
 
-  | case18 =>
+  | case19 =>
       rename_i nm recv args k harity hguard ih2 ih1
       intro hle t ht
       rw [Bool.and_eq_true] at hguard
@@ -1110,20 +1116,20 @@ theorem typeOfE_cov (sigs : SigTable) (Γ' Γ : TyEnv) :
             simp only [typeOfE, harity, htr', htr'move, h1, h3',
               Bool.true_and, Bool.and_true, if_true]]
 
-  | case19 =>
+  | case20 =>
       rename_i nm recv args k harity hguard ih2 ih1
       intro _ t ht
       simp only [typeOfE, harity] at ht
       rw [if_neg hguard] at ht
       exact absurd ht (by simp)
 
-  | case20 =>
+  | case21 =>
       rename_i nm recv args hnone
       intro _ t ht
       simp only [typeOfE, hnone] at ht
       exact absurd ht (by simp)
 
-  | case21 =>
+  | case22 =>
       rename_i nm x hval ps1 hx1 ps hpay ih
       intro hle t ht
       simp only [typeOfE, if_pos hval, hx1, hpay] at ht
@@ -1134,7 +1140,7 @@ theorem typeOfE_cov (sigs : SigTable) (Γ' Γ : TyEnv) :
       exact ⟨ps', by
         simp only [typeOfE, if_pos hval, hx1', hpay'], hslot'⟩
 
-  | case22 =>
+  | case23 =>
       rename_i nm x hval ps1 hx1 hpnone ih
       intro hle t ht
       simp only [typeOfE, if_pos hval, hx1, hpnone] at ht
@@ -1186,13 +1192,13 @@ theorem typeOfE_cov (sigs : SigTable) (Γ' Γ : TyEnv) :
                 simp only [List.nil_append] at hnil
                 exact hmopne hnil
 
-  | case23 =>
+  | case24 =>
       rename_i nm x hval hnone ih
       intro _ t ht
       simp only [typeOfE, if_pos hval, hnone] at ht
       exact absurd ht (by simp)
 
-  | case24 =>
+  | case25 =>
       rename_i nm x hnv hsame ih
       intro hle t ht
       simp only [typeOfE, if_neg hnv, if_pos hsame] at ht
@@ -1208,14 +1214,14 @@ theorem typeOfE_cov (sigs : SigTable) (Γ' Γ : TyEnv) :
       exact ⟨mopPayload nm, by
         simp only [typeOfE, if_neg hnv, if_pos hx'], slotLe_refl _⟩
 
-  | case25 =>
+  | case26 =>
       rename_i nm x hnv hnone ih
       intro _ t ht
       simp only [typeOfE, if_neg hnv] at ht
       rw [if_neg hnone] at ht
       exact absurd ht (by simp)
 
-  | case26 =>
+  | case27 =>
       rename_i es hsame ih1
       intro hle t ht
       simp only [typeOfE, if_pos hsame] at ht
@@ -1231,14 +1237,14 @@ theorem typeOfE_cov (sigs : SigTable) (Γ' Γ : TyEnv) :
       exact ⟨[.anyValue .list], by
         simp only [typeOfE, if_pos hx'], slotLe_refl _⟩
 
-  | case27 =>
+  | case28 =>
       rename_i es hnone ih1
       intro _ t ht
       simp only [typeOfE] at ht
       rw [if_neg hnone] at ht
       exact absurd ht (by simp)
 
-  | case28 =>
+  | case29 =>
       rename_i x ps hx hobj ih
       intro hle t ht
       simp only [typeOfE, hx, if_pos hobj] at ht
@@ -1250,7 +1256,7 @@ theorem typeOfE_cov (sigs : SigTable) (Γ' Γ : TyEnv) :
       rw [if_pos (show tmoves ps' [VTy.anyValue Ctor.obj] = Bool.true
         from tmoves_trans hslot.1 hobj)]
 
-  | case29 =>
+  | case30 =>
       rename_i x ps hx hnobj hf ih
       exfalso
       rw [Bool.and_eq_true] at hf
@@ -1259,7 +1265,7 @@ theorem typeOfE_cov (sigs : SigTable) (Γ' Γ : TyEnv) :
         simpa using hrne
       exact absurd (removeTy_nil_imp hnil) hnobj
 
-  | case30 =>
+  | case31 =>
       rename_i x ps hx hnobj hnf ih
       intro hle t ht
       simp only [typeOfE, hx, if_neg hnobj, if_neg hnf] at ht
@@ -1281,13 +1287,13 @@ theorem typeOfE_cov (sigs : SigTable) (Γ' Γ : TyEnv) :
           simp only [typeOfE, hx']
           rw [if_neg h1, if_neg h2]
 
-  | case31 =>
+  | case32 =>
       rename_i x hnone ih
       intro _ t ht
       simp only [typeOfE, hnone] at ht
       exact absurd ht (by simp)
 
-  | case32 =>
+  | case33 =>
       rename_i x hsame ih
       intro hle t ht
       simp only [typeOfE, if_pos hsame] at ht
@@ -1302,84 +1308,61 @@ theorem typeOfE_cov (sigs : SigTable) (Γ' Γ : TyEnv) :
             rfl
       exact ⟨[.anyValue .bool], by
         simp only [typeOfE, if_pos hx'], slotLe_refl _⟩
-
-  | case33 =>
-      rename_i x hnone ih
-      intro _ t ht
-      simp only [typeOfE] at ht
-      rw [if_neg hnone] at ht
-      exact absurd ht (by simp)
 
   | case34 =>
-      rename_i x hsame ih
-      intro hle t ht
-      simp only [typeOfE, if_pos hsame] at ht
-      simp only [Option.some.injEq] at ht
-      subst ht
-      have hx' : (typeOfE sigs Γ' x).isSome = Bool.true := by
-        cases hc : typeOfE sigs Γ x with
-        | none => rw [hc] at hsame; simp at hsame
-        | some sv =>
-            obtain ⟨sv', hsv', _⟩ := ih hle sv hc
-            rw [hsv']
-            rfl
-      exact ⟨[.anyValue .bool], by
-        simp only [typeOfE, if_pos hx'], slotLe_refl _⟩
+      rename_i x hnone ih
+      intro _ t ht
+      simp only [typeOfE] at ht
+      rw [if_neg hnone] at ht
+      exact absurd ht (by simp)
 
   | case35 =>
-      rename_i x hnone ih
-      intro _ t ht
-      simp only [typeOfE] at ht
-      rw [if_neg hnone] at ht
-      exact absurd ht (by simp)
+      rename_i x hsame ih
+      intro hle t ht
+      simp only [typeOfE, if_pos hsame] at ht
+      simp only [Option.some.injEq] at ht
+      subst ht
+      have hx' : (typeOfE sigs Γ' x).isSome = Bool.true := by
+        cases hc : typeOfE sigs Γ x with
+        | none => rw [hc] at hsame; simp at hsame
+        | some sv =>
+            obtain ⟨sv', hsv', _⟩ := ih hle sv hc
+            rw [hsv']
+            rfl
+      exact ⟨[.anyValue .bool], by
+        simp only [typeOfE, if_pos hx'], slotLe_refl _⟩
 
   | case36 =>
-      rename_i x hsame ih
-      intro hle t ht
-      simp only [typeOfE, if_pos hsame] at ht
-      simp only [Option.some.injEq] at ht
-      subst ht
-      have hx' : (typeOfE sigs Γ' x).isSome = Bool.true := by
-        cases hc : typeOfE sigs Γ x with
-        | none => rw [hc] at hsame; simp at hsame
-        | some sv =>
-            obtain ⟨sv', hsv', _⟩ := ih hle sv hc
-            rw [hsv']
-            rfl
-      exact ⟨[.anyValue .bool], by
-        simp only [typeOfE, if_pos hx'], slotLe_refl _⟩
+      rename_i x hnone ih
+      intro _ t ht
+      simp only [typeOfE] at ht
+      rw [if_neg hnone] at ht
+      exact absurd ht (by simp)
 
   | case37 =>
-      rename_i x hnone ih
-      intro _ t ht
-      simp only [typeOfE] at ht
-      rw [if_neg hnone] at ht
-      exact absurd ht (by simp)
+      rename_i x hsame ih
+      intro hle t ht
+      simp only [typeOfE, if_pos hsame] at ht
+      simp only [Option.some.injEq] at ht
+      subst ht
+      have hx' : (typeOfE sigs Γ' x).isSome = Bool.true := by
+        cases hc : typeOfE sigs Γ x with
+        | none => rw [hc] at hsame; simp at hsame
+        | some sv =>
+            obtain ⟨sv', hsv', _⟩ := ih hle sv hc
+            rw [hsv']
+            rfl
+      exact ⟨[.anyValue .bool], by
+        simp only [typeOfE, if_pos hx'], slotLe_refl _⟩
 
   | case38 =>
-      rename_i x hsame ih
-      intro hle t ht
-      simp only [typeOfE, if_pos hsame] at ht
-      simp only [Option.some.injEq] at ht
-      subst ht
-      have hx' : (typeOfE sigs Γ' x).isSome = Bool.true := by
-        cases hc : typeOfE sigs Γ x with
-        | none => rw [hc] at hsame; simp at hsame
-        | some sv =>
-            obtain ⟨sv', hsv', _⟩ := ih hle sv hc
-            rw [hsv']
-            rfl
-      exact ⟨[.anyValue .bool], by
-        simp only [typeOfE, if_pos hx'], slotLe_refl _⟩
+      rename_i x hnone ih
+      intro _ t ht
+      simp only [typeOfE] at ht
+      rw [if_neg hnone] at ht
+      exact absurd ht (by simp)
 
   | case39 =>
-      rename_i x hnone ih
-      intro _ t ht
-      simp only [typeOfE] at ht
-      rw [if_neg hnone] at ht
-      exact absurd ht (by simp)
-
-  | case40 =>
       rename_i x hsame ih
       intro hle t ht
       simp only [typeOfE, if_pos hsame] at ht
@@ -1395,14 +1378,37 @@ theorem typeOfE_cov (sigs : SigTable) (Γ' Γ : TyEnv) :
       exact ⟨[.anyValue .bool], by
         simp only [typeOfE, if_pos hx'], slotLe_refl _⟩
 
-  | case41 =>
+  | case40 =>
       rename_i x hnone ih
       intro _ t ht
       simp only [typeOfE] at ht
       rw [if_neg hnone] at ht
       exact absurd ht (by simp)
 
+  | case41 =>
+      rename_i x hsame ih
+      intro hle t ht
+      simp only [typeOfE, if_pos hsame] at ht
+      simp only [Option.some.injEq] at ht
+      subst ht
+      have hx' : (typeOfE sigs Γ' x).isSome = Bool.true := by
+        cases hc : typeOfE sigs Γ x with
+        | none => rw [hc] at hsame; simp at hsame
+        | some sv =>
+            obtain ⟨sv', hsv', _⟩ := ih hle sv hc
+            rw [hsv']
+            rfl
+      exact ⟨[.anyValue .bool], by
+        simp only [typeOfE, if_pos hx'], slotLe_refl _⟩
+
   | case42 =>
+      rename_i x hnone ih
+      intro _ t ht
+      simp only [typeOfE] at ht
+      rw [if_neg hnone] at ht
+      exact absurd ht (by simp)
+
+  | case43 =>
       rename_i b x hsame ih
       intro hle t ht
       simp only [typeOfE, if_pos hsame] at ht
@@ -1418,14 +1424,14 @@ theorem typeOfE_cov (sigs : SigTable) (Γ' Γ : TyEnv) :
       exact ⟨[.anyValue .bool], by
         simp only [typeOfE, if_pos hx'], slotLe_refl _⟩
 
-  | case43 =>
+  | case44 =>
       rename_i b x hnone ih
       intro _ t ht
       simp only [typeOfE] at ht
       rw [if_neg hnone] at ht
       exact absurd ht (by simp)
 
-  | case44 =>
+  | case45 =>
       rename_i s x hsame ih
       intro hle t ht
       simp only [typeOfE, if_pos hsame] at ht
@@ -1441,14 +1447,14 @@ theorem typeOfE_cov (sigs : SigTable) (Γ' Γ : TyEnv) :
       exact ⟨[.anyValue .bool], by
         simp only [typeOfE, if_pos hx'], slotLe_refl _⟩
 
-  | case45 =>
+  | case46 =>
       rename_i s x hnone ih
       intro _ t ht
       simp only [typeOfE] at ht
       rw [if_neg hnone] at ht
       exact absurd ht (by simp)
 
-  | case46 =>
+  | case47 =>
       rename_i x hsame ih
       intro hle t ht
       simp only [typeOfE, if_pos hsame] at ht
@@ -1463,15 +1469,15 @@ theorem typeOfE_cov (sigs : SigTable) (Γ' Γ : TyEnv) :
             rfl
       exact ⟨[.anyValue .bool], by
         simp only [typeOfE, if_pos hx'], slotLe_refl _⟩
-
-  | case47 =>
-      rename_i x hnone ih
-      intro _ t ht
-      simp only [typeOfE] at ht
-      rw [if_neg hnone] at ht
-      exact absurd ht (by simp)
 
   | case48 =>
+      rename_i x hnone ih
+      intro _ t ht
+      simp only [typeOfE] at ht
+      rw [if_neg hnone] at ht
+      exact absurd ht (by simp)
+
+  | case49 =>
       rename_i x hsame ih
       intro hle t ht
       simp only [typeOfE, if_pos hsame] at ht
@@ -1487,14 +1493,14 @@ theorem typeOfE_cov (sigs : SigTable) (Γ' Γ : TyEnv) :
       exact ⟨[.anyValue .bool], by
         simp only [typeOfE, if_pos hx'], slotLe_refl _⟩
 
-  | case49 =>
+  | case50 =>
       rename_i x hnone ih
       intro _ t ht
       simp only [typeOfE] at ht
       rw [if_neg hnone] at ht
       exact absurd ht (by simp)
 
-  | case50 =>
+  | case51 =>
       rename_i ty x hsame ih
       intro hle t ht
       simp only [typeOfE, if_pos hsame] at ht
@@ -1510,14 +1516,14 @@ theorem typeOfE_cov (sigs : SigTable) (Γ' Γ : TyEnv) :
       exact ⟨[.anyValue .bool], by
         simp only [typeOfE, if_pos hx'], slotLe_refl _⟩
 
-  | case51 =>
+  | case52 =>
       rename_i ty x hnone ih
       intro _ t ht
       simp only [typeOfE] at ht
       rw [if_neg hnone] at ht
       exact absurd ht (by simp)
 
-  | case52 =>
+  | case53 =>
       rename_i name x hsame ih
       intro hle t ht
       simp only [typeOfE, if_pos hsame] at ht
@@ -1533,7 +1539,7 @@ theorem typeOfE_cov (sigs : SigTable) (Γ' Γ : TyEnv) :
       exact ⟨[.anyValue .bool], by
         simp only [typeOfE, if_pos hx'], slotLe_refl _⟩
 
-  | case53 =>
+  | case54 =>
       rename_i name x hnone ih
       intro _ t ht
       simp only [typeOfE] at ht
@@ -2433,6 +2439,47 @@ theorem complNormals_empty_cov {t' t : Ty}
       rw [hnorm] at hx
       cases hx
 
+theorem complAtom_not_covered_bare {a' a : VTy}
+    (h : tmovesV a' a = Bool.true) (hba : isBareVTy a = Bool.true) :
+    isBareVTy a' = Bool.true := isBareVTy_of_cover hba h
+
+theorem complOnly_cons_elim {a : VTy} {rest : Ty}
+    (h : complOnly (a :: rest) = Bool.true) :
+    (∃ p, a = .complN p) ∨ a = .complT := by
+  simp only [complOnly, Bool.and_eq_true] at h
+  cases a with
+  | complN p => exact Or.inl ⟨p, rfl⟩
+  | complT => exact Or.inr rfl
+  | anyValue _ | isValue _ | desc _ | notPresent =>
+      exact absurd h.1 (by simp)
+
+theorem isBareVTy_of_bareSlot_mem : ∀ (t : Ty) (wt : Ty), bareSlot t = some wt →
+    ∀ (a : VTy), a ∈ t → isBareVTy a = Bool.true
+  | [], _, _, a, ha => by cases ha
+  | b :: rest, wt, hb, a, ha => by
+      cases hib : isBareVTy b with
+      | true =>
+          match List.mem_cons.mp ha with
+          | Or.inl he => rw [he]; exact hib
+          | Or.inr hr =>
+              simp only [bareSlot, hib, Bool.and_eq_true] at hb
+              cases hbs : bareSlot rest with
+              | none => rw [hbs] at hb; simp at hb
+              | some rs => exact isBareVTy_of_bareSlot_mem rest rs hbs a hr
+      | false =>
+          simp only [bareSlot, hib] at hb
+          exact absurd hb (by simp)
+
+theorem tmovesV_complN_bare_false : ∀ (a p : VTy), isBareVTy a = Bool.true →
+    tmovesV (.complN p) a = Bool.false
+  | .complN q, _, h => by
+      simp only [isBareVTy, Bool.false_eq_true] at h
+  | .complT, _, _ => rfl
+  | .anyValue _, _, _ => rfl
+  | .isValue _, _, _ => rfl
+  | .desc _, _, _ => rfl
+  | .notPresent, _, _ => rfl
+
 theorem step1_cov (sigs : SigTable) (i : Instr) :
     ∀ (w' w : World), worldLe w' w → ∀ ws, step1 sigs i w = some ws →
       ∃ ws', step1 sigs i w' = some ws' ∧
@@ -2568,22 +2615,98 @@ theorem step1_cov (sigs : SigTable) (i : Instr) :
                   | cons t' σr' =>
                       obtain ⟨hslot, hrest⟩ := hσ
                       simp only [step1] at hstep
-                      cases hb : bareSlot t with
-                      | none => simp only [hb] at hstep
-                                exact absurd hstep (by simp)
-                      | some wt =>
-                          simp only [hb, Option.map_some,
+                      cases hco : complOnly t with
+                      | true =>
+                          -- coarse: identity push of t. The refined
+                          -- slot inherits completion-purity, so the
+                          -- refined branch is identity too.
+                          have hco' : complOnly t' = Bool.true :=
+                            complOnly_of_compl
+                              (slotCompl_of_cover hslot (complOnly_compl hco))
+                          simp only [hco, hco', reduceIte,
                             Option.some.injEq] at hstep
                           subst hstep
-                          obtain ⟨hb', hslot2⟩ := bareSlot_cov hslot hb
-                          simp only [step1, hb', Option.map_some]
-                          refine ⟨(⟨Γ', t'.map VTy.complN :: σr'⟩ : World) :: [], rfl, ?_⟩
+                          simp only [step1, hco', reduceIte]
+                          refine ⟨(⟨Γ', t' :: σr'⟩ : World) :: [], rfl, ?_⟩
                           intro u' hu2
                           simp only [List.mem_singleton] at hu2
                           subst hu2
-                          exact ⟨⟨Γ, wt.map VTy.complN :: σr⟩,
-                            List.mem_singleton.mpr rfl, hΓ,
-                            ⟨hslot2, hrest⟩⟩
+                          exact ⟨⟨Γ, t :: σr⟩, List.mem_singleton.mpr rfl,
+                            hΓ, ⟨hslot, hrest⟩⟩
+                      | false =>
+                          -- coarse NOT compl-pure but accepted: the
+                          -- bareSlot branch fired, so t is pure-bare.
+                          -- A completion atom of t' would need a
+                          -- completion cover in t - impossible - so
+                          -- t' is pure-bare (false) or empty (true).
+                          simp only [hco, reduceIte] at hstep
+                          cases hb : bareSlot t with
+                          | none => simp only [hb] at hstep
+                                    exact absurd hstep (by simp)
+                          | some wt =>
+                              simp only [hb, Option.map_some,
+                                Option.some.injEq] at hstep
+                              obtain ⟨hb', hslot2⟩ := bareSlot_cov hslot hb
+                              cases hc2 : complOnly t' with
+                              | true =>
+                                  cases t' with
+                                  | nil =>
+                                      cases hstep
+                                      simp only [step1, hc2, reduceIte]
+                                      refine ⟨(⟨Γ', ([] : Ty) :: σr'⟩ : World) :: [], rfl, ?_⟩
+                                      intro u' hu2
+                                      simp only [List.mem_singleton] at hu2
+                                      subst hu2
+                                      exact ⟨⟨Γ, wt.map VTy.complN :: σr⟩,
+                                        List.mem_singleton.mpr rfl, hΓ,
+                                        ⟨hslot2, hrest⟩⟩
+                                  | cons a' rest' =>
+                                      exfalso
+                                      -- hc2: every atom of t' compl; a
+                                      -- completion atom can never be
+                                      -- covered by t's pure-bare atoms
+                                      cases hcp : a' with
+                                      | complN p =>
+                                          obtain ⟨a, ha, haa⟩ :=
+                                            tyLe_cov_atoms hslot.1
+                                              (.complN p)
+                                              (by rw [hcp]; exact List.mem_cons_self ..)
+                                          have hbar : isBareVTy a = Bool.true :=
+                                            isBareVTy_of_bareSlot_mem t wt hb a ha
+                                          rw [tmovesV_complN_bare_false a p
+                                            hbar] at haa
+                                          exact Bool.noConfusion haa
+                                      | complT =>
+                                          obtain ⟨a, ha, haa⟩ :=
+                                            tyLe_cov_atoms hslot.1 .complT
+                                              (by rw [hcp]; exact List.mem_cons_self ..)
+                                          have hbar : isBareVTy a = Bool.true :=
+                                            isBareVTy_of_bareSlot_mem t wt hb a ha
+                                          cases a with
+                                          | complT =>
+                                              simp [isBareVTy] at hbar
+                                          | complN q | anyValue _
+                                          | isValue _ | desc _ | notPresent =>
+                                              simp [tmovesV] at haa
+                                      | anyValue _ | isValue _ | desc _
+                                      | notPresent =>
+                                          have := complOnly_cons_elim hc2
+                                          exact absurd this (by
+                                            intro h
+                                            rcases h with ⟨p, hp⟩ | hp
+                                            · rw [hcp] at hp; simp at hp
+                                            · rw [hcp] at hp; simp at hp)
+                              | false =>
+                                  cases hstep
+                                  simp only [step1, hc2, reduceIte, hb',
+                                    Option.map_some]
+                                  refine ⟨(⟨Γ', t'.map VTy.complN :: σr'⟩ : World) :: [], rfl, ?_⟩
+                                  intro u' hu2
+                                  simp only [List.mem_singleton] at hu2
+                                  subst hu2
+                                  exact ⟨⟨Γ, wt.map VTy.complN :: σr⟩,
+                                    List.mem_singleton.mpr rfl, hΓ,
+                                    ⟨hslot2, hrest⟩⟩
           | pThrowC =>
               cases σ with
               | nil => exact absurd hstep (by simp [step1])
@@ -2604,7 +2727,7 @@ theorem step1_cov (sigs : SigTable) (i : Instr) :
           | pIsObj | pIsNotObj | pIsNotU | pHasCall | pHasCtor | pIsU
           | pIsTrue | pIsFalse | pNullOrUnd | pIsNull
           | pIsType _ | pHasField _ | pIsStr _ | pDescField _
-          | pUnwrapC | pIsNormalC | pIsThrowC | pPred _ _ =>
+          | pUnwrapC | pIsNormalC | pIsThrowC | pIsCompletion | pPred _ _ =>
               simp only [step1, hpt, Option.some.injEq] at hstep
               subst hstep
               refine ⟨(⟨Γ', σ'⟩ : World) :: [], by
@@ -2620,7 +2743,7 @@ theorem step1_cov (sigs : SigTable) (i : Instr) :
           | pIsObj | pIsNotObj | pIsNotU | pHasCall | pHasCtor | pIsU
           | pIsTrue | pIsFalse | pNullOrUnd | pIsNull
           | pIsType _ | pHasField _ | pIsStr _ | pDescField _
-          | pUnwrapC | pIsNormalC | pIsThrowC | pPred _ _ =>
+          | pUnwrapC | pIsNormalC | pIsThrowC | pIsCompletion | pPred _ _ =>
           cases σ with
           | nil => simp only [step1, hpt] at hstep
                    exact absurd hstep (by simp [popTy])
@@ -3027,21 +3150,27 @@ theorem checkSeq_exits (sigs : SigTable) (r : Ty) (w : World) (seq : List Instr)
     rw [checkSeq.eq_17] at h
     exact ih1 fb h hf
   case case22 =>
-    rename_i sigs r w ty x rest ih1
+    rename_i sigs r w x rest ih1
     intro fb h hf
     rw [checkSeq.eq_18] at h
     exact ih1 fb h hf
+
   case case23 =>
-    rename_i sigs r w nm x rest ih1
+    rename_i sigs r w ty x rest ih1
     intro fb h hf
     rw [checkSeq.eq_19] at h
     exact ih1 fb h hf
   case case24 =>
-    rename_i sigs r w b f x rest hfused ih1
+    rename_i sigs r w nm x rest ih1
     intro fb h hf
-    rw [checkSeq.eq_20, if_pos hfused] at h
+    rw [checkSeq.eq_20] at h
     exact ih1 fb h hf
   case case25 =>
+    rename_i sigs r w b f x rest hfused ih1
+    intro fb h hf
+    rw [checkSeq.eq_21, if_pos hfused] at h
+    exact ih1 fb h hf
+  case case26 =>
     rename_i sigs r w b f x rest hfused hty
     intro fb h hf
     simp only [checkSeq] at h
@@ -3050,7 +3179,7 @@ theorem checkSeq_exits (sigs : SigTable) (r : Ty) (w : World) (seq : List Instr)
     · rw [hty] at h
       dsimp only at h
       exact TCResult.noConfusion h
-  case case26 =>
+  case case27 =>
     rename_i sigs r w b f x rest hfused S hty ih1
     intro fb h hf
     simp only [checkSeq] at h
@@ -3059,7 +3188,7 @@ theorem checkSeq_exits (sigs : SigTable) (r : Ty) (w : World) (seq : List Instr)
     · rw [hty] at h
       dsimp only at h
       exact markThrow_exits h hf ih1
-  case case27 =>
+  case case28 =>
     rename_i sigs r w c body rest hempty ps hty hbool ih2 ih1
     intro fb h hf
     simp only [checkSeq, hempty, hty] at h
@@ -3094,19 +3223,19 @@ theorem checkSeq_exits (sigs : SigTable) (r : Ty) (w : World) (seq : List Instr)
                     simp
           · exact TCResult.noConfusion h
     · exact absurd hbool (by assumption)
-  case case28 =>
+  case case29 =>
     rename_i sigs r w c body rest hempty ps hty hnt
     intro fb h hf
     simp only [checkSeq, hempty, hty] at h
     split at h
     · next hcond => exact absurd hcond hnt
     · exact TCResult.noConfusion h
-  case case29 =>
+  case case30 =>
     rename_i sigs r w c body rest hempty hty
     intro fb h hf
     simp only [checkSeq, hempty, hty] at h
     exact TCResult.noConfusion h
-  case case30 =>
+  case case31 =>
     rename_i sigs r w c body rest hne
     intro fb h hf
     cases hσ : w.σ with
@@ -3114,82 +3243,82 @@ theorem checkSeq_exits (sigs : SigTable) (r : Ty) (w : World) (seq : List Instr)
     | cons a as =>
         simp only [checkSeq, hσ] at h
         exact TCResult.noConfusion h
-  case case31 =>
+  case case32 =>
     rename_i sigs r w ex rest hdisj hty
     intro fb h hf
     simp only [checkSeq, hty] at h
     exact TCResult.noConfusion h
-  case case32 =>
+  case case33 =>
     rename_i sigs r w ex rest hdisj S hty ih1
     intro fb h hf
     simp only [checkSeq, hty] at h
     exact markThrow_exits h hf ih1
-  case case33 =>
+  case case34 =>
     rename_i sigs r w x rest f b dec hdec ih1
     intro fb h hf
-    rw [checkSeq.eq_23, hdec] at h
+    rw [checkSeq.eq_24, hdec] at h
     exact forkTC_exits h hf ih1
-  case case34 =>
+  case case35 =>
     rename_i sigs r w x rest f b hdec hlook
     intro fb h hf
-    rw [checkSeq.eq_23, hdec, hlook] at h
+    rw [checkSeq.eq_24, hdec, hlook] at h
     dsimp only at h
     exact TCResult.noConfusion h
-  case case35 =>
+  case case36 =>
     rename_i sigs r w x rest f b hdec S hlook ih1
     intro fb h hf
-    rw [checkSeq.eq_23, hdec, hlook] at h
+    rw [checkSeq.eq_24, hdec, hlook] at h
     first
     | exact ih1 fb h hf
     | (dsimp only at h; exact ih1 fb h hf)
     | exact ih1 fb (by dsimp only at h; exact h) hf
-  case case36 =>
-    rename_i sigs r w x rest dec hdec ih1
-    intro fb h hf
-    rw [checkSeq.eq_24] at h
-    exact forkTC_exits h hf ih1
   case case37 =>
-    rename_i sigs r w x rest hdec hlook
-    intro fb h hf
-    exact absurd hlook (by simp [primDecide])
-  case case38 =>
-    rename_i sigs r w x rest hdec S hlook ih1
-    intro fb h hf
-    exact absurd hlook (by simp [primDecide])
-  case case39 =>
     rename_i sigs r w x rest dec hdec ih1
     intro fb h hf
     rw [checkSeq.eq_25] at h
     exact forkTC_exits h hf ih1
-  case case40 =>
+  case case38 =>
     rename_i sigs r w x rest hdec hlook
     intro fb h hf
     exact absurd hlook (by simp [primDecide])
-  case case41 =>
+  case case39 =>
     rename_i sigs r w x rest hdec S hlook ih1
     intro fb h hf
     exact absurd hlook (by simp [primDecide])
+  case case40 =>
+    rename_i sigs r w x rest dec hdec ih1
+    intro fb h hf
+    rw [checkSeq.eq_26] at h
+    exact forkTC_exits h hf ih1
+  case case41 =>
+    rename_i sigs r w x rest hdec hlook
+    intro fb h hf
+    exact absurd hlook (by simp [primDecide])
   case case42 =>
+    rename_i sigs r w x rest hdec S hlook ih1
+    intro fb h hf
+    exact absurd hlook (by simp [primDecide])
+  case case43 =>
     rename_i sigs r w x p rest ps hT hpred hn hc ih1
     intro fb h hf
     simp only [checkSeq, hpred, hn, hc, hT] at h
     exact forkTC_exits h hf ih1
-  case case43 =>
+  case case44 =>
     rename_i sigs r w x p rest hT hlook hpred hn hc
     intro fb h hf
     simp only [checkSeq, hpred, hn, hc, hT, hlook] at h
     exact TCResult.noConfusion h
-  case case44 =>
+  case case45 =>
     rename_i sigs r w x p rest hT S hlook hpred hn hc ih1
     intro fb h hf
     simp only [checkSeq, hpred, hn, hc, hT, hlook] at h
     exact ih1 fb h hf
-  case case45 =>
+  case case46 =>
     rename_i sigs r w c body rest hpop
     intro fb h hf
     simp only [checkSeq, hpop] at h
     exact TCResult.noConfusion h
-  case case46 =>
+  case case47 =>
     rename_i sigs r w c body rest hpop ih2 ih1
     intro fb h hf
     simp only [checkSeq, hpop] at h
@@ -3222,17 +3351,17 @@ theorem checkSeq_exits (sigs : SigTable) (r : Ty) (w : World) (seq : List Instr)
                   rw [fold_noFlows_exits ih1 _ fr hkf hfr (by simp [hfalls])]
                   simp
         · exact TCResult.noConfusion h
-  case case47 =>
+  case case48 =>
     rename_i sigs r w c body rest hd htl hpop
     intro fb h hf
     simp only [checkSeq, hpop] at h
     exact TCResult.noConfusion h
-  case case48 =>
+  case case49 =>
     rename_i sigs r w x body rest hpop
     intro fb h hf
     simp only [checkSeq, hpop] at h
     exact TCResult.noConfusion h
-  case case49 =>
+  case case50 =>
     rename_i sigs r w x body rest hpop ih2 ih1
     intro fb h hf
     simp only [checkSeq, hpop] at h
@@ -3265,12 +3394,12 @@ theorem checkSeq_exits (sigs : SigTable) (r : Ty) (w : World) (seq : List Instr)
                   rw [fold_noFlows_exits ih1 _ fr hkf hfr (by simp [hfalls])]
                   simp
         · exact TCResult.noConfusion h
-  case case50 =>
+  case case51 =>
     rename_i sigs r w x body rest hd htl hpop
     intro fb h hf
     simp only [checkSeq, hpop] at h
     exact TCResult.noConfusion h
-  case case51 =>
+  case case52 =>
     rename_i sigs r w x elems body rest hempty ih2 ih1
     intro fb h hf
     simp only [checkSeq, hempty] at h
@@ -3304,7 +3433,7 @@ theorem checkSeq_exits (sigs : SigTable) (r : Ty) (w : World) (seq : List Instr)
                   rw [fold_noFlows_exits ih1 _ fr hkf hfr (by simp [hfalls])]
                   simp
         · exact TCResult.noConfusion h
-  case case52 =>
+  case case53 =>
     rename_i sigs r w x elems body rest hne
     intro fb h hf
     cases hσ : w.σ with
@@ -3312,12 +3441,12 @@ theorem checkSeq_exits (sigs : SigTable) (r : Ty) (w : World) (seq : List Instr)
     | cons a as =>
         simp only [checkSeq, hσ] at h
         exact TCResult.noConfusion h
-  case case53 =>
+  case case54 =>
     rename_i sigs r w rest hσ
     intro fb h hf
     simp only [checkSeq, hσ] at h
     exact TCResult.noConfusion h
-  case case54 =>
+  case case55 =>
     rename_i sigs r w rest ts σ' hσ ih1
     intro fb h hf
     simp only [checkSeq, hσ] at h
@@ -3326,12 +3455,12 @@ theorem checkSeq_exits (sigs : SigTable) (r : Ty) (w : World) (seq : List Instr)
     have hinj := TCResult.flows.inj h
     subst hinj
     rfl
-  case case55 =>
+  case case56 =>
     rename_i sigs r w i rest hdisj hstep
     intro fb h hf
     simp only [checkSeq, hstep] at h
     exact TCResult.noConfusion h
-  case case56 =>
+  case case57 =>
     rename_i sigs r w i rest hdisj ws' hstep ih1
     intro fb h hf
     simp only [checkSeq, hstep] at h
@@ -3368,8 +3497,17 @@ theorem checkSeq_pWrapC {sigs : SigTable} {r : Ty} {W : World} {v : JSValue}
     (hbar : isBareVTy (typeOfV v) = Bool.true) :
     checkSeq sigs r W (.kPrim1 .pWrapC :: rest)
       = checkSeq sigs r { W with σ := [VTy.complN (typeOfV v)] :: σ' } rest := by
-  simp only [checkSeq, step1, hσ, bareSlot, hbar, Option.map_some, List.map,
-    forkTC, List.foldl, mergeTC_noFlows]
+  have hco : complOnly [typeOfV v] = Bool.false := by
+    cases hv : typeOfV v with
+    | complN p | complT =>
+        rw [hv] at hbar
+        simp [isBareVTy] at hbar
+    | anyValue _ | isValue _ | desc _ | notPresent =>
+        simp only [complOnly, hv, Bool.false_and, Bool.and_false]
+  have hn : ¬(Bool.false = Bool.true) := by simp
+  simp only [checkSeq, step1, hσ, hco, if_neg hn,
+    bareSlot, hbar, Option.map_some, List.map, forkTC, List.foldl,
+    mergeTC_noFlows]
 
 theorem checkSeq_pThrowC {sigs : SigTable} {r : Ty} {W : World} {v : JSValue}
     {σ' : List Ty} {rest : List Instr} (hσ : W.σ = [typeOfV v] :: σ') :

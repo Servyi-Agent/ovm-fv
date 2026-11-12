@@ -11,16 +11,22 @@ import html, os, re, sys
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SPEC_HTML = "/tmp/opencode/spec/spec.html"
 CASES = {
-    "sec-iscallable":    "spec/6/2/5/1/spec.lean",
-    "sec-isconstructor": "spec/6/2/5/2/spec.lean",
-    "sec-toprimitive":   "spec/7/1/1/spec.lean",
-    "sec-getmethod":     "spec/7/3/10/spec.lean",
-    "sec-ordinaryget":   "spec/7/3/2/spec.lean",
-    "sec-toobject":      "spec/7/1/13/spec.lean",
-    "sec-getv":          "spec/7/3/1/spec.lean",
-    "sec-ordinarytoprimitive": "spec/7/1/1/1/spec.lean",
+    "sec-completion-ao": "spec/5/2/4/1/spec.lean",
+    "sec-requireobjectcoercible": "spec/7/2/1/spec.lean",
+    "sec-iscallable":    "spec/7/2/3/spec.lean",
+    "sec-isconstructor": "spec/7/2/4/spec.lean",
     "sec-isdatadescriptor": "spec/6/2/6/2/spec.lean",
-    "sec-isaccessordescriptor": "spec/6/2/6/3/spec.lean",
+    "sec-isaccessordescriptor": "spec/6/2/6/1/spec.lean",
+    "sec-isgenericdescriptor": "spec/6/2/6/3/spec.lean",
+    "sec-toprimitive":   "spec/7/1/1/spec.lean",
+    "sec-ordinarytoprimitive": "spec/7/1/1/1/spec.lean",
+    "sec-tonumeric":     "spec/7/1/3/spec.lean",
+    "sec-tostring":      "spec/7/1/19/spec.lean",
+    "sec-toobject":      "spec/7/1/20/spec.lean",
+    "sec-topropertykey": "spec/7/1/21/spec.lean",
+    "sec-getv":          "spec/7/3/3/spec.lean",
+    "sec-getmethod":     "spec/7/3/10/spec.lean",
+    "sec-ordinaryget":   "spec/10/1/8/1/spec.lean",
 }
 MARKERS = ["1.", "a.", "i.", "1.", "a."]
 
@@ -59,10 +65,14 @@ def spec_alg(clause_id):
     return lines
 
 # Documented deviations (text-equality exceptions):
-# 1. zero-arg MOP calls `x.[[M]]()` -> field-read form (grammar can't
-#    pattern-match empty parens)
+# 1. 7.2.1 RequireObjectCoercible: `Return unused.` -> `Return
+#    undefined.` — no `unused` value in this universe
+# 2. 7.1.19 ToString: Number::toString / BigInt::toString written as
+#    guillemet idents («…») — Lean idents cannot contain `::`
 DEVIATIONS = [
-    ("sec-ordinaryget", ".[[GetPrototypeOf]]().", ".[[GetPrototypeOf]]."),
+    ("sec-requireobjectcoercible", "Returnunused.", "Returnundefined."),
+    ("sec-tostring", "Number::toString(", "«Number::toString»("),
+    ("sec-tostring", "BigInt::toString(", "«BigInt::toString»("),
 ]
 
 def apply_deviations(cid: str, step) -> tuple:

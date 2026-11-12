@@ -7,7 +7,7 @@ jobs:
       - uses: actions/checkout@v4
       - name: install elan
         run: |
-          curl -sSfL https://elan.lean-lang.org/elan_init.sh | sh -s -- -y
+          curl -sSfL https://elan.lean-lang.org/elan-init.sh | sh -s -- -y
           echo "$HOME/.elan/bin" >> "$GITHUB_PATH"
       - run: specs/tools/check.sh
   verus-lookup-walk:
