@@ -1,14 +1,18 @@
 import metalanguage
 
-/- ES 6.2.6.3 IsAccessorDescriptor ( Desc ) - text-equal. -/
+/- ES 6.2.6.3 IsGenericDescriptor ( propertyDesc ) - text-equal.
+   Both calls are registry entries; the `is true` correlated
+   predicate tests split exact desc atoms and duplicate coarse ones
+   (splitWorldsP machinery, exercised here by a registry body for the
+   first time). -/
 
-def isAccessorDescriptor6_2_6_3 : List FStep := [alg|
-  1. If propertyDesc has a [[Getter]] field, return true.
-  2. If propertyDesc has a [[Setter]] field, return true.
-  3. Return false.
+def isGenericDescriptor6_2_6_3 : List FStep := [alg|
+  1. If IsAccessorDescriptor(propertyDesc) is true, return false.
+  2. If IsDataDescriptor(propertyDesc) is true, return false.
+  3. Return true.
 ]
 
-def AO_IsAccessorDescriptor : AOReg :=
-  [("IsAccessorDescriptor", (["propertyDesc"], build isAccessorDescriptor6_2_6_3))]
+def AO_IsGenericDescriptor : AOReg :=
+  [("IsGenericDescriptor", (["propertyDesc"], build isGenericDescriptor6_2_6_3))]
 
-#eval checkRun (renest isAccessorDescriptor6_2_6_3)
+#eval checkRun (renest isGenericDescriptor6_2_6_3)

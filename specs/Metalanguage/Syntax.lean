@@ -61,6 +61,7 @@ syntax "null" : isTail
 syntax "string" : isTail
 syntax "number" : isTail
 syntax "a" "normal" "completion" : isTail
+syntax "a" "Completion" "Record" : isTail
 syntax "a" "throw" "completion" : isTail
 syntax algExpr "has" "a" "[[Call]]" "internal" "method" : algExpr
 syntax algExpr "has" "a" "[[Construct]]" "internal" "method" : algExpr
@@ -91,6 +92,11 @@ syntax aoName "(" callArgs ")" : algExpr
    the sole zero-arg case, [[GetPrototypeOf]], is written in field-read
    form — documented deviation at each transcription site. -/
 syntax algExpr ".[[" aoName "]" "]" "(" callArgs ")" : algExpr
+/- Zero-arg internal-method call obj.[[M]](): dedicated production
+   (empty parens cannot pattern-match as callArgs) so the machine
+   DISPATCHES the zero-arg MOP - the field-read fallback returned
+   undefined at runtime. -/
+syntax algExpr ".[[" aoName "]" "]" "(" ")" : algExpr
 /- Record field read: desc.[[Value]]. -/
 syntax algExpr ".[[" aoName "]" "]" : algExpr
 
@@ -137,6 +143,12 @@ syntax kwLet var "be" "?" algExpr "." : stmt
 syntax kwLet var "be" algExpr "." : stmt
 syntax kwReturn algExpr "." : stmt
 syntax kwReturn "?" algExpr "." : stmt
+/- `Return ! X` — the abruptness-asserted return: elaborates exactly
+   like `Return ? X` in this model; the never-abrupt claim is a
+   proof obligation we record as a deviation at transcription sites
+   (the checker's judgement already carries throw when the callee
+   can throw). -/
+syntax kwReturn "!" algExpr "." : stmt
 syntax kwThrow "." : stmt
 syntax kwThrow "a" "TypeError" "exception" "." : stmt
 syntax kwAssert ":" algExpr "." : stmt
@@ -215,6 +227,14 @@ def sciNat (n : TSyntax `scientific) : Nat :=
 
 /- « "a", "b" » literals: the macro encodes the elements as one
    unit-separated string; this decodes at runtime. -/
+open Lean in
+def stripGuillemets (s : «String») : «String» :=
+  let cs := s.toList
+  if cs.length ≥ 2 && cs.head? == some '«'
+      && cs.getLast? == some '»' then
+    «String».mk (cs.drop 1).dropLast
+  else s
+
 open Lean in
 def aoNameOf (x : TSyntax `aoName) : «String» :=
   let inner (w : Lean.Syntax) : «String» :=
@@ -329,6 +349,8 @@ macro_rules
   | `([e| $s:str]) => ``(Expr.const (JSValue.str $s))
   | `([e| $r:algExpr .[[ $m:aoName ] ] ( $as:callArgs )]) =>
       ``(Expr.imeth $(quote (aoNameOf m)) [e| $r] [ca| $as])
+  | `([e| $r:algExpr .[[ $m:aoName ] ] ( )]) =>
+      ``(Expr.imeth $(quote (aoNameOf m)) [e| $r] [])
   | `([e| $r:algExpr .[[ $m:aoName ] ]]) =>
       ``(Expr.ifield $(quote (aoNameOf m)) [e| $r])
   | `([e| ~ string ~]) => ``(Expr.const (JSValue.str "string"))
@@ -351,6 +373,7 @@ macro_rules
       ``(Expr.hasField $(quote (aoNameOf m)) [e| $e])
   | `([e| $e:algExpr is a normal completion]) => ``(Expr.isNormalC [e| $e])
   | `([e| $e:algExpr is a throw completion]) => ``(Expr.isThrowC [e| $e])
+  | `([e| $e:algExpr is a Completion Record]) => ``(Expr.isCompletion [e| $e])
   | `([e| Completion ( $e:algExpr )]) => ``(Expr.completionOf [e| $e])
   | `([e| $e:algExpr is an Object]) => ``(Expr.isObject [e| $e])
   | `([e| $e:algExpr is a Boolean]) => ``(Expr.isType "Boolean" [e| $e])
@@ -389,6 +412,8 @@ macro_rules
       ``(FBody.letE $(quote (varName x)) [e| $e])
   | `([s| $_l:kwLet $x:var be $e:algExpr .]) =>
       ``(FBody.letE $(quote (varName x)) [e| $e])
+  | `([s| $_r:kwReturn ! $e:algExpr .]) =>
+      ``(FBody.retE [e| $e])
   | `([s| $_r:kwReturn ? $e:algExpr .]) =>
       ``(FBody.retE [e| $e])
   | `([s| $_r:kwReturn a new $_t:typeName object whose [ [ $s:aoName ] ]

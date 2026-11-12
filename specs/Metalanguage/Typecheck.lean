@@ -270,6 +270,10 @@ def primDecide : Prim → Option (VTy → Option Bool)
         | .complN _ => some Bool.false
         | .complT => some Bool.true
         | _ => none)
+  | .pIsCompletion =>
+      some (fun t => match t with
+        | .complN _ | .complT => some Bool.true
+        | _ => none)
   | _ => none
 
 /-- complN-only slot -> payload atoms (none if mixed/bare). -/
@@ -295,7 +299,7 @@ def typeOfE (sigs : SigTable) (Γ : TyEnv) : Expr → Option Ty
   | .nat n => some [.isValue (.number ↑n)]
   | .const v => some [typeOfV v]
   | .varNotPresent _ => some [.anyValue .bool]
-  | .isNormalC _ | .isThrowC _ => some [.anyValue .bool]
+  | .isNormalC _ | .isThrowC _ | .isCompletion _ => some [.anyValue .bool]
   | .complValue e =>
       match typeOfE sigs Γ e with
       | some t => payloadOf t
@@ -403,7 +407,8 @@ def exprCanThrow (sigs : SigTable) : Expr → Bool
   | .isObject e | .isNotObject e | .isNotUndefined e | .hasCall e
   | .hasCtor e | .isU e | .isBoolVal _ e | .isStrVal _ e
   | .isNullOrUnd e | .isNull e | .isType _ e | .hasField _ e
-  | .isNormalC e | .isThrowC e | .complValue e | .completionOf e =>
+  | .isNormalC e | .isThrowC e | .isCompletion e | .complValue e
+  | .completionOf e =>
       exprCanThrow sigs e
   | .listE es => exprsCanThrow sigs es
   | _ => Bool.false
@@ -451,7 +456,7 @@ def primTys (p : Prim) : Option (Ty × Ty) :=
   | .pThrowC => none                     -- t ↦ throw completion, inline
   | .pWrapC => none                      -- t ↦ complN t, inline
   | .pUnwrapC => none                    -- complN t ↦ t, inline (typeOfE .complValue)
-  | .pIsNormalC | .pIsThrowC => none     -- correlated split, inline
+  | .pIsNormalC | .pIsThrowC | .pIsCompletion => none  -- correlated split, inline
   | .pIsObj | .pIsNotObj | .pIsNotU | .pHasCall | .pHasCtor | .pIsU
   | .pIsTrue | .pIsFalse | .pNullOrUnd | .pIsNull
   | .pIsType _ | .pHasField _ | .pIsStr _ => some (anyT, [.anyValue .bool])
@@ -523,8 +528,8 @@ def efuel : Expr → Nat
   | .isObject e | .isNotObject e | .isNotUndefined e | .hasCall e
   | .hasCtor e | .isU e | .isBoolVal _ e | .isStrVal _ e
   | .isNullOrUnd e | .isNull e | .isType _ e | .hasField _ e
-  | .isNormalC e | .isThrowC e | .complValue e | .completionOf e
-  | .ifield _ e => efuel e + 1
+  | .isNormalC e | .isThrowC e | .isCompletion e | .complValue e
+  | .completionOf e | .ifield _ e => efuel e + 1
   | .call _ as => (as.map efuel).sum + 2
   | .imeth _ r as => efuel r + (as.map efuel).sum + 2
   | .listE es => (es.map efuel).sum + 2
@@ -639,8 +644,15 @@ def bareSlot : Ty → Option Ty
 def step1 (sigs : SigTable) (i : Instr) (w : World) : Option Worlds :=
   match i with
   | .kPrim1 .pWrapC =>
+      -- wrap-IF-BARE (machine-aligned: a completion flows through
+      -- unchanged; a bare value gets a fresh normal completion).
+      -- compl-pure slots: identity; bare-only slots: complN-wrap;
+      -- mixed: reject (machine-visible ambiguity, never pushed).
       match w.σ with
-      | t :: σ' => (bareSlot t).map (fun wt => [{ w with σ := wt.map VTy.complN :: σ' }])
+      | t :: σ' =>
+          if complOnly t then some [{ w with σ := t :: σ' }]
+          else (bareSlot t).map (fun wt =>
+            [{ w with σ := wt.map VTy.complN :: σ' }])
       | [] => none
   | .kPrim1 .pThrowC =>
       match w.σ with
@@ -893,6 +905,8 @@ def checkSeq : SigTable → Ty → World → List Instr → TCResult
       checkSeq sigs r w (.kTestVar x .pIsNormalC :: rest)
   | sigs, r, w, .kEval (.isThrowC (.nv x)) :: rest =>
       checkSeq sigs r w (.kTestVar x .pIsThrowC :: rest)
+  | sigs, r, w, .kEval (.isCompletion (.nv x)) :: rest =>
+      checkSeq sigs r w (.kTestVar x .pIsCompletion :: rest)
   | sigs, r, w, .kEval (.isType ty (.nv x)) :: rest =>
       checkSeq sigs r w (.kTestVar x (.pIsType ty) :: rest)
   | sigs, r, w, .kEval (.hasField nm (.nv x)) :: rest =>

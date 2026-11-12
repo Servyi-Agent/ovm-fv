@@ -191,6 +191,11 @@ mutual
         match revExpr reg n e env heap nl with
         | .ok v heap' nl' => .ok (applyPrim heap' (.pIsType ty) v) heap' nl'
         | r => r
+    | n, .isCompletion e, env, heap, nl =>
+        match revExpr reg n e env heap nl with
+        | .ok (.compl _ _) heap' nl' => .ok (.boolean Bool.true) heap' nl'
+        | .ok _ heap' nl' => .ok (.boolean Bool.false) heap' nl'
+        | r => r
     | n, .isNormalC e, env, heap, nl =>
         match revExpr reg n e env heap nl with
         | .ok (.compl Bool.false _) heap' nl' => .ok (.boolean Bool.true) heap' nl'

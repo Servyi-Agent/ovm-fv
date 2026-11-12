@@ -1,8 +1,9 @@
 import metalanguage
 
-/- ES 7.1.13 ToObject ( argument ) - text-equal. -/
+/- ES 7.1.20 ToObject ( argument ) - text-equal.
+   Renumbered from 7/1/13 (this draft's coordinates). -/
 
-def toObject7_1_13 : List FStep := [alg|
+def toObject7_1_20 : List FStep := [alg|
   1. If arg is either undefined or null, throw a TypeError exception.
   2. If arg is a Boolean, return a new Boolean object whose [[BooleanData]] internal slot is set to arg.
   3. If arg is a Number, return a new Number object whose [[NumberData]] internal slot is set to arg.
@@ -14,6 +15,6 @@ def toObject7_1_13 : List FStep := [alg|
 ]
 
 def AO_ToObject : AOReg :=
-  [("ToObject", (["arg"], build toObject7_1_13))]
+  [("ToObject", (["arg"], build toObject7_1_20))]
 
-#eval checkRun (renest toObject7_1_13)
+#eval checkRun (renest toObject7_1_20)

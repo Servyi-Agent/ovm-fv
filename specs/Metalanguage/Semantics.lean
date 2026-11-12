@@ -128,10 +128,13 @@ def applyPrim (h : Heap) : Prim → JSValue → JSValue
   | .pIsFalse, v => .boolean (v == .boolean Bool.false)
   | .pIsStr s, v => .boolean (v == .str s)
   | .pNullOrUnd, v => .boolean (isUndV v || isNullV v)
-  | .pWrapC, v => .compl Bool.false v
+  | .pWrapC, v => match v with
+    | .compl _ _ => v          -- already a completion: unchanged (Return of a completion)
+    | v => .compl Bool.false v -- bare: wrap into a fresh normal completion
   | .pThrowC, v => .compl Bool.true v
   | .pIsNull, v => .boolean (isNullV v)
   | .pIsNormalC, v => .boolean (match v with | .compl Bool.false _ => Bool.true | _ => Bool.false)
+  | .pIsCompletion, v => .boolean (match v with | .compl _ _ => Bool.true | _ => Bool.false)
   | .pIsThrowC, v => .boolean (match v with | .compl Bool.true _ => Bool.true | _ => Bool.false)
   | .pUnwrapC, v => match v with | .compl Bool.false w => w | _ => v
   | .pPred f b, v =>
@@ -237,6 +240,10 @@ def evalE2 (h : Heap) (env : Env) : Expr → Option JSValue
   | .isNormalC e =>
       match evalE2 h env e with
       | some v => some (applyPrim h .pIsNormalC v)
+      | none => none
+  | .isCompletion e =>
+      match evalE2 h env e with
+      | some v => some (applyPrim h .pIsCompletion v)
       | none => none
   | .isThrowC e =>
       match evalE2 h env e with
@@ -472,6 +479,8 @@ def fstep (reg : AOReg) : FM → FM
         done (⟨.kEval e :: .kPrim1 (.pHasField nm) :: rest, f.env, f.eval, f.ret⟩ :: fs)
     | .kEval (.isNormalC e) :: rest, _, _ =>
         done (⟨.kEval e :: .kPrim1 .pIsNormalC :: rest, f.env, f.eval, f.ret⟩ :: fs)
+    | .kEval (.isCompletion e) :: rest, _, _ =>
+        done (⟨.kEval e :: .kPrim1 .pIsCompletion :: rest, f.env, f.eval, f.ret⟩ :: fs)
     | .kEval (.isThrowC e) :: rest, _, _ =>
         done (⟨.kEval e :: .kPrim1 .pIsThrowC :: rest, f.env, f.eval, f.ret⟩ :: fs)
     | .kEval (.complValue e) :: rest, _, _ =>

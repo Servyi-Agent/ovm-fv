@@ -544,6 +544,7 @@ inductive Expr where
      completion is an ordinary value; these test its kind and
      convert between the completion and bare layers. -/
   | isNormalC (e : Expr)     -- "e is a normal completion"
+  | isCompletion (e : Expr)  -- "e is a Completion Record" (either kind)
   | isThrowC (e : Expr)      -- "e is a throw completion"
   | complValue (e : Expr)    -- e.[[Value]] (normal only)
   | completionOf (e : Expr)  -- Completion(e) (bare only)
@@ -710,6 +711,7 @@ inductive Prim where              -- bedrock predicates (the axiom stratum)
   | pIsStr (s : «String»)
   | pPred (f : «String») (b : Bool)   -- correlated AO predicate (IsDataDescriptor(x) is b)
   | pIsNormalC                        -- v is a normal completion
+  | pIsCompletion                     -- v is a Completion Record (either kind)
   | pIsThrowC                         -- v is a throw completion
   | pUnwrapC                          -- complN v -> v (loud on throw)
   deriving Repr

@@ -5,10 +5,10 @@ import metalanguage
    grammar cannot pattern-match (empty parens); written in field-read
    form — the machine treats the field name as the zero-arg MOP call. -/
 
-def ordinaryGet7_3_2 : List FStep := [alg|
+def ordinaryGet10_1_8_1 : List FStep := [alg|
   1. Let propertyDesc be ? obj.[[GetOwnProperty]](propertyKey).
   2. If propertyDesc is undefined, then
-    ┊ a. Let parent be ? obj.[[GetPrototypeOf]].
+    ┊ a. Let parent be ? obj.[[GetPrototypeOf]]().
     ┊ b. If parent is null, return undefined.
     ┊ c. Return ? parent.[[Get]](propertyKey, receiver).
   3. If IsDataDescriptor(propertyDesc) is true, return propertyDesc.[[Value]].
@@ -19,6 +19,6 @@ def ordinaryGet7_3_2 : List FStep := [alg|
 ]
 
 def AO_OrdinaryGet : AOReg :=
-  [("OrdinaryGet", (["obj", "propertyKey", "receiver"], build ordinaryGet7_3_2))]
+  [("OrdinaryGet", (["obj", "propertyKey", "receiver"], build ordinaryGet10_1_8_1))]
 
-#eval checkRun (renest ordinaryGet7_3_2)
+#eval checkRun (renest ordinaryGet10_1_8_1)
