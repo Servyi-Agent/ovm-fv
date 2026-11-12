@@ -239,10 +239,10 @@ def sigWf : SigTable → Bool := fun sigs =>
         | _ => Bool.true)))
 #eval sigWf corpusSigs
 example : sigWf corpusSigs = Bool.true := by native_decide
--- ToString is the ONE corpus AO that does not yet certify (see the
--- bool-puncture finding above); everything else certifies clean.
-example : (typecheckReg corpusSigs theReg).map Prod.fst
-    = some "ToString" := by native_decide
+-- ToString certified via the boolean puncture (removeAtom: the
+-- bool class punctures into the complementary singleton verdict).
+example : typecheckRegOk corpusSigs theReg = Bool.true := by
+  native_decide
 
 -- per-AO: certificate AND assumption-freedom — a nonzero debt must
 -- fail the gate loudly, not just certify-with-debt invisibly.
@@ -319,7 +319,7 @@ example : assumesOf corpusSigs "ToPropertyKey" ["arg"]
 -- FINDING for review (their branch tightens ToPrimitive to
 -- langV-minus-cObj; our corpus keeps langT).
 example : assumesOf corpusSigs "ToString" ["arg"]
-    (compileSteps (build toString7_1_19)) = 999 := by native_decide
+    (compileSteps (build toString7_1_19)) = 0 := by native_decide
 -- the demos typecheck as frames (Γ = params, or empty for top-level)
 #eval typecheckSeq corpusSigs (liftC langT) [("input", langT), ("propertyKey", [.anyValue .str])] (compileSteps (build lookupDemoF))
 #eval typecheckSeq corpusSigs (liftC langT) [("input", langT), ("propertyKey", [.anyValue .str])] (compileSteps (build getMethodDemoF))

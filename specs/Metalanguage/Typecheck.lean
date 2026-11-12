@@ -145,11 +145,32 @@ def meetTy (S T : Ty) : Ty :=
     | some m => [m]
     | none => []))
 
-/-- Difference. On this lattice a − b is empty exactly when a ⊑ b
-    (classes cannot be punctured by singletons), so removal is
-    filtration by ¬(a ⊑ b). -/
+/-- Atom difference: filtration by ¬(a ⊑ T) - EXCEPT the boolean
+    class, which PUNCTURES: any-bool − is-true = is-false (and vice
+    versa). Booleans are the one class whose singleton-complement is
+    a finite union of atoms (both inhabitants are singleton atoms),
+    so `If x is true ... If x is false ...` chains (ToString 5-6)
+    exhaust the class instead of leaking any-bool into later
+    asserts. The tests are match-predicates (case-bash-invertible;
+    no BEq in proofs). -/
+def isBoolSing (b : Bool) (c : VTy) : Bool :=
+  match c with | .isValue (.boolean b') => b == b' | _ => Bool.false
+
+def isBoolClass (c : VTy) : Bool :=
+  match c with | .anyValue .bool => Bool.true | _ => Bool.false
+
+def removeAtom (a : VTy) (T : Ty) : Ty :=
+  if T.any (fun b => tmovesV a b) then []
+  else if isBoolClass a then
+    if T.any (isBoolSing Bool.true) && T.any (isBoolSing Bool.false) then []
+    else if T.any (isBoolSing Bool.true) then [.isValue (.boolean Bool.false)]
+    else if T.any (isBoolSing Bool.false) then [.isValue (.boolean Bool.true)]
+    else [.anyValue .bool]
+  else [a]
+
+/-- Difference: per-atom removal (see removeAtom). -/
 def removeTy (S T : Ty) : Ty :=
-  S.filter (fun a => !T.any (fun b => tmovesV a b))
+  S.flatMap (fun a => removeAtom a T)
 
 /- ## Signature tables
 

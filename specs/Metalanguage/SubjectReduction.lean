@@ -762,74 +762,260 @@ theorem isObject_result_le (r : Ty)
       | inl h => subst h; unfold tyLe tmoves; simp [tmovesV, tagOf]
       | inr h => subst h; exact tmoves_refl _
 
-theorem removeTy_nil_imp {t T : Ty} (hr : removeTy t T = []) :
+/- removeTy lemmas for the punctured difference (removeAtom).
+
+    The boolean puncture only fires when T carries a boolean
+    SINGLETON; when it does not (every corpus split site tests
+    object/string/undefined/... types), removeTy is the plain filter
+    and the old reasoning applies via removeTy_noBool. -/
+
+theorem isBoolSing_inv {c : VTy} {b : Bool}
+    (h : isBoolSing b c = Bool.true) : c = .isValue (.boolean b) := by
+  cases c with
+  | isValue v =>
+      cases v with
+      | boolean b2 => cases b2 <;> simp only [isBoolSing] at h <;> simp_all
+      | undefined | null | number _ | str _ | obj _
+      | listV _ | descV _ | compl _ _ => simp [isBoolSing] at h
+  | complN p | complT | anyValue _ | desc _ | notPresent =>
+      simp [isBoolSing] at h
+theorem isBoolClass_inv {c : VTy}
+    (h : isBoolClass c = Bool.true) : c = .anyValue .bool := by
+  cases c with
+  | anyValue c2 =>
+      cases c2 with
+      | bool => rfl
+      | undef | null | num | str | obj | list | desc => simp [isBoolClass] at h
+  | complN p | complT | isValue _ | desc _ | notPresent =>
+      simp [isBoolClass] at h
+theorem isBoolClass_reduce :
+    isBoolClass (.anyValue .bool) = Bool.true := rfl
+
+theorem T_has_sing (T : Ty) (b : Bool)
+    (h : T.any (isBoolSing b) = Bool.true) :
+    (.isValue (.boolean b)) ∈ T := by
+  obtain ⟨c, hc, hcc⟩ := List.any_eq_true.mp h
+  exact (isBoolSing_inv hcc) ▸ hc
+
+theorem removeAtom_noBool {a : VTy} {T : Ty}
+    (hnb : ∀ b ∈ T, (match b with
+      | .isValue (.boolean _) => False | _ => True)) :
+    removeAtom a T
+      = (if T.any (fun b => tmovesV a b) then ([] : Ty) else [a]) := by
+  unfold removeAtom
+  cases hf : T.any (fun b => tmovesV a b) with
+  | true => rfl
+  | false =>
+      cases hbl : isBoolClass a with
+      | true =>
+          have h1 : T.any (isBoolSing Bool.true) = Bool.false := by
+            cases h : T.any (isBoolSing Bool.true) with
+            | true =>
+                exfalso
+                obtain ⟨c, hc, hcc⟩ := List.any_eq_true.mp h
+                have hmem : (.isValue (.boolean Bool.true)) ∈ T :=
+                  (isBoolSing_inv hcc) ▸ hc
+                exact hnb _ hmem
+            | false => rfl
+          have h2 : T.any (isBoolSing Bool.false) = Bool.false := by
+            cases h : T.any (isBoolSing Bool.false) with
+            | true =>
+                exfalso
+                obtain ⟨c, hc, hcc⟩ := List.any_eq_true.mp h
+                have hmem : (.isValue (.boolean Bool.false)) ∈ T :=
+                  (isBoolSing_inv hcc) ▸ hc
+                exact hnb _ hmem
+            | false => rfl
+          rw [h1, h2, isBoolClass_inv hbl]
+          rfl
+      | false => rfl
+theorem removeTy_noBool {S T : Ty}
+    (hnb : ∀ b ∈ T, (match b with
+      | .isValue (.boolean _) => False | _ => True)) :
+    removeTy S T
+      = S.filter (fun a => !T.any (fun b => tmovesV a b)) := by
+  induction S with
+  | nil => rfl
+  | cons a rest ih =>
+      simp only [removeTy, List.flatMap_cons]
+      rw [removeAtom_noBool hnb]
+      cases h : T.any (fun b => tmovesV a b) with
+  | true =>
+      show ([] : Ty) ++ List.flatMap (fun a => removeAtom a T) rest = _
+      rw [show List.flatMap (fun a => removeAtom a T) rest = removeTy rest T from rfl, ih]
+      simp only [List.nil_append, List.filter, h, Bool.not_true, reduceIte]
+  | false =>
+      show [a] ++ List.flatMap (fun a => removeAtom a T) rest = _
+      rw [show List.flatMap (fun a => removeAtom a T) rest = removeTy rest T from rfl, ih]
+      rw [List.filter_cons_of_pos (by simp [h])]
+      rfl
+
+
+theorem removeTy_nil_imp {t T : Ty}
+    (hnb : ∀ b ∈ T, (match b with
+      | .isValue (.boolean _) => False | _ => True))
+    (hr : removeTy t T = []) :
     tmoves t T = Bool.true := by
+  rw [removeTy_noBool hnb] at hr
   unfold tmoves
   simp only [List.all_eq_true]
   intro a ha
-  have hni : a ∉ removeTy t T := by
+  have hni : a ∉ List.filter (fun a => !T.any (fun b => tmovesV a b)) t := by
     rw [hr]
     intro hc
     cases hc
   cases hp : T.any (fun b => tmovesV a b) with
   | false =>
       exact absurd (by
-        simp only [removeTy, List.mem_filter]
+        simp only [List.mem_filter]
         exact ⟨ha, by simp [hp]⟩) hni
   | true => rfl
+
+theorem removeTy_nil_flat {t T : Ty} (hr : removeTy t T = []) :
+    ∀ a ∈ t, removeAtom a T = [] := by
+  intro a ha
+  cases h : removeAtom a T with
+  | nil => rfl
+  | cons x xs =>
+      exact absurd (show x ∈ removeTy t T from List.mem_flatMap.mpr
+        ⟨a, ha, h ▸ (List.mem_cons.mpr (Or.inl rfl))⟩)
+        (by rw [hr]; intro hc; cases hc)
+
+/-- What can sit under the boolean class atom. -/
+theorem covers_boolClass {a : VTy}
+    (h : tmovesV a (.anyValue .bool) = Bool.true) :
+    a = .anyValue .bool ∨ a = .isValue (.boolean Bool.true)
+      ∨ a = .isValue (.boolean Bool.false) := by
+  cases a with
+  | anyValue c =>
+      cases c with
+      | bool => exact Or.inl rfl
+      | undef | null | num | str | obj | list | desc => simp [tmovesV] at h
+  | complN p | complT => simp [tmovesV] at h
+  | isValue v =>
+      cases v with
+      | boolean b =>
+          cases b with
+          | true => exact Or.inr (Or.inl rfl)
+          | false => exact Or.inr (Or.inr rfl)
+      | undefined | null | number _ | str _ | obj _
+      | listV _ | descV _ | compl _ _ => simp [tmovesV, tagOf] at h
+  | desc _ | notPresent => simp [tmovesV] at h
+
+/-- Only the boolean class covers the boolean class. -/
+theorem boolClass_cover {b : VTy}
+    (h : tmovesV (.anyValue .bool) b = Bool.true) :
+    b = .anyValue .bool := by
+  cases b with
+  | anyValue c =>
+      cases c with
+      | bool => rfl
+      | undef | null | num | str | obj | list | desc => simp [tmovesV] at h
+  | complN _ | complT | isValue _ | desc _ | notPresent => simp [tmovesV] at h
+
+/-- The bool class, filter-kept, removes to [] only via both
+    singleton verdicts present in T. -/
+theorem boolClass_removed_sings {T : Ty}
+    (hkept : T.any (fun c => tmovesV (.anyValue .bool) c) = Bool.false)
+    (hr : removeAtom (.anyValue .bool) T = []) :
+    T.any (isBoolSing Bool.true) = Bool.true
+      ∧ T.any (isBoolSing Bool.false) = Bool.true := by
+  cases hc1 : T.any (isBoolSing Bool.true) with
+  | true =>
+      refine ⟨rfl, ?_⟩
+      cases hc2 : T.any (isBoolSing Bool.false) with
+      | true => rfl
+      | false =>
+          exfalso
+          simp only [removeAtom, hkept, hc2, Bool.true_and] at hr
+          rw [hc1] at hr
+          simp only [reduceIte] at hr
+          exact List.cons_ne_nil _ _ hr
+  | false =>
+      exfalso
+      cases hc2 : T.any (isBoolSing Bool.false) with
+      | true =>
+          simp only [removeAtom, hkept, hc1, Bool.false_and] at hr
+          rw [hc2] at hr
+          simp only [reduceIte] at hr
+          exact List.cons_ne_nil _ _ hr
+      | false =>
+          rw [removeAtom, hkept, hc1, hc2] at hr
+          simp only [Bool.false_and, reduceIte] at hr
+          exact List.cons_ne_nil _ _ hr
 
 theorem removeTy_nil_cov {t' t T : Ty} (h : slotLe t' t)
     (hr : removeTy t T = []) : removeTy t' T = [] := by
   cases hr' : removeTy t' T with
   | nil => rfl
-  | cons a' rest' =>
+  | cons x' rest' =>
       exfalso
-      have hmem : a' ∈ removeTy t' T := by
-        rw [hr']; exact List.mem_cons_self ..
-      simp only [removeTy, List.mem_filter] at hmem
-      obtain ⟨ha', hpred⟩ := hmem
-      simp only [Bool.not_eq_true'] at hpred
-      obtain ⟨a, ha, haa⟩ := tyLe_cov_atoms h.1 a' ha'
-      cases hp : T.any (fun b => tmovesV a b) with
-      | false =>
-          have hfilta : a ∈ removeTy t T := by
-            simp only [removeTy, List.mem_filter]
-            exact ⟨ha, by simp [hp]⟩
-          rw [hr] at hfilta
-          cases hfilta
+      have hx' : x' ∈ removeTy t' T := by
+        rw [hr']
+        exact List.mem_cons_self ..
+      simp only [removeTy, List.mem_flatMap] at hx'
+      obtain ⟨b', hb', hxm⟩ := hx'
+      obtain ⟨b, hb, hbb⟩ := tyLe_cov_atoms h.1 b' hb'
+      have hbn : removeAtom b T = [] := removeTy_nil_flat hr b hb
+      cases hf' : T.any (fun c => tmovesV b' c) with
       | true =>
-          obtain ⟨b, hb, hab⟩ := List.any_eq_true.mp hp
-          have hcontra : T.any (fun b => tmovesV a' b) = Bool.true :=
-            List.any_eq_true.mpr ⟨b, hb, tmovesV_trans haa hab⟩
-          rw [hcontra] at hpred
-          exact Bool.noConfusion hpred
+          simp only [removeAtom, hf', reduceIte] at hxm
+          cases hxm
+      | false =>
+          have hbf : T.any (fun c => tmovesV b c) = Bool.false := by
+            cases hbf : T.any (fun c => tmovesV b c) with
+            | true =>
+                exfalso
+                obtain ⟨c, hc1, hc2⟩ := List.any_eq_true.mp hbf
+                rw [List.any_eq_true.mpr ⟨c, hc1, tmovesV_trans hbb hc2⟩]
+                  at hf'
+                exact Bool.noConfusion hf'
+            | false => rfl
+          cases hb'eq : isBoolClass b' with
+          | true =>
+              have hbl' : b' = .anyValue .bool := isBoolClass_inv hb'eq
+              subst hbl'
+              have hbl : b = .anyValue .bool := boolClass_cover hbb
+              rw [hbl] at hbn
+              rw [hbn] at hxm
+              cases hxm
+          | false =>
+              simp only [removeAtom, hf', hb'eq, reduceIte,
+                List.mem_singleton] at hxm
+              cases hbeq : isBoolClass b with
+              | true =>
+                  have hbl : b = .anyValue .bool := isBoolClass_inv hbeq
+                  rw [hbl] at hbb
+                  obtain ⟨hs1, hs2⟩ := boolClass_removed_sings
+                    (show T.any (fun c => tmovesV (.anyValue .bool) c)
+                        = Bool.false from by rw [← hbl]; exact hbf)
+                    (show removeAtom (.anyValue .bool) T = [] from by
+                      rw [← hbl]; exact hbn)
+                  have h1 : (.isValue (.boolean Bool.true)) ∈ T :=
+                    T_has_sing T Bool.true hs1
+                  have h2 : (.isValue (.boolean Bool.false)) ∈ T :=
+                    T_has_sing T Bool.false hs2
+                  rcases covers_boolClass hbb with rfl | rfl | rfl
+                  · rw [isBoolClass_reduce] at hb'eq
+                    exact Bool.noConfusion hb'eq
+                  · rw [List.any_eq_true.mpr ⟨_, h1, tmovesV_refl _⟩] at hf'
+                    exact Bool.noConfusion hf'
+                  · rw [List.any_eq_true.mpr ⟨_, h2, tmovesV_refl _⟩] at hf'
+                    exact Bool.noConfusion hf'
+              | false =>
+                  simp only [removeAtom, hbf, hbeq, reduceIte] at hbn
+                  cases hbn
 
-theorem slotLe_append {a' a b' b : Ty} (ha : slotLe a' a) (hb : slotLe b' b) :
-    slotLe (a' ++ b') (a ++ b) := by
-  refine ⟨?_, ?_⟩
-  · unfold tyLe tmoves
-    simp only [List.all_eq_true, List.any_eq_true, List.mem_append]
-    intro x hx
-    rcases hx with h | h
-    · obtain ⟨c, hc, hcc⟩ := tyLe_cov_atoms ha.1 x h
-      exact ⟨c, Or.inl hc, hcc⟩
-    · obtain ⟨c, hc, hcc⟩ := tyLe_cov_atoms hb.1 x h
-      exact ⟨c, Or.inr hc, hcc⟩
-  · intro hne
-    intro hnil
-    have hsplit : a' = [] ∧ b' = [] := by
-      cases a' with
-      | nil =>
-          cases b' with
-          | nil => exact ⟨rfl, rfl⟩
-          | cons y ys => exact absurd hnil (by simp)
-      | cons y ys => exact absurd hnil (by simp)
-    obtain ⟨ha1', hb1'⟩ := hsplit
-    by_cases hc : a = []
-    · subst hc
-      have hbe : b ≠ [] := fun hcc => hne (by rw [hcc]; simp)
-      exact absurd hb1' (hb.2 hbe)
-    · exact absurd ha1' (ha.2 hc)
+theorem payloadOf_eq' {t ps : Ty} (hp : payloadOf t = some ps) :
+    ps = payloadsOf t ∧ t ≠ [] := by
+  have hpure := payloadOf_pure t ps hp
+  have hne : t ≠ [] := by
+    intro hc
+    subst hc
+    simp [payloadOf] at hp
+  rw [payloadOf_eq t hpure hne] at hp
+  simp only [Option.some.injEq] at hp
+  exact ⟨hp.symm, hne⟩
 
 theorem leTy_cov : ∀ {ts' ts ps : List Ty}, slotsLe ts' ts →
     leTy ts ps = Bool.true → leTy ts' ps = Bool.true := by
@@ -854,49 +1040,6 @@ theorem leTy_cov : ∀ {ts' ts ps : List Ty}, slotsLe ts' ts →
               exact (Bool.and_eq_true _ _) |>.mpr ⟨tmoves_trans hslot.1 hp1, ih hs1 hp2⟩
 
 
-/-- payloadOf on a defined slot yields exactly the payload union. -/
-theorem payloadOf_eq' {t ps : Ty} (hp : payloadOf t = some ps) :
-    ps = payloadsOf t ∧ t ≠ [] := by
-  have hpure := payloadOf_pure t ps hp
-  have hne : t ≠ [] := by
-    intro hc
-    subst hc
-    simp [payloadOf] at hp
-  rw [payloadOf_eq t hpure hne] at hp
-  simp only [Option.some.injEq] at hp
-  exact ⟨hp.symm, hne⟩
-
-theorem payloadsOf_slotLe {t' t : Ty} (h : slotLe t' t) :
-    tyLe (payloadsOf t') (payloadsOf t) := by
-  unfold tyLe tmoves
-  simp only [List.all_eq_true, List.any_eq_true]
-  exact payloadsOf_cov (tyLe_cov_atoms h.1)
-
-/-- The checker's ifield fallback term is payloadsOf (bridge). -/
-theorem filterMap_payloads (t : Ty) :
-    (t.filterMap (fun a => match a with
-      | .complN p => some [p] | _ => none)).flatten = payloadsOf t := by
-  induction t with
-  | nil => rfl
-  | cons a rest ih =>
-      cases a with
-      | complN p =>
-          show [p] ++ (rest.filterMap (fun a => match a with
-            | .complN q => some [q] | _ => none)).flatten
-            = payloadsOf (.complN p :: rest)
-          rw [ih]
-          rfl
-      | complT | anyValue _ | isValue _ | desc _ | notPresent =>
-          show (rest.filterMap (fun a => match a with
-            | .complN q => some [q] | _ => none)).flatten
-            = payloadsOf rest
-          exact ih
-
-
-/-- THE EXPRESSION-SUMMARY COVARIANCE: a refined environment gives a
-    refined (or equally-none) summary push — the type machine's
-    expression judgement is monotone in Γ. Joint induction with the
-    typesOf side (the functional-induction motive). -/
 theorem typeOfE_cov (sigs : SigTable) (Γ' Γ : TyEnv) :
     ∀ (e : Expr), envLe Γ' Γ →
       ∀ t, typeOfE sigs Γ e = some t →
@@ -1263,7 +1406,11 @@ theorem typeOfE_cov (sigs : SigTable) (Γ' Γ : TyEnv) :
       obtain ⟨hrne, hpne⟩ := hf
       have hnil : removeTy ps [VTy.anyValue Ctor.obj] = [] := by
         simpa using hrne
-      exact absurd (removeTy_nil_imp hnil) hnobj
+      exact absurd (removeTy_nil_imp
+        (t := ps) (T := [.anyValue .obj]) (by
+          intro b hb
+          cases b <;> simp_all [List.mem_singleton])
+        hnil) hnobj
 
   | case31 =>
       rename_i x ps hx hnobj hnf ih
@@ -2058,27 +2205,126 @@ theorem slotCompl_side {t : Ty} (ht : slotCompl t) (hne : t ≠ []) :
         exact Or.inr (by
           simp only [complHasThrow, List.any_cons, Bool.true_or])
 
+/-- removeAtom is covariant: any atom surviving the refined atom's
+    removal is covered by an atom surviving the coarse atom's
+    removal. -/
+theorem removeAtom_cov {a' a : VTy} (haa : tmovesV a' a = Bool.true)
+    (T : Ty) : ∀ x' ∈ removeAtom a' T,
+    ∃ x ∈ removeAtom a T, tmovesV x' x = Bool.true := by
+  intro x' hx'
+  cases hf' : T.any (fun c => tmovesV a' c) with
+  | true =>
+      simp only [removeAtom, hf', reduceIte] at hx'
+      cases hx'
+  | false =>
+      have hbf : T.any (fun c => tmovesV a c) = Bool.false := by
+        cases hbf : T.any (fun c => tmovesV a c) with
+        | true =>
+            exfalso
+            obtain ⟨c, hc1, hc2⟩ := List.any_eq_true.mp hbf
+            rw [List.any_eq_true.mpr ⟨c, hc1, tmovesV_trans haa hc2⟩]
+              at hf'
+            exact Bool.noConfusion hf'
+        | false => rfl
+      cases hb'eq : isBoolClass a' with
+      | true =>
+          -- a' IS the bool class; only the class covers it
+          have ha'cl : a' = .anyValue .bool := isBoolClass_inv hb'eq
+          rw [ha'cl] at haa hx'
+          have hbl : a = .anyValue .bool := boolClass_cover haa
+          rw [hbl]
+          exact ⟨x', hx', tmovesV_refl _⟩
+      | false =>
+          simp only [removeAtom, hf', hb'eq] at hx'
+          simp at hx'
+          obtain rfl : x' = a' := hx'
+          cases hbeq : isBoolClass a with
+          | false =>
+              refine ⟨a, ?_, haa⟩
+              simp only [removeAtom, hbf, hbeq] at ⊢
+              simp
+          | true =>
+              -- a = the bool class; a' is one of its singletons
+              have hbl : a = .anyValue .bool := isBoolClass_inv hbeq
+              rw [hbl] at haa hbf ⊢
+              rcases covers_boolClass haa with rfl | rfl | rfl
+              · exact absurd hb'eq (by simp [isBoolClass])
+              · -- a' = the TRUE singleton; its presence in T would
+                -- have filtered a' (hf'), so the puncture keeps it
+                by_cases hc : T.any (isBoolSing Bool.true) = Bool.true
+                · exfalso
+                  rw [List.any_eq_true.mpr ⟨_, T_has_sing T Bool.true hc,
+                    tmovesV_refl _⟩] at hf'
+                  exact Bool.noConfusion hf'
+                · -- puncture of the class: hasFalse → [TRUE-sing],
+                  -- else the class itself; both cover TRUE-sing
+                  by_cases h2 : T.any (isBoolSing Bool.false) = Bool.true
+                  · refine ⟨VTy.isValue (.boolean Bool.true), ?_,
+                      tmovesV_refl _⟩
+                    have hc2 : ¬((T.any (isBoolSing Bool.true)
+                        && T.any (isBoolSing Bool.false))
+                        = Bool.true) := by
+                      intro hcc
+                      rw [Bool.and_eq_true] at hcc
+                      exact hc hcc.1
+                    simp only [removeAtom]
+                    rw [if_neg (by rw [hbf]; exact fun h => Bool.noConfusion h),
+                      if_pos isBoolClass_reduce, if_neg hc2, if_neg hc,
+                      if_pos h2]
+                    exact List.mem_singleton.mpr rfl
+                  · refine ⟨.anyValue .bool, ?_, haa⟩
+                    have hc2 : ¬((T.any (isBoolSing Bool.true)
+                        && T.any (isBoolSing Bool.false))
+                        = Bool.true) := by
+                      intro hcc
+                      rw [Bool.and_eq_true] at hcc
+                      exact hc hcc.1
+                    simp only [removeAtom]
+                    rw [if_neg (by rw [hbf]; exact fun h => Bool.noConfusion h),
+                      if_pos isBoolClass_reduce, if_neg hc2, if_neg hc,
+                      if_neg h2]
+                    exact List.mem_singleton.mpr rfl
+              · -- a' = the FALSE singleton; symmetric
+                by_cases hc : T.any (isBoolSing Bool.false) = Bool.true
+                · exfalso
+                  rw [List.any_eq_true.mpr ⟨_, T_has_sing T Bool.false hc,
+                    tmovesV_refl _⟩] at hf'
+                  exact Bool.noConfusion hf'
+                · by_cases h1 : T.any (isBoolSing Bool.true) = Bool.true
+                  · refine ⟨VTy.isValue (.boolean Bool.false), ?_,
+                      tmovesV_refl _⟩
+                    have hc2 : ¬((T.any (isBoolSing Bool.true)
+                        && T.any (isBoolSing Bool.false))
+                        = Bool.true) := by
+                      intro hcc
+                      rw [Bool.and_eq_true] at hcc
+                      exact hc hcc.2
+                    simp only [removeAtom]
+                    rw [if_neg (by rw [hbf]; exact fun h => Bool.noConfusion h),
+                      if_pos isBoolClass_reduce, if_neg hc2, if_pos h1]
+                    exact List.mem_singleton.mpr rfl
+                  · refine ⟨.anyValue .bool, ?_, haa⟩
+                    have hc2 : ¬((T.any (isBoolSing Bool.true)
+                        && T.any (isBoolSing Bool.false))
+                        = Bool.true) := by
+                      intro hcc
+                      rw [Bool.and_eq_true] at hcc
+                      exact hc hcc.2
+                    simp only [removeAtom]
+                    rw [if_neg (by rw [hbf]; exact fun h => Bool.noConfusion h),
+                      if_pos isBoolClass_reduce, if_neg hc2, if_neg h1,
+                      if_neg hc]
+                    exact List.mem_singleton.mpr rfl
+
 theorem removeTy_cov {t' t T : Ty}
     (hcov : ∀ a' ∈ t', ∃ a ∈ t, tmovesV a' a = Bool.true) :
     ∀ x' ∈ removeTy t' T, ∃ x ∈ removeTy t T, tmovesV x' x = Bool.true := by
   intro x' hx'
-  simp only [removeTy, List.mem_filter] at hx'
-  obtain ⟨ha', hpred⟩ := hx'
-  simp only [Bool.not_eq_true'] at hpred
-  obtain ⟨a, ha, haa⟩ := hcov x' ha'
-  refine ⟨a, ?_, haa⟩
-  simp only [removeTy, List.mem_filter]
-  refine ⟨ha, ?_⟩
-  simp only [Bool.not_eq_true']
-  cases hp : T.any (fun b => tmovesV a b) with
-  | true =>
-      exfalso
-      obtain ⟨b, hb, hab⟩ := List.any_eq_true.mp hp
-      have hcontra : T.any (fun b => tmovesV x' b) = Bool.true :=
-        List.any_eq_true.mpr ⟨b, hb, tmovesV_trans haa hab⟩
-      rw [hcontra] at hpred
-      exact Bool.noConfusion hpred
-  | false => rfl
+  simp only [removeTy, List.mem_flatMap] at hx'
+  obtain ⟨a', ha', hxm⟩ := hx'
+  obtain ⟨a, ha, haa⟩ := hcov a' ha'
+  obtain ⟨x, hx, hxx⟩ := removeAtom_cov haa T x' hxm
+  exact ⟨x, List.mem_flatMap.mpr ⟨a, ha, hx⟩, hxx⟩
 
 theorem complNormals_cov {t' t : Ty}
     (hcov : ∀ a' ∈ t', ∃ a ∈ t, tmovesV a' a = Bool.true) :
