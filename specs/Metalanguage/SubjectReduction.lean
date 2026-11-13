@@ -3538,6 +3538,238 @@ theorem splitP1_cov (x : «String») (dec : VTy → Option Bool)
             exact splitP1_go_mem S [] a u x dec w.Γ w.σ ha hu
           · cases hacc
 
+/- ## Proof layer XIV: THE FORK-LIFT - terminality transfers
+    across covered world lists. -/
+
+/-- Covered-world lists: every refined world below a coarse one. -/
+def worldsLe (ws' ws : Worlds) : Prop :=
+  ∀ u' ∈ ws', ∃ u ∈ ws, worldLe u' u
+
+/-- Merge of two terminal flows is terminal. -/
+theorem mergeTC_terminal {f₁ f₂ : Flows}
+    (h₁ : terminal f₁ = Bool.true) (h₂ : terminal f₂ = Bool.true) :
+    terminal { exits := f₁.exits || f₂.exits, throws := f₁.throws || f₂.throws,
+               falls := f₁.falls ++ f₂.falls, assumes := f₁.assumes ++ f₂.assumes }
+      = Bool.true := by
+  obtain ⟨e1, th1, fa1, as1⟩ := f₁
+  obtain ⟨e2, th2, fa2, as2⟩ := f₂
+  unfold terminal at h₁ h₂ ⊢
+  simp only [Bool.and_eq_true] at h₁ h₂ ⊢
+  obtain ⟨he₁, hf₁⟩ := h₁
+  obtain ⟨he₂, hf₂⟩ := h₂
+  refine ⟨?_, ?_⟩
+  · rw [he₁, he₂]; rfl
+  · cases fa1 with
+    | nil =>
+        rw [List.nil_append]
+        exact hf₂
+    | cons x xs =>
+        exact absurd hf₁ (fun hc => Bool.noConfusion hc)
+
+/-- Extraction from a noFlows-seeded fold that is flows: every
+    component is flows. (By fold_merge_flows with acc = noFlows.) -/
+theorem fold_all_flows {J : World → TCResult} :
+    ∀ (ws : Worlds) (fb : Flows),
+      ws.foldl (fun acc u => mergeTC acc (J u)) noFlows = TCResult.flows fb →
+      ∀ u ∈ ws, ∃ fbu, J u = TCResult.flows fbu := by
+  intro ws fb heq u hu
+  have hnr : ∀ s w, ws.foldl (fun acc u => mergeTC acc (J u)) noFlows
+      ≠ TCResult.reject s w := by
+    intro s w hsw
+    rw [hsw] at heq
+    exact TCResult.noConfusion heq
+  obtain ⟨hmem, -⟩ := fold_merge_flows J ws noFlows hnr
+  exact hmem u hu
+
+/-- Extraction: the fold's total exits is the disjunction of the
+    component exits (any coarse component exiting is enough, and a
+    covered refined world inherits its cover's exit). -/
+theorem fold_exits_true_of {J : World → TCResult} :
+    ∀ (ws : Worlds) (fb : Flows),
+      ws.foldl (fun acc u => mergeTC acc (J u)) noFlows = TCResult.flows fb
+        → terminal fb = Bool.true → ws ≠ []
+        → ∃ u ∈ ws, exitsT (J u) = Bool.true := by
+  -- the fold's record has exits := false || any exits; terminality
+  -- forces the disjunction true, i.e. SOME component exits
+  intro ws fb heq hterm hne
+  have hnr : ∀ s w, ws.foldl (fun acc u => mergeTC acc (J u)) noFlows
+      ≠ TCResult.reject s w := by
+    intro s w hsw
+    rw [hsw] at heq
+    exact TCResult.noConfusion heq
+  obtain ⟨-, heqf⟩ := fold_merge_flows J ws noFlows hnr
+  rw [heqf] at heq
+  have hinj := TCResult.flows.inj heq
+  obtain ⟨fb2⟩ := hinj
+  -- terminal of the merged record: exits disjunction true
+  unfold terminal at hterm
+  simp only [Bool.and_eq_true] at hterm
+  obtain ⟨hexs, -⟩ := hterm
+  simp only [exitsT, noFlows, Bool.or_eq_true, Bool.false_or] at hexs
+  by_cases hany : ws.any (fun u => exitsT (J u)) = Bool.true
+  · obtain ⟨u, hu, hex⟩ := List.any_eq_true.mp hany
+    exact ⟨u, hu, hex⟩
+  · exfalso
+    have hf : ws.any (fun u => exitsT (J u)) = Bool.false := by
+      cases hc : ws.any (fun u => exitsT (J u)) with
+      | true => exact absurd hc hany
+      | false => rfl
+    have : (List.any ws fun a =>
+        match J a with
+        | TCResult.flows f => f.exits
+        | TCResult.reject _ _ => Bool.false) = Bool.false := hf
+    rw [this] at hexs
+    exact Bool.noConfusion hexs
+
+theorem fold_terminal_falls_nil {J : World → TCResult} :
+    ∀ (ws : Worlds) (fb : Flows),
+      ws.foldl (fun acc u => mergeTC acc (J u)) noFlows = TCResult.flows fb
+        → terminal fb = Bool.true
+        → ∀ u ∈ ws, ∀ fbu, J u = TCResult.flows fbu → fbu.falls = [] := by
+  intro ws fb heq hterm u hu fbu hJu
+  have hnr : ∀ s w, ws.foldl (fun acc u => mergeTC acc (J u)) noFlows
+      ≠ TCResult.reject s w := by
+    intro s w hsw
+    rw [hsw] at heq
+    exact TCResult.noConfusion heq
+  obtain ⟨-, heqf⟩ := fold_merge_flows J ws noFlows hnr
+  -- fb IS the merged record (flows-inj on the two fold equations)
+  have hinj2 : TCResult.flows fb = TCResult.flows
+      { exits := exitsT noFlows || ws.any (fun a => exitsT (J a)),
+        throws := throwsT noFlows || ws.any (fun a => throwsT (J a)),
+        falls := fallsT noFlows ++ ws.flatMap (fun a => fallsT (J a)),
+        assumes := assumesT noFlows ++ ws.flatMap (fun a => assumesT (J a)) } :=
+    heq.symm.trans heqf
+  have hfb2 := TCResult.flows.inj hinj2
+  rw [hfb2] at hterm
+  unfold terminal at hterm
+  simp only [Bool.and_eq_true] at hterm
+  obtain ⟨-, hfl0⟩ := hterm
+  cases hfb : fbu.falls with
+  | nil => rfl
+  | cons x xs =>
+      exfalso
+      -- the component's fall world x appears in the total falls
+      -- (via fold_merge_flows's record), contradicting terminality
+      obtain ⟨-, heqf2⟩ := fold_merge_flows J ws noFlows hnr
+      -- total falls include the component's falls (x :: xs)
+      have hmem' : x ∈ fallsT (J u) := by
+        have h1 : fallsT (J u) = fbu.falls := by
+          show (match J u with
+            | TCResult.flows f => f.falls
+            | TCResult.reject _ _ => []) = fbu.falls
+          rw [hJu]
+        rw [h1, hfb]
+        exact List.mem_cons.mpr (Or.inl rfl)
+      have hx : x ∈ ws.flatMap (fun a => fallsT (J a)) :=
+        List.mem_flatMap.mpr ⟨u, hu, hmem'⟩
+      -- hfl0: the record's total falls are empty
+      obtain hnil := List.isEmpty_iff.mp hfl0
+      rw [show fallsT noFlows = ([] : Worlds) from rfl, List.nil_append] at hnil
+      rw [hnil] at hx
+      cases hx
+
+/-- flatMap of falls is empty when every world's falls are. -/
+theorem flatMap_falls_nil {J : World → TCResult} :
+    ∀ ws, (∀ u ∈ ws, fallsT (J u) = [])
+      → List.flatMap (fun a => fallsT (J a)) ws = [] := by
+  intro ws
+  induction ws with
+  | nil => intro _; rfl
+  | cons u us ih =>
+      intro hall
+      have h1 : fallsT (J u) = [] := hall u (List.mem_cons.mpr (Or.inl rfl))
+      have h2 : ∀ x ∈ us, fallsT (J x) = [] := by
+        intro x hx; exact hall x (List.mem_cons.mpr (Or.inr hx))
+      show fallsT (J u) ++ List.flatMap (fun a => fallsT (J a)) us = []
+      rw [h1, ih h2]
+      rfl
+
+/-- THE FORK-LIFT: if the coarse fork-fold over ws is terminal, and
+    the per-world transfers hold (falls: without needing exit;
+    terminal: exit preserved), then the refined fold over a
+    surjectively-covered ws' is terminal. -/
+theorem fork_lift {J' J : World → TCResult}
+    (hPf : ∀ (u' u : World), worldLe u' u →
+      ∀ fbu, J u = TCResult.flows fbu → fbu.falls = []
+        → ∃ fbu', J' u' = TCResult.flows fbu' ∧ fbu'.falls = [])
+    (hPe : ∀ (u' u : World), worldLe u' u →
+      ∀ fbu, J u = TCResult.flows fbu → terminal fbu = Bool.true
+        → ∃ fbu', J' u' = TCResult.flows fbu' ∧ terminal fbu' = Bool.true) :
+    ∀ (ws' ws : Worlds),
+      (∀ u' ∈ ws', ∃ u ∈ ws, worldLe u' u)
+      → (∀ u ∈ ws, ∃ u' ∈ ws', worldLe u' u)
+      → ∀ fb, ws.foldl (fun acc u => mergeTC acc (J u)) noFlows
+          = TCResult.flows fb → terminal fb = Bool.true
+        → ∀ fb', ws'.foldl (fun acc u => mergeTC acc (J' u)) noFlows
+            = TCResult.flows fb' → terminal fb' = Bool.true := by
+  intro ws' ws hcov hsurj fb heq hterm fb' heq'
+  -- ws is nonempty: an empty coarse fold is not terminal
+  have hne : ws ≠ [] := by
+    intro h
+    subst ws
+    have hfb : fb =
+        { exits := Bool.false, throws := Bool.false,
+          falls := [], assumes := [] } :=
+      TCResult.flows.inj (show TCResult.flows fb = noFlows from heq.symm)
+    rw [hfb] at hterm
+    exact Bool.noConfusion hterm
+  -- the refined fold never rejects (it equals flows fb')
+  have hnr' : ∀ s w, ws'.foldl (fun acc u => mergeTC acc (J' u)) noFlows
+      ≠ TCResult.reject s w := by
+    intro s w hsw
+    rw [hsw] at heq'
+    exact TCResult.noConfusion heq'
+  -- SOME coarse world exits
+  obtain ⟨u₀, hu₀, hex₀⟩ := fold_exits_true_of (J := J) ws fb heq hterm hne
+  obtain ⟨fbu, hJu⟩ := fold_all_flows (J := J) ws fb heq u₀ hu₀
+  rw [hJu] at hex₀
+  have hext : fbu.exits = Bool.true := hex₀
+  have hfni : fbu.falls = [] :=
+    fold_terminal_falls_nil (J := J) ws fb heq hterm u₀ hu₀ fbu hJu
+  have htermu : terminal fbu = Bool.true := by
+    show (fbu.exits && List.isEmpty fbu.falls) = Bool.true
+    rw [hext, hfni]
+    rfl
+  -- its refined counterpart exits too
+  obtain ⟨u₀', hu₀', hle₀⟩ := hsurj u₀ hu₀
+  obtain ⟨fbu', hJu', htermu'⟩ := hPe u₀' u₀ hle₀ fbu hJu htermu
+  have hexu' : exitsT (J' u₀') = Bool.true := by
+    show (match J' u₀' with
+      | TCResult.flows f => f.exits
+      | TCResult.reject _ _ => Bool.false) = Bool.true
+    rw [hJu']
+    exact ((Bool.and_eq_true _ _).mp htermu').1
+  -- EVERY refined world has empty falls (coarse covers never fall)
+  have hfallall : ∀ u' ∈ ws', fallsT (J' u') = [] := by
+    intro u' hu'
+    obtain ⟨u, hu, hle⟩ := hcov u' hu'
+    obtain ⟨fbu2, hJu2⟩ := fold_all_flows (J := J) ws fb heq u hu
+    have hf2 : fbu2.falls = [] :=
+      fold_terminal_falls_nil (J := J) ws fb heq hterm u hu fbu2 hJu2
+    obtain ⟨fbu'2, hJu'2, hfall'2⟩ := hPf u' u hle fbu2 hJu2 hf2
+    have h1 : fallsT (J' u') = fbu'2.falls := by
+      show (match J' u' with
+        | TCResult.flows f => f.falls
+        | TCResult.reject _ _ => []) = fbu'2.falls
+      rw [hJu'2]
+    rw [h1]
+    exact hfall'2
+  -- assemble the refined record's terminality
+  obtain ⟨-, heqf'⟩ := fold_merge_flows J' ws' noFlows hnr'
+  have hfb' := TCResult.flows.inj (heq'.symm.trans heqf')
+  rw [hfb']
+  show (exitsT noFlows || List.any ws' (fun a => exitsT (J' a)))
+      && List.isEmpty (fallsT noFlows
+          ++ List.flatMap (fun a => fallsT (J' a)) ws') = Bool.true
+  have hany : List.any ws' (fun a => exitsT (J' a)) = Bool.true :=
+    List.any_eq_true.mpr ⟨u₀', hu₀', hexu'⟩
+  have hfm : List.flatMap (fun a => fallsT (J' a)) ws' = [] :=
+    flatMap_falls_nil (J := J') ws' hfallall
+  rw [show exitsT noFlows = Bool.false from rfl, hany, Bool.false_or,
+      show fallsT noFlows = ([] : Worlds) from rfl, List.nil_append, hfm]
+  rfl
+
 /- ## THE NO-SILENT-FALLS INVARIANT: every checkSeq result that is
     flows with empty falls EXITED (re-derived on the flat
     completion universe). -/

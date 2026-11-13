@@ -23,6 +23,10 @@ import Metalanguage.SubjectReduction
 #print axioms splitP1_cov
 -- the one-step machine covariance
 #print axioms step1_cov
+-- the fork-lift layer (terminality transfer across covered forks)
+#print axioms fold_terminal_falls_nil
+#print axioms flatMap_falls_nil
+#print axioms fork_lift
 -- the no-silent-falls invariant (56 arms)
 #print axioms checkSeq_exits
 -- the SR arms proven so far
