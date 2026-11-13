@@ -3394,6 +3394,150 @@ theorem split1_cov (x : «String») (T : Ty)
                         exact List.cons_ne_nil _ _
                       · exact ⟨slotLe_refl _, hσ⟩
 
+/- ## Proof layer XIIIb: splitP1 covariance (the per-atom decider).
+
+    The decider must be REFINEMENT-STABLE (a' ⊑ a → dec a' = dec a):
+    the verdict slot of an emitted world is a singleton, so a
+    verdict-flipping decider would emit uncoverable worlds. The
+    checker's deciders are stable: primDecide tests the completion
+    KIND (preserved by complN payload refinement), predDecide tests
+    exact desc field-sets (desc fs ⊑ desc fs' iff fs = fs'). -/
+
+theorem splitP1_emit_cov (x : «String») (dec : VTy → Option Bool)
+    (Γ' Γ : TyEnv) (σ' σ : List Ty)
+    (hΓ : envLe Γ' Γ) (hσ : stackLe σ' σ)
+    (hmono : ∀ b' b, tmovesV b' b = Bool.true → dec b' = dec b)
+    (a' a : VTy) (haa : tmovesV a' a = Bool.true) :
+    ∀ u' ∈ splitP1_emit x dec Γ' σ' a',
+      ∃ u ∈ splitP1_emit x dec Γ σ a, worldLe u' u := by
+  have hworld (b : Bool) : worldLe
+      (⟨(x, [a']) :: Γ', [.isValue (.boolean b)] :: σ'⟩ : World)
+      (⟨(x, [a]) :: Γ, [.isValue (.boolean b)] :: σ⟩ : World) :=
+    ⟨envLe_cons hΓ ⟨tyLe_of_atom_cov (fun b' hb' => by
+        rw [List.mem_singleton] at hb'
+        subst hb'
+        exact ⟨a, List.mem_singleton.mpr rfl, haa⟩),
+      fun _ hc => by
+        cases hc⟩,
+      ⟨slotLe_refl _, hσ⟩⟩
+  intro u' hu'
+  have hda : dec a = dec a' := (hmono a' a haa).symm
+  cases hd' : dec a' with
+  | some bv =>
+      rw [splitP1_emit, hd'] at hu'
+      cases bv with
+      | true =>
+          rw [List.mem_singleton.mp hu']
+          refine ⟨_, ?_, hworld Bool.true⟩
+          simp only [splitP1_emit, hda, hd', reduceIte]
+          exact List.mem_cons_self ..
+      | false =>
+          rw [List.mem_singleton.mp hu']
+          refine ⟨_, ?_, hworld Bool.false⟩
+          simp only [splitP1_emit, hda, hd', reduceIte]
+          exact List.mem_cons_self ..
+  | none =>
+      simp only [splitP1_emit, hd'] at hu'
+      rcases List.mem_cons.mp hu' with h1 | h2
+      · rw [h1]
+        refine ⟨_, ?_, hworld Bool.true⟩
+        simp only [splitP1_emit, hda, hd', List.mem_singleton]
+        exact List.mem_cons_self ..
+      · rw [List.mem_singleton.mp h2]
+        refine ⟨_, ?_, hworld Bool.false⟩
+        simp only [splitP1_emit, hda, hd']
+        exact List.mem_cons.mpr (Or.inr (by simp))
+
+/-- The go-fold IS a flattening: foldl (acc ++ emit) = acc ++ flatMap. -/
+theorem splitP1_go_eq :
+    ∀ (S : Ty) (acc : Worlds) (x : «String») (dec : VTy → Option Bool)
+      (Γ : TyEnv) (σ : List Ty),
+      splitP1_go x dec Γ σ S acc
+        = acc ++ S.flatMap (fun a => splitP1_emit x dec Γ σ a) := by
+  intro S
+  induction S with
+  | nil => intro acc x dec Γ σ; simp [splitP1_go]
+  | cons b rest ih =>
+      intro acc x dec Γ σ
+      rw [splitP1_go, ih, List.append_assoc, List.flatMap_cons]
+
+/-- The go-fold preserves emission membership. -/
+theorem splitP1_go_mem :
+    ∀ (S : Ty) (acc : Worlds) (a : VTy) (u : World)
+      (x : «String») (dec : VTy → Option Bool)
+      (Γ : TyEnv) (σ : List Ty),
+      a ∈ S → u ∈ splitP1_emit x dec Γ σ a →
+      u ∈ splitP1_go x dec Γ σ S acc := by
+  intro S acc a u x dec Γ σ ha hu
+  rw [splitP1_go_eq]
+  exact List.mem_append.mpr
+    (Or.inr (List.mem_flatMap.mpr ⟨a, ha, hu⟩))
+
+/-- The go-fold emits ONLY emissions of its atoms. -/
+theorem splitP1_go_inv :
+    ∀ (S : Ty) (acc : Worlds) (u : World)
+      (x : «String») (dec : VTy → Option Bool)
+      (Γ : TyEnv) (σ : List Ty),
+      u ∈ splitP1_go x dec Γ σ S acc →
+      (∃ a ∈ S, u ∈ splitP1_emit x dec Γ σ a) ∨ u ∈ acc := by
+  intro S acc u x dec Γ σ hu
+  rw [splitP1_go_eq] at hu
+  rcases List.mem_append.mp hu with hacc | hflat
+  · exact Or.inr hacc
+  · obtain ⟨a, ha, hua⟩ := List.mem_flatMap.mp hflat
+    exact Or.inl ⟨a, ha, hua⟩
+
+/-- splitP1 at a refined world: every world is covered. -/
+theorem splitP1_cov (x : «String») (dec : VTy → Option Bool)
+    (w' w : World)
+    (hmono : ∀ b' b, tmovesV b' b = Bool.true → dec b' = dec b)
+    (hΓ : envLe w'.Γ w.Γ) (hσ : stackLe w'.σ w.σ) :
+    ∀ u' ∈ splitP1 x dec w', ∃ u ∈ splitP1 x dec w, worldLe u' u := by
+  obtain ⟨hex, hcov, hne⟩ := hΓ
+  cases hw : tyLookup w.Γ x with
+  | none =>
+      have hw' : tyLookup w'.Γ x = none := by
+        cases hw2 : tyLookup w'.Γ x with
+        | none => rfl
+        | some S' =>
+            exfalso
+            obtain ⟨t0, ht0, -⟩ := hcov x S' (by
+              rw [hw2]; exact Option.mem_some_self S')
+            rw [hw] at ht0
+            cases ht0
+      intro u' hu'
+      simp only [splitP1, hw', hw] at hu'
+      cases hu'
+  | some S =>
+      cases hw' : tyLookup w'.Γ x with
+      | none =>
+          exfalso
+          have := hex x
+          rw [hw', hw] at this
+          simp at this
+      | some S' =>
+          have hScov : ∀ a' ∈ S', ∃ a ∈ S, tmovesV a' a = Bool.true := by
+            obtain ⟨t0, ht0, hle0⟩ := hcov x S' (by
+              rw [hw']; exact Option.mem_some_self S')
+            rw [hw] at ht0
+            have h0 : t0 = S := by
+              have h1 : S = t0 := by simpa using ht0
+              exact h1.symm
+            rw [h0] at hle0
+            exact tyLe_cov_atoms hle0
+          intro u' hu'
+          simp only [splitP1, hw', hw] at hu'
+          rcases splitP1_go_inv _ [] u' x dec w'.Γ w'.σ hu' with
+            ⟨a', ha', hu'a⟩ | hacc
+          · obtain ⟨a, ha, haa⟩ := hScov a' ha'
+            obtain ⟨u, hu, hle⟩ :=
+              splitP1_emit_cov x dec w'.Γ w.Γ w'.σ w.σ
+                ⟨hex, hcov, hne⟩ hσ hmono a' a haa u' hu'a
+            refine ⟨u, ?_, hle⟩
+            simp only [splitP1, hw]
+            exact splitP1_go_mem S [] a u x dec w.Γ w.σ ha hu
+          · cases hacc
+
 /- ## THE NO-SILENT-FALLS INVARIANT: every checkSeq result that is
     flows with empty falls EXITED (re-derived on the flat
     completion universe). -/

@@ -778,25 +778,31 @@ def split1 (x : «String») (T : Ty) (w : World) : Worlds :=
        | _ => [{ Γ := (x, removeTy S T) :: w.Γ,
                  σ := [.isValue (.boolean Bool.false)] :: w.σ }])
 
-/-- Split ONE world by a per-atom predicate decider. -/
+/-- Split ONE world by a per-atom predicate decider. The worlds
+    one atom emits at its verdict (named, for the proofs). -/
+def splitP1_emit (x : «String») (dec : VTy → Option Bool)
+    (Γw : TyEnv) (σw : List Ty) (a : VTy) : Worlds :=
+  match dec a with
+  | some Bool.true => [(⟨(x, [a]) :: Γw,
+      [.isValue (.boolean Bool.true)] :: σw⟩ : World)]
+  | some Bool.false => [(⟨(x, [a]) :: Γw,
+      [.isValue (.boolean Bool.false)] :: σw⟩ : World)]
+  | none => [(⟨(x, [a]) :: Γw,
+      [.isValue (.boolean Bool.true)] :: σw⟩ : World),
+    (⟨(x, [a]) :: Γw,
+      [.isValue (.boolean Bool.false)] :: σw⟩ : World)]
+
+def splitP1_go (x : «String») (dec : VTy → Option Bool)
+    (Γw : TyEnv) (σw : List Ty) (S : Ty) (acc : Worlds) : Worlds :=
+  match S with
+  | [] => acc
+  | a :: rest =>
+      splitP1_go x dec Γw σw rest (acc ++ splitP1_emit x dec Γw σw a)
+
 def splitP1 (x : «String») (dec : VTy → Option Bool) (w : World) : Worlds :=
   match tyLookup w.Γ x with
   | none => []
-  | some S =>
-      let go (acc : Worlds) (a : VTy) : Worlds :=
-        match dec a with
-        | some Bool.true =>
-            acc ++ [{ Γ := (x, [a]) :: w.Γ,
-                      σ := [.isValue (.boolean Bool.true)] :: w.σ }]
-        | some Bool.false =>
-            acc ++ [{ Γ := (x, [a]) :: w.Γ,
-                      σ := [.isValue (.boolean Bool.false)] :: w.σ }]
-        | none =>
-            acc ++ [{ Γ := (x, [a]) :: w.Γ,
-                      σ := [.isValue (.boolean Bool.true)] :: w.σ },
-                    { Γ := (x, [a]) :: w.Γ,
-                      σ := [.isValue (.boolean Bool.false)] :: w.σ }]
-      S.foldl go []
+  | some S => splitP1_go x dec w.Γ w.σ S []
 
 /- Loop join: every falls-world must come back to a REFINEMENT of
     the loop-entry stack with no parked completion (neutrality). -/

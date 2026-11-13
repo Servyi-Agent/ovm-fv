@@ -19,6 +19,8 @@ import Metalanguage.SubjectReduction
 #print axioms typeOfE_cov
 -- the Γ-split covariance
 #print axioms split1_cov
+-- the per-atom decider split covariance
+#print axioms splitP1_cov
 -- the one-step machine covariance
 #print axioms step1_cov
 -- the no-silent-falls invariant (56 arms)
