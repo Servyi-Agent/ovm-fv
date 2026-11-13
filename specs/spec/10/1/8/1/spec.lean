@@ -1,9 +1,9 @@
 import metalanguage
 
-/- ES 7.3.2 OrdinaryToPrimitive... no: OrdinaryGet ( O, P, Receiver ) - text-equal.
-   One deviation: _obj_.[[GetPrototypeOf]]() is zero-arg, which the
-   grammar cannot pattern-match (empty parens); written in field-read
-   form — the machine treats the field name as the zero-arg MOP call. -/
+/- ES 10.1.8.1 OrdinaryGet ( O, P, Receiver ) - text-equal, no deviations:
+   the zero-arg internal-method call obj.[[GetPrototypeOf]]() has its own
+   grammar production (empty parens cannot pattern-match as callArgs), so
+   the body is transcribed exactly as the spec writes it. -/
 
 def ordinaryGet10_1_8_1 : List FStep := [alg|
   1. Let propertyDesc be ? obj.[[GetOwnProperty]](propertyKey).
