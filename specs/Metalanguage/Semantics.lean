@@ -89,8 +89,10 @@ def isNullV : JSValue → Bool
    return undefined. Calls are machine-only: the big-step evaluator
    cannot enter the registry. -/
 
-/-- The descriptor-field read (undefined if absent); the
-    GetPrototypeOf zero-arg-MOP deviation lives here. -/
+/-- The descriptor-field read (undefined if absent). The field-read
+    spelling of the zero-arg [[GetPrototypeOf]] is also answered here;
+    the spec's parenthesised call form has its own grammar production
+    and dispatches through the MOP case below. -/
 def descFieldPrim (h : Heap) (s : «String») (v : JSValue) : JSValue :=
   if s == "GetPrototypeOf" then
     match v with
@@ -636,4 +638,3 @@ def agree2 (reg : AOReg) (p : Prog) : Bool :=
 def ftrace2 (reg : AOReg) : Nat → FM → List FM
   | 0, _ => []
   | n + 1, m => m :: ftrace2 reg n (fstep reg m)
-

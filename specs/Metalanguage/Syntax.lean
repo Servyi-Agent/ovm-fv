@@ -87,15 +87,14 @@ syntax aoName "(" callArgs ")" : algExpr
 /- ".[[" and "]]" as single tokens avoid the shared-prefix commit on "."
    (which would break every statement's trailing period). -/
 /- Field read declared last; paren forms first so `]] (` commits there. -/
-/- 1+-arg calls parse and pattern-match; ZERO-arg internal-method calls
-   cannot be pattern-matched (empty parens are grouping in patterns), so
-   the sole zero-arg case, [[GetPrototypeOf]], is written in field-read
-   form — documented deviation at each transcription site. -/
+/- 1+-arg calls parse and pattern-match; the zero-arg call form gets its
+   own production below because empty parens cannot pattern-match as
+   callArgs. Both call spellings dispatch the MOP. -/
 syntax algExpr ".[[" aoName "]" "]" "(" callArgs ")" : algExpr
 /- Zero-arg internal-method call obj.[[M]](): dedicated production
    (empty parens cannot pattern-match as callArgs) so the machine
-   DISPATCHES the zero-arg MOP - the field-read fallback returned
-   undefined at runtime. -/
+   DISPATCHES the zero-arg MOP even when the body is written in the
+   spec's parenthesised call form (e.g. obj.[[GetPrototypeOf]]()). -/
 syntax algExpr ".[[" aoName "]" "]" "(" ")" : algExpr
 /- Record field read: desc.[[Value]]. -/
 syntax algExpr ".[[" aoName "]" "]" : algExpr
@@ -636,4 +635,3 @@ macro_rules
 
 
 /- ===== A small interpreter over the clean Prog ===== -/
-
