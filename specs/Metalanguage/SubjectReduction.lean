@@ -3273,6 +3273,127 @@ theorem step1_cov (sigs : SigTable) (i : Instr) :
                                           hΓ, ⟨slotLe_refl _,
                                           ⟨slotLe_refl _, hrest⟩⟩⟩
                                       · cases h2
+/- ## Proof layer XIII: the split sites' covariance (Γ-refinement
+    transfers through shape tests). -/
+
+/-- split1 at the refined world yields worlds each covered by a
+    split1 world of the coarse world. -/
+theorem split1_cov (x : «String») (T : Ty)
+    (hΓ : envLe w'.Γ w.Γ) (hσ : stackLe w'.σ w.σ) :
+    ∀ u' ∈ split1 x T w', ∃ u ∈ split1 x T w, worldLe u' u := by
+  obtain ⟨hex, hcov, hne⟩ := hΓ
+  cases hw : tyLookup w.Γ x with
+  | none =>
+      have hw' : tyLookup w'.Γ x = none := by
+        cases hw2 : tyLookup w'.Γ x with
+        | none => rfl
+        | some S' =>
+            exfalso
+            obtain ⟨t0, ht0, -⟩ := hcov x S' (by
+              rw [hw2]; exact Option.mem_some_self S')
+            rw [hw] at ht0
+            cases ht0
+      intro u' hu'
+      simp only [split1, hw', hw] at hu'
+      cases hu'
+  | some S =>
+      cases hw' : tyLookup w'.Γ x with
+      | none =>
+          exfalso
+          have := hex x
+          rw [hw', hw] at this
+          simp at this
+      | some S' =>
+          have hScov : ∀ a' ∈ S', ∃ a ∈ S, tmovesV a' a = Bool.true := by
+            obtain ⟨t0, ht0, hle0⟩ := hcov x S' (by
+              rw [hw']; exact Option.mem_some_self S')
+            rw [hw] at ht0
+            have h0 : t0 = S := by
+              have h1 : S = t0 := by simpa using ht0
+              exact h1.symm
+            rw [h0] at hle0
+            exact tyLe_cov_atoms hle0
+          have hmeetcov : ∀ m' ∈ meetTy S' T,
+              ∃ m ∈ meetTy S T, tmovesV m' m = Bool.true :=
+            meetTy_cov hScov
+          have hremcov : ∀ r' ∈ removeTy S' T,
+              ∃ r ∈ removeTy S T, tmovesV r' r = Bool.true :=
+            removeTy_cov hScov
+          intro u' hu'
+          simp only [split1, hw', hw] at hu'
+          rcases List.mem_append.mp hu' with hm | hm
+          · -- THEN side
+            cases hmmeet : meetTy S' T with
+            | nil => rw [hmmeet] at hm; cases hm
+            | cons m1 ms =>
+                have hm1 : m1 ∈ meetTy S' T := by
+                  rw [hmmeet]
+                  exact List.mem_cons.mpr (Or.inl rfl)
+                -- coarse meet nonempty: the cover of m1 lives there
+                obtain ⟨m, hm2, -⟩ := hmeetcov m1 hm1
+                have hcoarse : meetTy S T ≠ [] := by
+                  intro hc
+                  rw [hc] at hm2
+                  cases hm2
+                cases hmc : meetTy S T with
+                | nil => exact absurd hmc hcoarse
+                | cons c1 cs =>
+                    refine ⟨(⟨(x, c1 :: cs) :: w.Γ,
+                      [.isValue (.boolean Bool.true)] :: w.σ⟩ : World),
+                      ?_, ?_⟩
+                    · simp only [split1, hw, hmc, List.mem_append,
+                        List.mem_singleton]
+                      exact Or.inl trivial
+                    · have hu'eq : u' = (⟨(x, m1 :: ms) :: w'.Γ,
+                          [.isValue (.boolean Bool.true)] :: w'.σ⟩ : World) := by
+                        rw [hmmeet] at hm
+                        exact List.mem_singleton.mp hm
+                      rw [hu'eq]
+                      refine ⟨envLe_cons ⟨hex, hcov, hne⟩ ⟨?_, ?_⟩, ?_⟩
+                      · exact tyLe_of_atom_cov (fun a' ha' => by
+                          rw [← hmmeet] at ha'
+                          obtain ⟨m2, hm3, hm4⟩ := hmeetcov a' ha'
+                          rw [hmc] at hm3
+                          exact ⟨m2, hm3, hm4⟩)
+                      · intro _
+                        exact List.cons_ne_nil _ _
+                      · exact ⟨slotLe_refl _, hσ⟩
+          · -- ELSE side
+            cases hmrem : removeTy S' T with
+            | nil => rw [hmrem] at hm; cases hm
+            | cons r1 rs =>
+                have hr1 : r1 ∈ removeTy S' T := by
+                  rw [hmrem]
+                  exact List.mem_cons.mpr (Or.inl rfl)
+                obtain ⟨r, hr2, -⟩ := hremcov r1 hr1
+                have hcoarse : removeTy S T ≠ [] := by
+                  intro hc
+                  rw [hc] at hr2
+                  cases hr2
+                cases hrc : removeTy S T with
+                | nil => exact absurd hrc hcoarse
+                | cons c1 cs =>
+                    refine ⟨(⟨(x, c1 :: cs) :: w.Γ,
+                      [.isValue (.boolean Bool.false)] :: w.σ⟩ : World),
+                      ?_, ?_⟩
+                    · simp only [split1, hw, hrc, List.mem_append,
+                        List.mem_singleton]
+                      exact Or.inr trivial
+                    · have hu'eq : u' = (⟨(x, r1 :: rs) :: w'.Γ,
+                          [.isValue (.boolean Bool.false)] :: w'.σ⟩ : World) := by
+                        rw [hmrem] at hm
+                        exact List.mem_singleton.mp hm
+                      rw [hu'eq]
+                      refine ⟨envLe_cons ⟨hex, hcov, hne⟩ ⟨?_, ?_⟩, ?_⟩
+                      · exact tyLe_of_atom_cov (fun a' ha' => by
+                          rw [← hmrem] at ha'
+                          obtain ⟨r2, hr3, hr4⟩ := hremcov a' ha'
+                          rw [hrc] at hr3
+                          exact ⟨r2, hr3, hr4⟩)
+                      · intro _
+                        exact List.cons_ne_nil _ _
+                      · exact ⟨slotLe_refl _, hσ⟩
+
 /- ## THE NO-SILENT-FALLS INVARIANT: every checkSeq result that is
     flows with empty falls EXITED (re-derived on the flat
     completion universe). -/

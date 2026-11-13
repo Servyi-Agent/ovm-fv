@@ -17,6 +17,8 @@ import Metalanguage.SubjectReduction
 #print axioms complHasThrow_cov
 -- expression-summary covariance (the 53-arm induction)
 #print axioms typeOfE_cov
+-- the Γ-split covariance
+#print axioms split1_cov
 -- the one-step machine covariance
 #print axioms step1_cov
 -- the no-silent-falls invariant (56 arms)
