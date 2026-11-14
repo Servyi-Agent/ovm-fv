@@ -4928,3 +4928,180 @@ theorem checkLoopBody_spec (site : Instr) (σ₀ : List Ty) (k : Worlds → TCRe
             exact hcov' 
       · simp only [hneu]
         exact trivial
+
+/- ## Proof layer XXI: fork nonempty-preservation and the fork lift -/
+
+/-- A bare atom that a refined atom reaches MEETS it (the only
+    move-without-meet pairs are complN/complT, which are not bare). -/
+theorem meetAtom_some_of_tmovesV_bare {a' a : VTy}
+    (h : tmovesV a' a = Bool.true) (hb : isBareVTy a = Bool.true) :
+    ∃ m, meetAtom a' a = some m := by
+  cases a with
+  | complN p => simp [isBareVTy] at hb
+  | complT => simp [isBareVTy] at hb
+  | anyValue c =>
+      cases c <;> cases a' <;>
+        simp_all [tmovesV, meetAtom, decide_eq_true_eq, beq_iff_eq]
+  | isValue v =>
+      cases a' <;> simp_all [tmovesV, meetAtom, beq_iff_eq]
+  | desc fs =>
+      cases a' <;> simp_all [tmovesV, meetAtom, decide_eq_true_eq]
+  | notPresent =>
+      cases a' <;> simp_all [tmovesV, meetAtom]
+
+/-- Every atom either meets a BARE T or survives the difference. -/
+theorem atom_split_nonempty {a' : VTy} {T : Ty}
+    (hbare : ∀ b ∈ T, isBareVTy b = Bool.true) :
+    (∃ b ∈ T, ∃ m, meetAtom a' b = some m) ∨ removeAtom a' T ≠ [] := by
+  by_cases hmeet : ∃ b ∈ T, ∃ m, meetAtom a' b = some m
+  · exact Or.inl hmeet
+  · right
+    have hmoves : T.any (fun b => tmovesV a' b) = Bool.false := by
+      cases h : T.any (fun b => tmovesV a' b) with
+      | false => rfl
+      | true =>
+          exfalso
+          obtain ⟨b, hb, hvb⟩ := List.any_eq_true.mp h
+          obtain ⟨m, hmm⟩ := meetAtom_some_of_tmovesV_bare hvb (hbare b hb)
+          exact hmeet ⟨b, hb, m, hmm⟩
+    rw [removeAtom, hmoves]
+    cases hbc : isBoolClass a' with
+    | false => simp [hbc]
+    | true =>
+        have ha' : a' = .anyValue .bool := isBoolClass_inv hbc
+        subst ha'
+        have hnoT : ∀ (b : Bool), T.any (isBoolSing b) = Bool.true → False := by
+          intro b hb
+          exfalso
+          obtain ⟨c, hc, hbc2⟩ := List.any_eq_true.mp hb
+          have hcv : c = .isValue (.boolean b) := isBoolSing_inv hbc2
+          exact hmeet ⟨c, hc, .isValue (.boolean b), by
+            rw [hcv]; cases b <;> simp [meetAtom, tagOf]⟩
+        cases h1 : T.any (isBoolSing Bool.true) with
+        | true => exact absurd h1 (hnoT Bool.true)
+        | false =>
+            cases h2 : T.any (isBoolSing Bool.false) with
+            | true => exact absurd h2 (hnoT Bool.false)
+            | false => simp [hbc, h1, h2]
+
+/-- For BARE T, a nonempty refined slot splits nonempty. -/
+theorem split1_ne_of_bare {x : «String»} {T : Ty} {w : World} {S' : Ty}
+    (hbare : ∀ b ∈ T, isBareVTy b = Bool.true)
+    (hl : tyLookup w.Γ x = some S') (hne : S' ≠ []) :
+    split1 x T w ≠ [] := by
+  obtain ⟨a', ha'⟩ := List.exists_mem_of_ne_nil S' hne
+  have hcase := atom_split_nonempty (a' := a') (T := T) hbare
+  rw [split1, hl]
+  cases hm : meetTy S' T with
+  | cons m ms => simp [hm]
+  | nil =>
+      rcases hcase with ⟨b, hb, m, hmm⟩ | hrem
+      · exfalso
+        have hmem : m ∈ meetTy S' T := by
+          simp only [meetTy]
+          exact List.mem_flatMap.mpr ⟨a', ha',
+            List.mem_flatMap.mpr ⟨b, hb, by simp [hmm]⟩⟩
+        rw [hm] at hmem
+        cases hmem
+      · have hremTy : removeTy S' T ≠ [] := by
+          obtain ⟨m0, hm0⟩ := List.exists_mem_of_ne_nil _ hrem
+          intro hnil
+          have hmem : m0 ∈ removeTy S' T :=
+            List.mem_flatMap.mpr ⟨a', ha', hm0⟩
+          rw [hnil] at hmem
+          cases hmem
+        cases hr : removeTy S' T with
+        | nil => exact absurd hr hremTy
+        | cons m ms => simp [hm, hr]
+
+/-- Coarse nonempty split1 (BARE test type) stays nonempty refined. -/
+theorem split1_ne_of_worldLe {x : «String»} {T : Ty} {w' w : World}
+    (hbare : ∀ b ∈ T, isBareVTy b = Bool.true) (h : worldLe w' w)
+    (hne : split1 x T w ≠ []) : split1 x T w' ≠ [] := by
+  obtain ⟨hΓ, -⟩ := h
+  cases hl : tyLookup w.Γ x with
+  | none => rw [split1, hl] at hne; exact absurd rfl hne
+  | some S =>
+      have hSne : S ≠ [] := by
+        intro hS
+        subst hS
+        apply hne
+        simp [split1, hl, meetTy, removeTy]
+      obtain ⟨S', ht', hS'ne, -⟩ := hΓ.2.2 x S (by rw [hl]; simp) hSne
+      have hl' : tyLookup w'.Γ x = some S' := by
+        cases hlook : tyLookup w'.Γ x with
+        | none => rw [hlook] at ht'; cases ht'
+        | some U => rw [hlook] at ht'; simp_all
+      exact split1_ne_of_bare hbare hl' hS'ne
+
+/-- Coarse nonempty splitP1 stays nonempty refined. -/
+theorem splitP1_ne_of_worldLe {x : «String»} {dec : VTy → Option Bool}
+    {w' w : World} (h : worldLe w' w)
+    (hne : splitP1 x dec w ≠ []) : splitP1 x dec w' ≠ [] := by
+  obtain ⟨hΓ, -⟩ := h
+  cases hl : tyLookup w.Γ x with
+  | none => rw [splitP1, hl] at hne; exact absurd rfl hne
+  | some S =>
+      have hSne : S ≠ [] := by
+        intro hS
+        subst hS
+        apply hne
+        simp [splitP1, hl]
+      obtain ⟨S', ht', hS'ne, -⟩ := hΓ.2.2 x S (by rw [hl]; simp) hSne
+      have hl' : tyLookup w'.Γ x = some S' := by
+        cases hlook : tyLookup w'.Γ x with
+        | none => rw [hlook] at ht'; cases ht'
+        | some U => rw [hlook] at ht'; simp_all
+      intro hnil
+      simp only [splitP1, hl'] at hnil
+      obtain ⟨a', ha'⟩ := List.exists_mem_of_ne_nil S' hS'ne
+      have hatom : splitP1At x dec w' a' ≠ [] := by
+        simp only [splitP1At]
+        cases hd : dec a' with
+        | none => simp [hd]
+        | some b => cases b <;> simp [hd]
+      obtain ⟨v', hv'⟩ := List.exists_mem_of_ne_nil _ hatom
+      have hmem : v' ∈ S'.flatMap (splitP1At x dec w') :=
+        List.mem_flatMap.mpr ⟨a', ha', hv'⟩
+      rw [hnil] at hmem
+      cases hmem
+
+/-- Every `step1` success is a nonempty successor list. -/
+theorem step1_some_ne (sigs : SigTable) (i : Instr) (w : World) :
+    ∀ ws, step1 sigs i w = some ws → ws ≠ [] := by
+  intro ws h
+  cases i <;> simp only [step1] at h
+  all_goals
+    repeat' first
+      | split at h
+      | (obtain ⟨a, hb, hws⟩ := h; rw [← hws]; simp)
+      | (rw [← h]; simp)
+      | (injection h with hws; rw [← hws]; simp)
+      | simp_all
+
+/-- Fork lift: covered successor lists and covered continuations. -/
+theorem fork_specLe {site : Instr} {ws' ws : Worlds} {k : World → TCResult}
+    (hmate : ∀ u' ∈ ws', ∃ u ∈ ws, worldLe u' u)
+    (hne : ws ≠ [] → ws' ≠ [])
+    (hk : ∀ u' u, worldLe u' u → specLe (k u') (k u)) :
+    specLe (forkTC site ws' k) (forkTC site ws k) := by
+  cases ws with
+  | nil => exact trivial
+  | cons u0 us =>
+      have hws' : ws' ≠ [] := hne (by simp)
+      cases ws' with
+      | nil => exact absurd rfl hws'
+      | cons u0' us' =>
+          cases hc : forkTC site (u0 :: us) k with
+          | reject s w => exact trivial
+          | flows fr =>
+              have hfold : (u0 :: us).foldl
+                  (fun acc u => mergeTC acc (k u)) noFlows = TCResult.flows fr := by
+                simpa [forkTC] using hc
+              obtain ⟨fr', hfr', hcov⟩ :=
+                fold_specLe (J := k) (J' := k) (R := worldLe)
+                  (u0 :: us) (u0' :: us') fr hmate hk hfold
+              have hfork : forkTC site (u0' :: us') k = TCResult.flows fr' := by
+                simpa [forkTC] using hfr'
+              rw [hfork]
+              exact hcov
