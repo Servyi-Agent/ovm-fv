@@ -260,7 +260,12 @@ theorem certifies_flows_elim {sigs : SigTable} {name : «String»}
 def registryCertified (sigs : SigTable) (reg : AOReg) : Prop :=
   ∀ name ps prog, (name, (ps, prog)) ∈ reg →
     (∀ (heap : Heap) (nl : Nat), instrsWf heap nl (compileSteps prog)) ∧
-    ∀ ts, leTy ts (sigParams sigs name) →
+    -- the certificate is at every PREFIX typing that the checker may
+    -- pass: kCall accepts an n+1-parameter callee called with n
+    -- arguments (the optional trailing parameter stays unbound), so
+    -- the argument typing covers a prefix of the declared parameters.
+    ∀ ts, ts.length ≤ (sigParams sigs name).length →
+      leTy ts ((sigParams sigs name).take ts.length) →
       certifies sigs name ps ts prog
 
 /- ## The target statement (proof in progress, bottom-up):
@@ -4224,26 +4229,296 @@ theorem SR_kEval_const (sigs : SigTable) (reg : AOReg) (v : JSValue) (s : FM) (r
           rw [machineRet_head_swap]
           exact hpre.2
 
-/- ## kCall roadmap (the arm this shape was built for)
+theorem findAO_mem : ∀ {reg : AOReg} {n : «String»} {e : List «String» × Prog},
+    findAO reg n = some e → (n, e) ∈ reg
+  | [], _, _, h => by simp [findAO] at h
+  | ⟨m, e'⟩ :: tl, n, e, h => by
+      simp only [findAO] at h
+      split at h
+      · next hmn =>
+          obtain rfl := Option.some.inj h
+          rw [beq_iff_eq.mp hmn]
+          exact List.mem_cons_self ..
+      · next hmn =>
+          exact List.mem_cons_of_mem _ (findAO_mem h)
 
-    Post = callee :: callerPost :: fs' (registry hit), and the
-    obligations map exactly onto the existing machinery:
+theorem findAO_isSome {reg : AOReg} {n : «String»}
+    (h : (findAO reg n).isSome = Bool.true) :
+    ∃ e, findAO reg n = some e := by
+  cases hf : findAO reg n with
+  | none => rw [hf] at h; simp at h
+  | some e => exact ⟨e, rfl⟩
+
+theorem popArgs_elim {ps : List Ty} {σ : List Ty}
+    (h : popArgs ps σ = Bool.true) :
+    σ.length ≥ ps.length ∧ leTy (σ.take ps.length).reverse ps = Bool.true := by
+  simp only [popArgs, Bool.and_eq_true] at h
+  exact ⟨of_decide_eq_true h.1, h.2⟩
+
+theorem sigParams_of_sigFind {sigs : SigTable} {f : «String»} {ps : List Ty}
+    {retj : List Pending} (h : sigFind sigs f = some (ps, retj)) :
+    sigParams sigs f = ps := by
+  simp only [sigParams, h]
+
+theorem sigCompls_of_sigFind {sigs : SigTable} {f : «String»} {ps : List Ty}
+    {retj : List Pending} (h : sigFind sigs f = some (ps, retj)) :
+    sigCompls sigs f = retj := by
+  simp only [sigCompls, h]
+
+/-- kCall: one successor world, the completion union pushed on the
+    caller's stack. -/
+theorem checkSeq_kCall {sigs : SigTable} {r : Ty} {W : World}
+    {f : «String»} {n : Nat} {ps : List Ty} {retj : List Pending}
+    {rest : List Instr}
+    (hsig : sigFind sigs f = some (ps, retj))
+    (har : ((ps.length == n) || (ps.length == n + 1)) = Bool.true)
+    (hpop : popArgs (if ps.length == n then ps else ps.take n) W.σ
+      = Bool.true) :
+    checkSeq sigs r W (.kCall f n :: rest)
+      = checkSeq sigs r { W with σ := complTy retj :: W.σ.drop n } rest := by
+  simp only [checkSeq, step1, hsig, har, hpop, forkTC_cons]
+
+/-- kCall inversion: an accepted call yields the signature, the arity
+    hit, the argument check, and the post-call world's check. -/
+theorem checkSeq_kCall_elim {sigs : SigTable} {r : Ty} {W : World}
+    {f : «String»} {n : Nat} {rest : List Instr} {fb : Flows}
+    (h : checkSeq sigs r W (.kCall f n :: rest) = TCResult.flows fb) :
+    ∃ (ps : List Ty) (retj : List Pending),
+      sigFind sigs f = some (ps, retj)
+      ∧ ((ps.length == n) || (ps.length == n + 1)) = Bool.true
+      ∧ popArgs (if ps.length == n then ps else ps.take n) W.σ = Bool.true
+      ∧ checkSeq sigs r { W with σ := complTy retj :: W.σ.drop n } rest
+          = TCResult.flows fb := by
+  have hex : ∃ (ps : List Ty) (retj : List Pending),
+      sigFind sigs f = some (ps, retj)
+      ∧ ((ps.length == n) || (ps.length == n + 1)) = Bool.true
+      ∧ popArgs (if ps.length == n then ps else ps.take n) W.σ = Bool.true := by
+    cases hsig : sigFind sigs f with
+    | none =>
+        simp only [checkSeq, step1, hsig] at h
+        exact absurd h (by simp)
+    | some pr =>
+        obtain ⟨ps, retj⟩ := pr
+        cases har : ((ps.length == n) || (ps.length == n + 1)) with
+        | false =>
+            simp only [checkSeq, step1, hsig, har] at h
+            exact absurd h (by simp)
+        | true =>
+            cases hpop : popArgs (if ps.length == n then ps else ps.take n) W.σ with
+            | false =>
+                simp only [checkSeq, step1, hsig, har, hpop] at h
+                exact absurd h (by simp)
+            | true => exact ⟨ps, retj, rfl, har, hpop⟩
+  obtain ⟨ps, retj, hsig, har, hpop⟩ := hex
+  refine ⟨ps, retj, hsig, har, hpop, ?_⟩
+  simp only [checkSeq, step1, hsig, har, hpop, forkTC_cons] at h
+  exact h
+
+/-- popArgs bounds the argument-stack length (under the arity hit). -/
+theorem popArgs_n_le {ps : List Ty} {σ : List Ty} {n : Nat}
+    (har : ((ps.length == n) || (ps.length == n + 1)) = Bool.true)
+    (hpop : popArgs (if ps.length == n then ps else ps.take n) σ = Bool.true) :
+    n ≤ σ.length := by
+  obtain ⟨hge, -⟩ := popArgs_elim hpop
+  cases hn : (ps.length == n) with
+  | true =>
+      have hpn : ps.length = n := beq_iff_eq.mp hn
+      have hif : (if (ps.length == n) = true then ps else ps.take n) = ps := by
+        simp [hn]
+      rw [hif] at hge
+      omega
+  | false =>
+      have har2 : (ps.length == n + 1) = Bool.true := by
+        rw [hn, Bool.false_or] at har
+        exact har
+      have hpn : ps.length = n + 1 := beq_iff_eq.mp har2
+      have hif : (if (ps.length == n) = true then ps else ps.take n) = ps.take n := by
+        simp [hn]
+      rw [hif] at hge
+      have hlen : (ps.take n).length = n := by
+        rw [List.length_take, Nat.min_eq_left (by omega)]
+      omega
+
+/-- popArgs types the n popped arguments against the parameter prefix. -/
+theorem popArgs_le_take {ps : List Ty} {σ : List Ty} {n : Nat}
+    (har : ((ps.length == n) || (ps.length == n + 1)) = Bool.true)
+    (hpop : popArgs (if ps.length == n then ps else ps.take n) σ = Bool.true) :
+    leTy ((σ.take n).reverse) (ps.take n) = Bool.true := by
+  obtain ⟨-, hle⟩ := popArgs_elim hpop
+  cases hn : (ps.length == n) with
+  | true =>
+      have hpn : ps.length = n := beq_iff_eq.mp hn
+      have hif : (if (ps.length == n) = true then ps else ps.take n) = ps := by
+        simp [hn]
+      rw [hif] at hle
+      rw [show n = ps.length from hpn.symm, List.take_length]
+      exact hle
+  | false =>
+      have har2 : (ps.length == n + 1) = Bool.true := by
+        rw [hn, Bool.false_or] at har
+        exact har
+      have hpn : ps.length = n + 1 := beq_iff_eq.mp har2
+      have hif : (if (ps.length == n) = true then ps else ps.take n) = ps.take n := by
+        simp [hn]
+      rw [hif] at hle
+      have hlen : (ps.take n).length = n := by
+        rw [List.length_take, Nat.min_eq_left (by omega)]
+      rw [hlen] at hle
+      exact hle
+
+/-- The runtime argument typings meet the declared parameter prefix:
+    from the checker's popArgs over the singleton abstraction. -/
+theorem runtime_args_le {sigs : SigTable} {f : «String»} {n : Nat}
+    {ps : List Ty} {retj : List Pending} {eval : List JSValue}
+    (hsig : sigFind sigs f = some (ps, retj))
+    (har : ((ps.length == n) || (ps.length == n + 1)) = Bool.true)
+    (hpop : popArgs (if ps.length == n then ps else ps.take n)
+      (eval.map (fun v => [typeOfV v])) = Bool.true) :
+    ((eval.take n).reverse.map (fun v => [typeOfV v])).length
+        ≤ (sigParams sigs f).length
+      ∧ leTy ((eval.take n).reverse.map (fun v => [typeOfV v]))
+          ((sigParams sigs f).take
+            ((eval.take n).reverse.map (fun v => [typeOfV v])).length)
+          = Bool.true := by
+  have hnl : n ≤ eval.length := by
+    simpa [List.length_map] using popArgs_n_le har hpop
+  have htake_len : (eval.take n).length = n := by
+    rw [List.length_take, Nat.min_eq_left hnl]
+  have hts : (eval.take n).reverse.map (fun v => [typeOfV v])
+      = ((eval.map (fun v => [typeOfV v])).take n).reverse := by
+    rw [List.map_reverse, List.map_take]
+  have hlen_eq : ((eval.take n).reverse.map (fun v => [typeOfV v])).length = n := by
+    rw [List.length_map, List.length_reverse, htake_len]
+  have hpn : n ≤ ps.length := by
+    cases h : (ps.length == n) with
+    | true =>
+        rw [beq_iff_eq.mp h]
+        exact Nat.le_refl n
+    | false =>
+        rw [h, Bool.false_or] at har
+        rw [beq_iff_eq.mp har]
+        omega
+  rw [sigParams_of_sigFind hsig]
+  refine ⟨?_, ?_⟩
+  · rw [hlen_eq]; exact hpn
+  · rw [hlen_eq, hts]
+    exact popArgs_le_take har hpop
+
+/-- The certificate at the runtime argument typings: the callee frame
+    checks. -/
+theorem callee_frameChecks {sigs : SigTable} {reg : AOReg} {fname : «String»}
+    {ps : List «String»} {body : Prog} {args : List JSValue}
+    (hcert : registryCertified sigs reg)
+    (hmem : (fname, (ps, body)) ∈ reg)
+    (hlen : (args.reverse.map (fun v => [typeOfV v])).length
+      ≤ (sigParams sigs fname).length)
+    (hle : leTy (args.reverse.map (fun v => [typeOfV v]))
+      ((sigParams sigs fname).take
+        (args.reverse.map (fun v => [typeOfV v])).length) = Bool.true) :
+    frameChecks sigs ⟨compileSteps body, ps.zip args.reverse, [], fname⟩ := by
+  obtain ⟨-, hc⟩ := hcert fname ps body hmem
+  obtain ⟨fb, hchk, hterm, -⟩ := certifies_flows_elim (hc _ hlen hle)
+  simp only [frameChecks, frameWorld, envTyOf_zipTy, hchk, hterm, List.map_nil]
+
+/-- The machine's registry-hit kCall step, spelled out. -/
+theorem fstep_kCall_found {reg : AOReg} {fname : «String»}
+    {ps : List «String»} {body : Prog} {n : Nat} {rest : List Instr}
+    {env : Env} {eval : List JSValue} {heap : Heap} {nl : Nat} {fs : List Fr}
+    {ret : «String»}
+    (hfao : findAO reg fname = some (ps, body))
+    (hlen : n ≤ eval.length) :
+    fstep reg (.frames (⟨.kCall fname n :: rest, env, eval, ret⟩ :: fs) heap nl)
+      = .frames (⟨compileSteps body, ps.zip (eval.take n).reverse, [], fname⟩
+          :: ⟨rest, env, eval.drop n, ret⟩ :: fs) heap nl := by
+  simp only [fstep]
+  split
+  · exfalso; omega
+  · simp only [hfao]
+
+theorem machineRet_cons_congr {sigs : SigTable} {f g : Fr} {fs : List Fr}
+    (h : f.ret = g.ret) : machineRet sigs (f :: fs) = machineRet sigs (g :: fs) := by
+  cases fs with
+  | nil => simp [machineRet, h]
+  | cons x xs => simp [machineRet, List.getLast?_cons_cons]
+
+/-- frameChecks unpacked. -/
+theorem frameChecks_elim {sigs : SigTable} {f : Fr}
+    (h : frameChecks sigs f) :
+    ∃ fb, checkSeq sigs (sigRetTy sigs f.ret) (frameWorld f) f.stmts
+        = TCResult.flows fb ∧ terminal fb = Bool.true := by
+  cases hc : checkSeq sigs (sigRetTy sigs f.ret) (frameWorld f) f.stmts with
+  | flows fb =>
+      exact ⟨fb, rfl, by rw [frameChecks, hc] at h; exact h⟩
+  | reject s w =>
+      rw [frameChecks, hc] at h
+      exact h.elim
+
+/-- THE kCall ARM (registry-hit; the native branch is the
+    specialization capstone's business). -/
+theorem SR_kCall (sigs : SigTable) (reg : AOReg)
+    (hclosed : ∀ (m : «String») (ps : List Ty) (retj : List Pending),
+      sigFind sigs m = some (ps, retj) → (findAO reg m).isSome = Bool.true)
+    (fname : «String») (n : Nat) (s : FM) (r : Ty) :
+    SR_arm sigs reg (.kCall fname n) s r := by
+  intro hcert hpre
+  cases s with
+  | fdone v fs heap nl n' => exact hpre
+  | fell fs heap nl n' => exact hpre
+  | frames fs heap nl =>
+      cases fs with
+      | nil => exact hpre
+      | cons f fs' =>
+          obtain ⟨stmts, env, eval, ret⟩ := f
+          simp only [withHead, stateTyped, framesTypedFrom] at hpre ⊢
+          obtain ⟨fb, hchk, hterm⟩ := frameChecks_elim hpre.1.1
+          simp only [frameWorld] at hchk
+          obtain ⟨ps, retj, hsig, har, hpop, hpost⟩ := checkSeq_kCall_elim hchk
+          dsimp only at hpost
+          -- machine: underflow impossible
+          have hlen : n ≤ eval.length := by
+            simpa [List.length_map] using popArgs_n_le har hpop
+          obtain ⟨⟨psr, body⟩, hfao⟩ :=
+            findAO_isSome (hclosed fname ps retj hsig)
+          -- arg typings
+          obtain ⟨hlen', hle'⟩ := runtime_args_le hsig har hpop
+          have hle : ((eval.take n).reverse.map (fun v => [typeOfV v])).length
+              ≤ (sigParams sigs fname).length := hlen'
+          have hcl := callee_frameChecks hcert (findAO_mem hfao) hlen' hle'
+          -- caller anticipation = the checker's post-world
+          have hcaller : frameOkUnder sigs fname ⟨stmts, env, eval.drop n, ret⟩ := by
+            simp only [frameOkUnder, sigCompls_of_sigFind hsig]
+            rw [List.map_drop, hpost]
+            exact hterm
+          rw [fstep_kCall_found hfao hlen]
+          refine ⟨⟨hcl, hcaller, hpre.1.2⟩, ?_⟩
+          rw [machineRet_cons_cons,
+            machineRet_cons_congr (f := ⟨stmts, env, eval.drop n, ret⟩)
+              (g := ⟨.kCall fname n :: stmts, env, eval, ret⟩) rfl]
+          exact hpre.2
+
+/- ## The kCall arm (registry hit)
+
+    Post = callee :: callerPost :: fs' and the obligations map onto
+    the machinery just before:
     1. callee frameChecks = certifies sigs fname ps' ts body at
        ts := (eval.take n).reverse.map singleton — leTy ts params
-       from the checker's popArgs (via map_take/reverse_map), the
-       callee's Γ = envTyOf (ps'.zip …) = zipTy ps' ts
-       (envTyOf_zipTy).
-    2. callerPost frameOkUnder fname — VERBATIM the checker's kCall
-       arm: it pushed complTy (sigCompls fname) onto σ.drop n; the
-       bridge lemma is checkSeq_kCall_inv (the inversion of the
-       catch-all + step1's single-world kCall).
-    3. machineRet — cons_cons + head_swap.
-    4. Vacuous arms: underflow (popArgs rejects), unknown callee
-       (sigFind none → checker rejects), reg-miss non-native
-       (closedRegistry). The reg-miss NATIVE arm needs either the
-       native names answered by the registry (a completeness
-       premise) or the refinement lemma (anticipated union →
-       native singleton) — the same monotonicity kRet needs. -/
+       from the checker's popArgs (popArgs_le_take + map_take /
+       map_reverse); Γ = envTyOf (ps'.zip …) = zipTy ps' ts
+       (envTyOf_zipTy). The certificate premise is the PREFIX form —
+       kCall accepts an (n+1)-parameter callee at n arguments, so the
+       typing only reaches a prefix of the declared params.
+    2. callerPost frameOkUnder fname — verbatim the checker's kCall
+       arm (checkSeq_kCall_elim): the post world
+       complTy (sigCompls fname) :: σ.drop n matches under
+       List.map_drop.
+    3. machineRet — machineRet_cons_cons + machineRet_cons_congr.
+    4. Vacuous arms: underflow is impossible (popArgs_n_le), unknown
+       callee rejects (sigFind none), and reg-miss names are excluded
+       by the hclosed premise below. hclosed is EXACTLY the native
+       dispatch gap: the machine answers Get/Call/… natively while
+       the registry does not, pushing a singleton completion that
+       must be refined into the checker's union — the specialization
+       capstone. -/
 
 /- ## Next: the specialization capstone (pointwise)
 

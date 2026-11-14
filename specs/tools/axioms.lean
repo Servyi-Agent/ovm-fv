@@ -26,4 +26,9 @@ import Metalanguage.SubjectReduction
 #print axioms SR_kPop
 #print axioms SR_kSet
 #print axioms SR_kEval_const
-
+-- the kCall bridge (registry-hit arm)
+#print axioms popArgs_le_take
+#print axioms runtime_args_le
+#print axioms callee_frameChecks
+#print axioms fstep_kCall_found
+#print axioms SR_kCall
