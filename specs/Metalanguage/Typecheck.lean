@@ -779,24 +779,25 @@ def split1 (x : «String») (T : Ty) (w : World) : Worlds :=
                  σ := [.isValue (.boolean Bool.false)] :: w.σ }])
 
 /-- Split ONE world by a per-atom predicate decider. -/
+def splitP1At (x : «String») (dec : VTy → Option Bool) (w : World)
+    (a : VTy) : Worlds :=
+  match dec a with
+  | some Bool.true =>
+      [{ Γ := (x, [a]) :: w.Γ,
+         σ := [.isValue (.boolean Bool.true)] :: w.σ }]
+  | some Bool.false =>
+      [{ Γ := (x, [a]) :: w.Γ,
+         σ := [.isValue (.boolean Bool.false)] :: w.σ }]
+  | none =>
+      [{ Γ := (x, [a]) :: w.Γ,
+         σ := [.isValue (.boolean Bool.true)] :: w.σ },
+       { Γ := (x, [a]) :: w.Γ,
+         σ := [.isValue (.boolean Bool.false)] :: w.σ }]
+
 def splitP1 (x : «String») (dec : VTy → Option Bool) (w : World) : Worlds :=
   match tyLookup w.Γ x with
   | none => []
-  | some S =>
-      let go (acc : Worlds) (a : VTy) : Worlds :=
-        match dec a with
-        | some Bool.true =>
-            acc ++ [{ Γ := (x, [a]) :: w.Γ,
-                      σ := [.isValue (.boolean Bool.true)] :: w.σ }]
-        | some Bool.false =>
-            acc ++ [{ Γ := (x, [a]) :: w.Γ,
-                      σ := [.isValue (.boolean Bool.false)] :: w.σ }]
-        | none =>
-            acc ++ [{ Γ := (x, [a]) :: w.Γ,
-                      σ := [.isValue (.boolean Bool.true)] :: w.σ },
-                    { Γ := (x, [a]) :: w.Γ,
-                      σ := [.isValue (.boolean Bool.false)] :: w.σ }]
-      S.foldl go []
+  | some S => S.flatMap (splitP1At x dec w)
 
 /- Loop join: every falls-world must come back to a REFINEMENT of
     the loop-entry stack with no parked completion (neutrality). -/

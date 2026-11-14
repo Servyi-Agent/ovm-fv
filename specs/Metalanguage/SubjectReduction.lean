@@ -4520,16 +4520,411 @@ theorem SR_kCall (sigs : SigTable) (reg : AOReg)
        must be refined into the checker's union — the specialization
        capstone. -/
 
-/- ## Next: the specialization capstone (pointwise)
+/- ## Proof layer XX: the specialization capstone — helper layer
 
-    theorem checkSeq_specialize : ∀ seq w w', worldLe w' w →
-      tterm (checkSeq sigs r w seq) → tterm (checkSeq sigs r w' seq)
+    Refinement direction: w' ≤ w (w' is the RUNTIME world, w the
+    CERTIFICATE world). A coarse successful check must stay
+    successful at the refined world, and its falling worlds must
+    cover the refined falling worlds (loop joins need the coverage
+    to re-establish neutrality on the refined falls). This layer
+    proves the split covariances and the loop join; the full
+    56-arm induction (checkSeq_specialize) is the remaining step. -/
 
-    Induction on seq; each arm pointwise: kRet (pending payload ⊑
-    via pendLe), kIte (verdict dispatch forks a both-verdict world —
-    both sides covered), splits (split1_cov), the catch-all (step1_mono
-    + a fold-terminality lift: every refined world's check terminal
-    because its coarse cover's is; the fold merges exits/disj,
-    falls/append — terminal iff every element exits with no falls;
-    step1 outputs are nonempty). Loop joins: ⊑-neutrality per path.
-    -/
+/-- Result specialization: coarse `flows` forces refined `flows` and
+    refined falls refine coarse falls; a coarse reject is vacuous. -/
+def specLe (res' res : TCResult) : Prop :=
+  match res with
+  | .flows fb =>
+      match res' with
+      | .flows fb' => ∀ v ∈ fb'.falls, ∃ u ∈ fb.falls, worldLe v u
+      | .reject _ _ => False
+  | .reject _ _ => True
+
+theorem specLe_flows_elim {res' : TCResult} {fb : Flows}
+    (h : specLe res' (TCResult.flows fb)) :
+    ∃ fb', res' = TCResult.flows fb' ∧
+      ∀ v ∈ fb'.falls, ∃ u ∈ fb.falls, worldLe v u := by
+  cases res' with
+  | flows fb' => exact ⟨fb', rfl, h⟩
+  | reject s w => exact h.elim
+
+theorem specLe_flows_intro {fb' fb : Flows}
+    (h : ∀ v ∈ fb'.falls, ∃ u ∈ fb.falls, worldLe v u) :
+    specLe (TCResult.flows fb') (TCResult.flows fb) := h
+
+theorem specLe_reject (res' : TCResult) {s : Instr} {why : «String»} :
+    specLe res' (TCResult.reject s why) := trivial
+
+theorem specLe_merge {a' a b' b : TCResult}
+    (ha : specLe a' a) (hb : specLe b' b) :
+    specLe (mergeTC a' b') (mergeTC a b) := by
+  cases a with
+  | reject s w => exact trivial
+  | flows fa =>
+      cases b with
+      | reject s w => exact trivial
+      | flows fb =>
+          obtain ⟨fa', rfl, hca⟩ := specLe_flows_elim ha
+          obtain ⟨fb', rfl, hcb⟩ := specLe_flows_elim hb
+          simp only [mergeTC, specLe]
+          intro v hv
+          rcases List.mem_append.mp hv with hv | hv
+          · obtain ⟨u, hu, hle⟩ := hca v hv
+            exact ⟨u, List.mem_append_left _ hu, hle⟩
+          · obtain ⟨u, hu, hle⟩ := hcb v hv
+            exact ⟨u, List.mem_append_right _ hu, hle⟩
+
+theorem specLe_merge_left {x y z : TCResult} (h : specLe x z) :
+    specLe x (mergeTC y z) := by
+  cases y with
+  | reject s w => exact trivial
+  | flows fy =>
+      cases z with
+      | reject s w => exact trivial
+      | flows fz =>
+          obtain ⟨fx, rfl, hc⟩ := specLe_flows_elim h
+          simp only [mergeTC, specLe]
+          intro v hv
+          obtain ⟨u, hu, hle⟩ := hc v hv
+          exact ⟨u, List.mem_append_right _ hu, hle⟩
+
+theorem specLe_merge_right {x y z : TCResult} (h : specLe x y) :
+    specLe x (mergeTC y z) := by
+  cases y with
+  | reject s w => exact trivial
+  | flows fy =>
+      cases z with
+      | reject s w => exact trivial
+      | flows fz =>
+          obtain ⟨fx, rfl, hc⟩ := specLe_flows_elim h
+          simp only [mergeTC, specLe]
+          intro v hv
+          obtain ⟨u, hu, hle⟩ := hc v hv
+          exact ⟨u, List.mem_append_left _ hu, hle⟩
+
+/-- Fold of flows components is flows. -/
+theorem fold_flows_exists {α : Type} {J : α → TCResult} :
+    ∀ (ts : List α) (acc : TCResult), (∃ fa, acc = TCResult.flows fa) →
+      (∀ a ∈ ts, ∃ f, J a = TCResult.flows f) →
+      ∃ fr, ts.foldl (fun x a => mergeTC x (J a)) acc = TCResult.flows fr := by
+  intro ts
+  induction ts with
+  | nil =>
+      intro acc hacc _
+      exact ⟨_, by rw [List.foldl_nil]; exact hacc.choose_spec⟩
+  | cons a as ih =>
+      intro acc hacc hall
+      obtain ⟨fa, hfa⟩ := hall a (List.mem_cons_self ..)
+      obtain ⟨fa0, hfa0⟩ := hacc
+      have hm : ∃ f, mergeTC acc (J a) = TCResult.flows f := by
+        refine ⟨⟨fa0.exits || fa.exits, fa0.throws || fa.throws,
+          fa0.falls ++ fa.falls, fa0.assumes ++ fa.assumes⟩, ?_⟩
+        rw [hfa0, hfa]
+        rfl
+      obtain ⟨fr, hfr⟩ := ih (mergeTC acc (J a)) hm
+        (fun b hb => hall b (List.mem_cons_of_mem _ hb))
+      exact ⟨fr, by rw [List.foldl_cons]; exact hfr⟩
+
+/-- Fold over noFlows: components are flows and the falls concat. -/
+theorem fold_noFlows_falls {α : Type} {J : α → TCResult} :
+    ∀ (ts : List α) (fb : Flows),
+      ts.foldl (fun x a => mergeTC x (J a)) noFlows = TCResult.flows fb →
+      (∀ a ∈ ts, ∃ f, J a = TCResult.flows f)
+      ∧ fb.falls = ts.flatMap (fun a => fallsT (J a)) := by
+  intro ts fb h
+  have hnr : ∀ s w, ts.foldl (fun x a => mergeTC x (J a)) noFlows
+      ≠ TCResult.reject s w := ne_reject_of_flows h
+  obtain ⟨hcomp, heq⟩ := fold_merge_flows J ts noFlows hnr
+  refine ⟨hcomp, ?_⟩
+  have hfall : fb.falls = fallsT noFlows ++ ts.flatMap (fun a => fallsT (J a)) := by
+    have hres : TCResult.flows fb = TCResult.flows ({ exits := exitsT noFlows || ts.any (fun a => exitsT (J a)), throws := throwsT noFlows || ts.any (fun a => throwsT (J a)), falls := fallsT noFlows ++ ts.flatMap (fun a => fallsT (J a)), assumes := assumesT noFlows ++ ts.flatMap (fun a => assumesT (J a)) }) :=
+      h.symm.trans heq
+    exact congrArg Flows.falls (TCResult.flows.inj hres)
+  rw [hfall]
+  rfl
+
+/-- Fold specialization: mate-covering index lists + pointwise specLe. -/
+theorem fold_specLe {α β : Type} {J : α → TCResult} {J' : β → TCResult}
+    {R : β → α → Prop} :
+    ∀ (ws : List α) (ws' : List β) (fr : Flows),
+      (∀ b ∈ ws', ∃ a ∈ ws, R b a) →
+      (∀ b a, R b a → specLe (J' b) (J a)) →
+      ws.foldl (fun x a => mergeTC x (J a)) noFlows = TCResult.flows fr →
+      ∃ fr', ws'.foldl (fun x b => mergeTC x (J' b)) noFlows = TCResult.flows fr'
+        ∧ ∀ v ∈ fr'.falls, ∃ u ∈ fr.falls, worldLe v u := by
+  intro ws ws' fr hmate hpoint hcoarse
+  obtain ⟨hccomp, hcfalls⟩ := fold_noFlows_falls ws fr hcoarse
+  have hcomp' : ∀ b ∈ ws', ∃ f, J' b = TCResult.flows f := by
+    intro b hb
+    obtain ⟨a, ha, hR⟩ := hmate b hb
+    obtain ⟨fa, hfa⟩ := hccomp a ha
+    have hpb := hpoint b a hR
+    rw [hfa] at hpb
+    obtain ⟨fb', hfb', -⟩ := specLe_flows_elim hpb
+    exact ⟨fb', hfb'⟩
+  obtain ⟨fr', hfr'⟩ := fold_flows_exists ws' noFlows ⟨_, rfl⟩ hcomp'
+  have hcfalls' := (fold_noFlows_falls ws' fr' hfr').2
+  refine ⟨fr', hfr', ?_⟩
+  intro v hv
+  rw [hcfalls'] at hv
+  obtain ⟨b, hb, hvb⟩ := List.mem_flatMap.mp hv
+  obtain ⟨a, ha, hR⟩ := hmate b hb
+  obtain ⟨fa, hfa⟩ := hccomp a ha
+  have hpb := hpoint b a hR
+  rw [hfa] at hpb
+  obtain ⟨fb', hfb', hcov⟩ := specLe_flows_elim hpb
+  have hvb' : v ∈ fb'.falls := by
+    rw [hfb'] at hvb
+    exact hvb
+  obtain ⟨u, hu, hle⟩ := hcov v hvb'
+  refine ⟨u, ?_, hle⟩
+  rw [hcfalls]
+  exact List.mem_flatMap.mpr ⟨a, ha, by rw [hfa]; exact hu⟩
+
+/-- Refinement gives the length and tmoves of zip with any fixed list. -/
+theorem zip_tmoves_cov : ∀ {s' s : List Ty} {T : List Ty}, stackLe s' s →
+    (List.zip s T).all (fun p => tmoves p.1 p.2) = Bool.true →
+    (List.zip s' T).all (fun p => tmoves p.1 p.2) = Bool.true
+  | [], [], T, _, h => h
+  | [], _ :: _, T, h, _ => by cases h
+  | _ :: _, [], T, h, _ => by cases h
+  | a' :: s', a :: s, T, h, hz => by
+      obtain ⟨hslot, hrest⟩ := stackLe_cons h
+      cases T with
+      | nil => rfl
+      | cons u T' =>
+          simp only [List.zip_cons_cons, List.all_cons, Bool.and_eq_true] at hz ⊢
+          exact ⟨tmoves_trans hslot.1 hz.1, zip_tmoves_cov hrest hz.2⟩
+
+theorem neutral_transfer {σ₀ : List Ty} {u v : World} (hle : worldLe v u)
+    (h : (u.σ.length == σ₀.length)
+      && (List.zip u.σ σ₀).all (fun p => tmoves p.1 p.2) = Bool.true) :
+    (v.σ.length == σ₀.length)
+      && (List.zip v.σ σ₀).all (fun p => tmoves p.1 p.2) = Bool.true := by
+  simp only [Bool.and_eq_true] at h ⊢
+  have hlen : v.σ.length = u.σ.length := stackLe_length hle.2
+  exact ⟨by rw [hlen]; exact h.1, zip_tmoves_cov hle.2 h.2⟩
+
+/-- Refined split1 outputs are covered by coarse split1 outputs. -/
+theorem split1_cov {x : «String»} {T : Ty} {w' w : World} {v' : World}
+    (h : worldLe w' w) (hv' : v' ∈ split1 x T w') :
+    ∃ v ∈ split1 x T w, worldLe v' v := by
+  obtain ⟨hΓ, hσ⟩ := h
+  cases hl' : tyLookup w'.Γ x with
+  | none => rw [split1, hl'] at hv'; cases hv'
+  | some S' =>
+      cases hl : tyLookup w.Γ x with
+      | none =>
+          have hsome := hΓ.1 x
+          rw [hl', hl] at hsome
+          exact absurd hsome (by simp)
+      | some S =>
+          have hcov : ∀ a' ∈ S', ∃ a ∈ S, tmovesV a' a = Bool.true := by
+            intro a' ha'
+            obtain ⟨t, ht, hle⟩ := hΓ.2.1 x S' (by rw [hl']; simp)
+            rw [hl] at ht
+            have hSe : t = S := by simpa using ht.symm
+            rw [hSe] at hle
+            exact tyLe_cov_atoms hle a' ha'
+          have hmeetle : tyLe (meetTy S' T) (meetTy S T) :=
+            tyLe_of_atom_cov (fun a' ha' => meetTy_cov hcov a' ha')
+          have hremle : tyLe (removeTy S' T) (removeTy S T) :=
+            tyLe_of_atom_cov (fun a' ha' => removeTy_cov hcov a' ha')
+          rw [split1, hl'] at hv'
+          rw [split1, hl]
+          simp only [List.mem_append] at hv' ⊢
+          rcases hv' with hv' | hv'
+          · cases hm' : meetTy S' T with
+            | nil => rw [hm'] at hv'; cases hv'
+            | cons m' ms' =>
+                rw [hm'] at hv'
+                simp only [List.mem_singleton] at hv'
+                subst hv'
+                have hm'mem : m' ∈ meetTy S' T := by rw [hm']; exact List.mem_cons_self ..
+                obtain ⟨m, hm_mem, -⟩ := meetTy_cov hcov m' hm'mem
+                have hne : meetTy S T ≠ [] := by
+                  intro hnil; rw [hnil] at hm_mem; cases hm_mem
+                refine ⟨{ Γ := (x, meetTy S T) :: w.Γ,
+                          σ := [.isValue (.boolean Bool.true)] :: w.σ }, ?_, ?_⟩
+                · left
+                  cases hm : meetTy S T with
+                  | nil => exact absurd hm hne
+                  | cons m ms => simp
+                · refine ⟨envLe_cons hΓ ⟨hm' ▸ hmeetle,
+                    fun _ => List.cons_ne_nil _ _⟩, ?_⟩
+                  exact ⟨⟨tmoves_refl _, fun h => h⟩, hσ⟩
+          · cases hm' : removeTy S' T with
+            | nil => rw [hm'] at hv'; cases hv'
+            | cons m' ms' =>
+                rw [hm'] at hv'
+                simp only [List.mem_singleton] at hv'
+                subst hv'
+                have hm'mem : m' ∈ removeTy S' T := by rw [hm']; exact List.mem_cons_self ..
+                obtain ⟨m, hm_mem, -⟩ := removeTy_cov hcov m' hm'mem
+                have hne : removeTy S T ≠ [] := by
+                  intro hnil; rw [hnil] at hm_mem; cases hm_mem
+                refine ⟨{ Γ := (x, removeTy S T) :: w.Γ,
+                          σ := [.isValue (.boolean Bool.false)] :: w.σ }, ?_, ?_⟩
+                · right
+                  cases hm : removeTy S T with
+                  | nil => exact absurd hm hne
+                  | cons m ms => simp
+                · refine ⟨envLe_cons hΓ ⟨hm' ▸ hremle,
+                    fun _ => List.cons_ne_nil _ _⟩, ?_⟩
+                  exact ⟨⟨tmoves_refl _, fun h => h⟩, hσ⟩
+
+def DecMono (dec : VTy → Option Bool) : Prop :=
+  ∀ a' a, tmovesV a' a = Bool.true →
+    (∀ b, dec a' = some b → dec a = some b ∨ dec a = none)
+    ∧ (dec a' = none → dec a = none)
+
+theorem splitP1_cov {x : «String»} {dec : VTy → Option Bool} {w' w : World}
+    {v' : World} (hm : DecMono dec) (h : worldLe w' w)
+    (hv' : v' ∈ splitP1 x dec w') :
+    ∃ v ∈ splitP1 x dec w, worldLe v' v := by
+  obtain ⟨hΓ, hσ⟩ := h
+  cases hl' : tyLookup w'.Γ x with
+  | none => rw [splitP1, hl'] at hv'; cases hv'
+  | some S' =>
+      cases hl : tyLookup w.Γ x with
+      | none =>
+          have hsome := hΓ.1 x
+          rw [hl', hl] at hsome
+          exact absurd hsome (by simp)
+      | some S =>
+          have hcov : ∀ a' ∈ S', ∃ a ∈ S, tmovesV a' a = Bool.true := by
+            intro a' ha'
+            obtain ⟨t, ht, hle⟩ := hΓ.2.1 x S' (by rw [hl']; simp)
+            rw [hl] at ht
+            have hSe : t = S := by simpa using ht.symm
+            rw [hSe] at hle
+            exact tyLe_cov_atoms hle a' ha'
+          have mk_le : ∀ {a' a : VTy} {b : Bool},
+              tmovesV a' a = Bool.true →
+              worldLe
+                { Γ := (x, [a']) :: w'.Γ,
+                  σ := [.isValue (.boolean b)] :: w'.σ }
+                { Γ := (x, [a]) :: w.Γ,
+                  σ := [.isValue (.boolean b)] :: w.σ } := by
+            intro a' a b haa
+            exact ⟨envLe_cons hΓ
+              ⟨by simp [tyLe, tmoves, haa], fun _ => List.cons_ne_nil _ _⟩,
+              ⟨⟨tmoves_refl _, fun h => h⟩, hσ⟩⟩
+          simp only [splitP1, hl', List.mem_flatMap] at hv'
+          obtain ⟨a', ha', hv'a'⟩ := hv'
+          obtain ⟨a, ha, haa⟩ := hcov a' ha'
+          obtain ⟨hmonoS, hmonoN⟩ := hm a' a haa
+          simp only [splitP1, hl, List.mem_flatMap]
+          cases hd' : dec a' with
+          | some b' =>
+              cases b' with
+              | true =>
+                  simp only [splitP1At, hd', List.mem_singleton] at hv'a'
+                  subst hv'a'
+                  rcases hmonoS Bool.true hd' with htrue | hnone
+                  · exact ⟨{ Γ := (x, [a]) :: w.Γ,
+                             σ := [.isValue (.boolean Bool.true)] :: w.σ },
+                      ⟨a, ha, by simp [splitP1At, htrue]⟩, mk_le haa⟩
+                  · exact ⟨{ Γ := (x, [a]) :: w.Γ,
+                             σ := [.isValue (.boolean Bool.true)] :: w.σ },
+                      ⟨a, ha, by simp [splitP1At, hnone]⟩, mk_le haa⟩
+              | false =>
+                  simp only [splitP1At, hd', List.mem_singleton] at hv'a'
+                  subst hv'a'
+                  rcases hmonoS Bool.false hd' with hfalse | hnone
+                  · exact ⟨{ Γ := (x, [a]) :: w.Γ,
+                             σ := [.isValue (.boolean Bool.false)] :: w.σ },
+                      ⟨a, ha, by simp [splitP1At, hfalse]⟩, mk_le haa⟩
+                  · exact ⟨{ Γ := (x, [a]) :: w.Γ,
+                             σ := [.isValue (.boolean Bool.false)] :: w.σ },
+                      ⟨a, ha, by simp [splitP1At, hnone]⟩, mk_le haa⟩
+          | none =>
+              have hnone := hmonoN hd'
+              simp only [splitP1At, hd', List.mem_cons,
+                List.not_mem_nil, or_false] at hv'a'
+              rcases hv'a' with hv'a' | hv'a'
+              · subst hv'a'
+                exact ⟨{ Γ := (x, [a]) :: w.Γ,
+                           σ := [.isValue (.boolean Bool.true)] :: w.σ },
+                    ⟨a, ha, by simp [splitP1At, hnone]⟩, mk_le haa⟩
+              · subst hv'a'
+                exact ⟨{ Γ := (x, [a]) :: w.Γ,
+                           σ := [.isValue (.boolean Bool.false)] :: w.σ },
+                    ⟨a, ha, by simp [splitP1At, hnone]⟩, mk_le haa⟩
+
+theorem decMono_predDecide (f : «String») (dec : VTy → Option Bool)
+    (hd : predDecide f = some dec) : DecMono dec := by
+  unfold predDecide at hd
+  split at hd
+  all_goals first
+    | (injection hd with hdec
+       subst hdec
+       intro a' a haa
+       constructor
+       · intro b hb
+         cases a' <;> cases a <;> simp_all [tmovesV, decide_eq_true_eq]
+       · intro hnone
+         cases a' <;> cases a <;> simp_all [tmovesV, decide_eq_true_eq])
+    | cases hd
+
+theorem decMono_primDecide (p : Prim) (dec : VTy → Option Bool)
+    (hd : primDecide p = some dec) : DecMono dec := by
+  cases p <;> simp only [primDecide] at hd
+  all_goals first
+    | (injection hd with hdec
+       subst hdec
+       intro a' a haa
+       constructor
+       · intro b hb
+         cases a' <;> cases a <;> simp_all [tmovesV]
+       · intro hnone
+         cases a' <;> cases a <;> simp_all [tmovesV])
+    | cases hd
+
+theorem specLe_loop_join {fb' fb : Flows} {k' k : TCResult}
+    (h : specLe k' k) :
+    specLe
+      (match k' with
+       | .flows fr' => .flows { exits := fb'.exits || fr'.exits, throws := fb'.throws || fr'.throws, falls := fr'.falls, assumes := fb'.assumes ++ fr'.assumes }
+       | res => res)
+      (match k with
+       | .flows fr => .flows { exits := fb.exits || fr.exits, throws := fb.throws || fr.throws, falls := fr.falls, assumes := fb.assumes ++ fr.assumes }
+       | res => res) := by
+  cases k with
+  | reject s w => trivial
+  | flows fr =>
+      obtain ⟨fr', rfl, hcov⟩ := specLe_flows_elim h
+      exact hcov
+
+theorem checkLoopBody_spec (site : Instr) (σ₀ : List Ty) (k : Worlds → TCResult)
+    {rbody' rbody : TCResult}
+    (hspec : specLe rbody' rbody)
+    (hk : ∀ fs' fs, (∀ v ∈ fs', ∃ u ∈ fs, worldLe v u) → specLe (k fs') (k fs)) :
+    specLe (checkLoopBody rbody' site σ₀ k) (checkLoopBody rbody site σ₀ k) := by
+  cases rbody with
+  | reject s w => exact trivial
+  | flows fb =>
+      obtain ⟨fb', rfl, hcov⟩ := specLe_flows_elim hspec
+      simp only [checkLoopBody]
+      by_cases hneu : fb.falls.all (fun w =>
+        w.σ.length == σ₀.length
+          && (List.zip w.σ σ₀).all (fun (t, u) => tmoves t u)) = true
+      · have hneu' : fb'.falls.all (fun w =>
+            w.σ.length == σ₀.length
+              && (List.zip w.σ σ₀).all (fun (t, u) => tmoves t u)) = true := by
+          rw [List.all_eq_true] at hneu ⊢
+          intro v hv
+          obtain ⟨u, hu, hle⟩ := hcov v hv
+          exact neutral_transfer hle (hneu u hu)
+        cases hkr : k fb.falls with
+        | reject s w =>
+            simp only [hneu]
+            exact trivial
+        | flows fr =>
+            have hspec' : specLe (k fb'.falls) (TCResult.flows fr) := by
+              rw [← hkr]; exact hk _ _ hcov
+            obtain ⟨fr', hfr', hcov'⟩ := specLe_flows_elim hspec'
+            simp only [hneu, hneu', hfr']
+            exact hcov' 
+      · simp only [hneu]
+        exact trivial
