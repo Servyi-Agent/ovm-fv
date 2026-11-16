@@ -19,8 +19,28 @@ import Metalanguage.SubjectReduction
 #print axioms typeOfE_cov
 -- the one-step machine covariance
 #print axioms step1_cov
+-- the specialization layer (#8): decider stability + split covariance
+#print axioms decMono_predDecide
+#print axioms decMono_primDecide
+#print axioms split1_cov
+#print axioms splitP1_cov
+-- the specLe relational layer (#8)
+#print axioms specLe_flows_intro
+#print axioms specLe_reject
+#print axioms specLe_merge
+#print axioms specLe_loop_join
+#print axioms checkLoopBody_spec
+#print axioms fold_specLe
+-- the fork lift (#9)
+#print axioms fork_specLe
 -- the no-silent-falls invariant (56 arms)
 #print axioms checkSeq_exits
+-- the terminality-transfer layer (exit preservation)
+#print axioms mergeTC_terminal
+#print axioms fold_exits_true_of
+#print axioms fold_terminal_falls_nil
+#print axioms flatMap_falls_nil
+#print axioms fork_lift
 -- the SR arms proven so far
 #print axioms SR_kIte
 #print axioms SR_kPop
