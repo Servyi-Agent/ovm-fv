@@ -21,6 +21,7 @@ import Metalanguage.SubjectReduction
 #print axioms step1_cov
 -- the specialization layer (#8): decider stability + split covariance
 #print axioms decMono_predDecide
+#print axioms decMono_isCallable
 #print axioms decMono_primDecide
 #print axioms split1_cov
 #print axioms splitP1_cov

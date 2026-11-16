@@ -213,11 +213,12 @@ def stateOk (sigs : SigTable) (r : Ty) (m : FM) : Prop :=
   | .fell _ _ _ _ => False
 
 /- Registry coverage (existence): every name the checker may call is
-    answered by the registry or natively; the MOP-Get dispatch target
-    exists. -/
+    answered by the registry (Get and Call are registry-backed -
+    7.3.2 / 7.3.13 - and the nativeOps stub is gone); the MOP-Get
+    dispatch target exists. -/
 def closedRegistry (sigs : SigTable) (reg : AOReg) : Prop :=
   (∀ n _ps _ret, sigFind sigs n = some (_ps, _ret) →
-      (findAO reg n).isSome = Bool.true ∨ nativeOps.contains n = Bool.true)
+      (findAO reg n).isSome = Bool.true)
   ∧ (findAO reg "OrdinaryGet").isSome = Bool.true
 
 /- ## Registry certification
@@ -4046,8 +4047,9 @@ def stateTyped (sigs : SigTable) (r : Ty) (m : FM) : Prop :=
 
 def SR_arm (sigs : SigTable) (reg : AOReg) (h : Instr) (s : FM) (r : Ty) : Prop :=
   registryCertified sigs reg →
-    stateTyped sigs r (withHead h s) →
-      stateTyped sigs r (fstep reg (withHead h s))
+    closedRegistry sigs reg →
+      stateTyped sigs r (withHead h s) →
+        stateTyped sigs r (fstep reg (withHead h s))
 
 /- Machine-ret stability: swapping the head frame's non-ret fields
     (a same-frame step) does not change the machine's answer type;
@@ -4085,7 +4087,7 @@ theorem envTyOf_zipTy : ∀ (ps : List «String») (vs : List JSValue),
 /-- The kIte arm. -/
 theorem SR_kIte (sigs : SigTable) (reg : AOReg) (t e : List Instr) (s : FM) (r : Ty) :
     SR_arm sigs reg (.kIte t e) s r := by
-  intro _ hpre
+  intro _ _ hpre
   cases s with
   | fdone v fs heap nl n => exact hpre
   | fell fs heap nl n => exact hpre
@@ -4167,7 +4169,7 @@ theorem SR_kIte (sigs : SigTable) (reg : AOReg) (t e : List Instr) (s : FM) (r :
 /-- The kPop arm. -/
 theorem SR_kPop (sigs : SigTable) (reg : AOReg) (s : FM) (r : Ty) :
     SR_arm sigs reg .kPop s r := by
-  intro _ hpre
+  intro _ _ hpre
   cases s with
   | fdone v fs heap nl n => exact hpre
   | fell fs heap nl n => exact hpre
@@ -4191,7 +4193,7 @@ theorem SR_kPop (sigs : SigTable) (reg : AOReg) (s : FM) (r : Ty) :
 /-- The kSet arm. -/
 theorem SR_kSet (sigs : SigTable) (reg : AOReg) (x : «String») (s : FM) (r : Ty) :
     SR_arm sigs reg (.kSet x) s r := by
-  intro _ hpre
+  intro _ _ hpre
   cases s with
   | fdone v fs heap nl n => exact hpre
   | fell fs heap nl n => exact hpre
@@ -4215,7 +4217,7 @@ theorem SR_kSet (sigs : SigTable) (reg : AOReg) (x : «String») (s : FM) (r : T
 /-- The kEval-const arm (a pushing arm; all value shapes). -/
 theorem SR_kEval_const (sigs : SigTable) (reg : AOReg) (v : JSValue) (s : FM) (r : Ty) :
     SR_arm sigs reg (.kEval (.const v)) s r := by
-  intro _ hpre
+  intro _ _ hpre
   cases s with
   | fdone v' fs heap nl n => exact hpre
   | fell fs heap nl n => exact hpre
@@ -4456,11 +4458,14 @@ theorem frameChecks_elim {sigs : SigTable} {f : Fr}
 /-- THE kCall ARM (registry-hit; the native branch is the
     specialization capstone's business). -/
 theorem SR_kCall (sigs : SigTable) (reg : AOReg)
-    (hclosed : ∀ (m : «String») (ps : List Ty) (retj : List Pending),
-      sigFind sigs m = some (ps, retj) → (findAO reg m).isSome = Bool.true)
     (fname : «String») (n : Nat) (s : FM) (r : Ty) :
     SR_arm sigs reg (.kCall fname n) s r := by
-  intro hcert hpre
+  intro hcert hcover hpre
+  -- coverage lives in the unified judgement: every sig the checker
+  -- accepts is registry-found (closedRegistry.1)
+  have hclosed : ∀ (m : «String») (ps : List Ty) (retj : List Pending),
+      sigFind sigs m = some (ps, retj) → (findAO reg m).isSome = Bool.true :=
+    hcover.1
   cases s with
   | fdone v fs heap nl n' => exact hpre
   | fell fs heap nl n' => exact hpre
@@ -4852,11 +4857,113 @@ theorem splitP1_cov {x : «String»} {dec : VTy → Option Bool} {w' w : World}
                            σ := [.isValue (.boolean Bool.false)] :: w.σ },
                     ⟨a, ha, by simp [splitP1At, hnone]⟩, mk_le haa⟩
 
+/-- The IsCallable decider is refinement-stable: the object class
+    atom is its only undecided atom; every other atom is decided
+    false, and a decided atom moves only to decided atoms (the obj
+    class atom's only strict refinements are object singletons,
+    which stay decided). -/
+theorem decMono_isCallable : DecMono isCallableAtom := by
+  have hf : ∀ x, x ≠ .anyValue .obj → isCallableAtom x = some Bool.false := by
+    intro x hne
+    cases x with
+      | anyValue c =>
+        cases c with
+          | obj => exact absurd rfl hne
+          | undef => rfl
+          | null => rfl
+          | bool => rfl
+          | num => rfl
+          | str => rfl
+          | list => rfl
+          | desc => rfl
+      | complN p => rfl
+      | complT => rfl
+      | isValue v => rfl
+      | desc fs => rfl
+      | notPresent => rfl
+  intro a' a haa
+  constructor
+  · intro b hb
+    cases hd' : isCallableAtom a' with
+    | none => rw [hd'] at hb; cases hb
+    | some bv =>
+        have hne' : a' ≠ .anyValue .obj := by
+          intro he
+          rw [he] at hd'
+          cases hd'
+        rw [hf a' hne'] at hb
+        injection hb with hbf
+        subst hbf
+        cases a with
+          | anyValue c =>
+              cases c with
+                | obj => exact Or.inr rfl
+                | undef => exact Or.inl rfl
+                | null => exact Or.inl rfl
+                | bool => exact Or.inl rfl
+                | num => exact Or.inl rfl
+                | str => exact Or.inl rfl
+                | list => exact Or.inl rfl
+                | desc => exact Or.inl rfl
+          | complN p => exact Or.inl rfl
+          | complT => exact Or.inl rfl
+          | isValue v => exact Or.inl rfl
+          | desc fs => exact Or.inl rfl
+          | notPresent => exact Or.inl rfl
+  · intro hnone
+    cases hd' : isCallableAtom a' with
+    | some bv =>
+        have hne' : a' ≠ .anyValue .obj := by
+          intro he
+          rw [he] at hd'
+          cases hd'
+        rw [hf a' hne'] at hnone
+        cases hnone
+    | none =>
+        have heq' : a' = .anyValue .obj := by
+            cases a' with
+              | anyValue c =>
+                  cases c with
+                    | obj => rfl
+                    | undef => simp [isCallableAtom] at hd'
+                    | null => simp [isCallableAtom] at hd'
+                    | bool => simp [isCallableAtom] at hd'
+                    | num => simp [isCallableAtom] at hd'
+                    | str => simp [isCallableAtom] at hd'
+                    | list => simp [isCallableAtom] at hd'
+                    | desc => simp [isCallableAtom] at hd'
+              | complN p => simp [isCallableAtom] at hd'
+              | complT => simp [isCallableAtom] at hd'
+              | isValue v => simp [isCallableAtom] at hd'
+              | desc fs => simp [isCallableAtom] at hd'
+              | notPresent => simp [isCallableAtom] at hd'
+        subst heq'
+        cases a with
+          | anyValue c =>
+              cases c with
+                | obj => rfl
+                | undef => simp_all [tmovesV]
+                | null => simp_all [tmovesV]
+                | bool => simp_all [tmovesV]
+                | num => simp_all [tmovesV]
+                | str => simp_all [tmovesV]
+                | list => simp_all [tmovesV]
+                | desc => simp_all [tmovesV]
+          | complN p => simp_all [tmovesV]
+          | complT => simp_all [tmovesV]
+          | isValue v => simp_all [tmovesV]
+          | desc fs => simp_all [tmovesV]
+          | notPresent => simp_all [tmovesV]
+
+
 theorem decMono_predDecide (f : «String») (dec : VTy → Option Bool)
     (hd : predDecide f = some dec) : DecMono dec := by
   unfold predDecide at hd
   split at hd
   all_goals first
+    | (injection hd with hdec
+       subst hdec
+       exact decMono_isCallable)
     | (injection hd with hdec
        subst hdec
        intro a' a haa

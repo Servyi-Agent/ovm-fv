@@ -41,10 +41,9 @@ def fnOfName : «String» → Option Fn
   | "Get" => some .get | "Call" => some .call
   | _ => none
 
-/-- Native stubs: machine parity is the kCall registry-miss arm
-    (nativeOps => push compl false undefined). -/
+/-- Native stubs: NONE remain. Get and Call are registry-backed
+    (7.3.2 / 7.3.13); the machine's kCall registry-miss arm is loud. -/
 def fnStub : Fn → Bool
-  | .get | .call => Bool.true
   | _ => Bool.false
 
 /-- Raw outcome. `fall` = ran off the end of THIS list (mid-loop that
