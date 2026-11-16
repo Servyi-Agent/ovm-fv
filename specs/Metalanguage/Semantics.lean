@@ -151,6 +151,7 @@ def applyPrim (h : Heap) : Prim → JSValue → JSValue
             match v with
             | .descV ⟨_, _, g', s', _, _⟩ => g'.isSome || s'.isSome
             | _ => Bool.false
+        | "IsCallable" => hasCallV h v
         | _ => Bool.false)
   | .pIsType s, v =>
       .boolean (
@@ -463,6 +464,7 @@ def fstep (reg : AOReg) : FM → FM
         -- predicates fuse natively (the predDecide stratum); other
         -- callees expand through the general call dust
         if fname == "IsDataDescriptor" || fname == "IsAccessorDescriptor"
+            || fname == "IsCallable"
         then done (⟨.kTestVar x (.pPred fname b) :: rest, env, f.eval, f.ret⟩ :: fs)
         else done (⟨.kEval (.call fname [.nv x]) :: .kPrim1 (if b then .pIsTrue else .pIsFalse)
                         :: rest, env, f.eval, f.ret⟩ :: fs)
@@ -525,11 +527,9 @@ def fstep (reg : AOReg) : FM → FM
               done (⟨compileSteps body, ps.zip popped.reverse, [], fname⟩
                        :: ⟨rest, env, older, f.ret⟩ :: fs)
           | none =>
-              -- registry miss: prim-named calls (GetV/Get/Call/…)
-              -- evaluate natively (stub: undefined), all others loud
-              if nativeOps.contains fname
-              then done (⟨rest, env, .compl Bool.false JSValue.undefined :: older, f.ret⟩ :: fs)
-              else .fell (f :: fs) heap nl 0
+              -- registry miss: LOUD. Get and Call are registry-backed
+              -- (7.3.2 / 7.3.13); the nativeOps stub is gone
+              .fell (f :: fs) heap nl 0
     | .kSet x :: rest, env, v :: eval => done (⟨rest, (x, v) :: env, eval, f.ret⟩ :: fs)
     | .kSet _ :: _, _, [] => .fell (f :: fs) heap nl 0
     | .kTestVar x p :: rest, env, eval =>
@@ -566,6 +566,15 @@ def fstep (reg : AOReg) : FM → FM
               | some (ps, body) =>
                   done (⟨compileSteps body, ps.zip [recvv, p, rcv], [], "OrdinaryGet"⟩
                           :: ⟨rest, env, older, f.ret⟩ :: fs)
+              | none => .fell (f :: fs) heap nl 0
+          | "Call", [.listV args, thisV], .obj loc =>
+              match heap loc with
+              | some o =>
+                  match o.kind with
+                  | .builtin ps body =>
+                      done (⟨compileSteps body, ps.zip args, [], "Call"⟩
+                              :: ⟨rest, env, older, f.ret⟩ :: fs)
+                  | _ => .fell (f :: fs) heap nl 0
               | none => .fell (f :: fs) heap nl 0
           | "GetOwnProperty", [p], .obj loc =>
               match heap loc with

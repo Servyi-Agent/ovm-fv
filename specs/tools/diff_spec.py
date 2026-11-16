@@ -24,9 +24,11 @@ CASES = {
     "sec-tostring":      "spec/7/1/19/spec.lean",
     "sec-toobject":      "spec/7/1/20/spec.lean",
     "sec-topropertykey": "spec/7/1/21/spec.lean",
+    "sec-get-o-p":       "spec/7/3/2/spec.lean",
     "sec-getv":          "spec/7/3/3/spec.lean",
     "sec-getmethod":     "spec/7/3/10/spec.lean",
     "sec-ordinaryget":   "spec/10/1/8/1/spec.lean",
+    "sec-call":          "spec/7/3/13/spec.lean",
 }
 MARKERS = ["1.", "a.", "i.", "1.", "a."]
 

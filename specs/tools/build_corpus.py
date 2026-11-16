@@ -142,7 +142,7 @@ def corpusSigs : SigTable := [
   -- the coercers provably return non-objects or throw (every return
   -- is guarded by an is-not-an-Object split): the tight return is a
   -- FACT, and it discharges ToString step 11's assert
-  ("OrdinaryToPrimitive", ([langT, [.isValue (.str "string"), .isValue (.str "number")]],
+  ("OrdinaryToPrimitive", ([[.anyValue .obj], [.isValue (.str "string"), .isValue (.str "number")]],
       [.normal [.anyValue .undef, .anyValue .null, .anyValue .bool, .anyValue .num, .anyValue .str], .throw])),
   ("ToPrimitive",         ([langT, [.notPresent, .isValue (.str "string"), .isValue (.str "number")]],
       [.normal [.anyValue .undef, .anyValue .null, .anyValue .bool, .anyValue .num, .anyValue .str], .throw])),
@@ -151,7 +151,7 @@ def corpusSigs : SigTable := [
   -- GetV propagates ? ToObject(V); GetMethod propagates ? GetV:
   ("GetV",                ([langT, [.anyValue .str]], [.normal langT, .throw])),
   ("GetMethod",           ([langT, [.anyValue .str]], [.normal langT, .throw])),
-  ("OrdinaryGet",         ([[.anyValue .obj], langT, langT], [.normal langT])),
+  ("OrdinaryGet",         ([[.anyValue .obj], langT, langT], [.normal langT, .throw])),
   -- 6/2/6/3: generic descriptor test (fused pPred calls to the other two)
   ("IsGenericDescriptor", ([[.anyValue .desc]], [.normal [.anyValue .bool]])),
   -- 5.2.4.1: completion in, same completion out; the delivered
@@ -175,13 +175,13 @@ def corpusSigs : SigTable := [
   -- typed as the true singleton (step 5.b's Return done).
   ("IteratorStep",        ([[.anyValue .obj]], [.normal [.anyValue .obj, .isValue (.boolean Bool.true)], .throw])),
   ("IteratorClose",       ([[.anyValue .obj], complTy [.normal langT, .throw]], [.normal langT, .throw])),
-  -- prim-named calls the machine handles natively on registry miss:
-  ("Get",                 ([langT, langT], [.normal langT])),
+  -- registry-backed (7.3.2): the one-step [[Get]] wrapper
+  ("Get",                 ([[.anyValue .obj], langT], [.normal langT, .throw])),
   -- deviation: the spec's « argList » is written bare (list
   -- brackets are Lean identifier delimiters) in IteratorNext but
   -- compiled as a list literal in ToPrimitive — the third Call
   -- parameter accepts either.
-  ("Call",                ([langT, langT, langT ++ [.anyValue .list]], [.normal langT]))
+  ("Call",                ([langT, langT, langT ++ [.anyValue .list]], [.normal langT, .throw]))
 ]
 
 /- Gate helpers: the #evals are for humans; the examples below make
@@ -483,6 +483,10 @@ example : assumesOf corpusSigs "IteratorStep" ["iteratorRecord"]
     (compileSteps (build iteratorStep7_4_9)) = 0 := by native_decide
 example : assumesOf corpusSigs "IteratorClose" ["iteratorRecord", "completion"]
     (compileSteps (build iteratorClose7_4_11)) = 0 := by native_decide
+example : assumesOf corpusSigs "Get" ["obj", "propertyKey"]
+    (compileSteps (build get7_3_2)) = 0 := by native_decide
+example : assumesOf corpusSigs "Call" ["func", "thisValue", "argList"]
+    (compileSteps (build call7_3_13)) = 0 := by native_decide
 '''
 out = ["import metalanguage", ""]
 entries = []

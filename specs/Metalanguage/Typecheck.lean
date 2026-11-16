@@ -233,10 +233,13 @@ def mopArity : «String» → Option Nat
   | "Get" => some 2
   | "GetOwnProperty" => some 1
   | "GetPrototypeOf" => some 0
+  | "Call" => some 2
   | _ => none
 
 def mopResult : «String» → List Pending
-  | "Get" => [.normal langT]
+  -- [[Get]] (OrdinaryGet) and [[Call]] (builtin/registry code) can
+  -- throw: their result unions carry the throw alternative.
+  | "Get" | "Call" => [.normal langT, .throw]
   -- Iterator Record fields: [[Iterator]] is an Object (spec 7.4.1);
   -- the others are dynamic guards.
   | "Iterator" => [.normal [.anyValue .obj]]
@@ -513,7 +516,7 @@ def testType : Expr → Option Ty
 /-- The correlated-predicate stratum: these AO names fuse into
     kTestVar (machine + checker agree on exactly this test). -/
 def fusedPred (f : «String») : Bool :=
-  f == "IsDataDescriptor" || f == "IsAccessorDescriptor"
+  f == "IsDataDescriptor" || f == "IsAccessorDescriptor" || f == "IsCallable"
 
 /-- The THEN-type of a fused variable test (per Prim). none = no
     refinement (undecided predicate: plain boolean push). -/
@@ -750,8 +753,21 @@ def step1 (sigs : SigTable) (i : Instr) (w : World) : Option Worlds :=
           | none => none
   | _ => some [w]
 
+/-- IsCallable per-atom verdict: every non-object atom is
+    statically not callable; the object atom is heap-dependent
+    (undecided: both worlds). -/
+def isCallableAtom : VTy → Option Bool
+  | .anyValue c =>
+      match c with
+      | .obj => none
+      | _ => some Bool.false
+  | _ => some Bool.false
+
 /-- Correlated predicate tests: IsDataDescriptor(x) /
-    IsAccessorDescriptor(x) are decidable per EXACT desc atom. -/
+    IsAccessorDescriptor(x) are decidable per EXACT desc atom;
+    IsCallable(x) is decidable per VALUE CLASS - every non-object
+    atom is statically not callable, the object atom is
+    heap-dependent (undecided: both worlds). -/
 def predDecide (f : «String») : Option (VTy → Option Bool) :=
   match f with
   | "IsDataDescriptor" =>
@@ -762,6 +778,7 @@ def predDecide (f : «String») : Option (VTy → Option Bool) :=
       some (fun t => match t with
         | .desc fs => some (fs.any (fun fld => fAcc.contains fld))
         | _ => none)
+  | "IsCallable" => some isCallableAtom
   | _ => none
 
 /-- Split ONE world at a shape test of x with then-type T. -/
@@ -970,10 +987,16 @@ def checkSeq : SigTable → Ty → World → List Instr → TCResult
   | sigs, r, w, .kTestVar x p :: rest =>
       -- FUSED variable test: the Γ-correlated split site
       match p with
-      | .pPred f _ =>
+      | .pPred f b =>
+          -- the machine's kTestVar pushes (b == verdict); the split's
+          -- verdicts must be B-ADJUSTED to stay machine-aligned (an
+          -- `is false` guard refines the SURVIVING branch to the
+          -- predicate's true atoms - e.g. IsCallable(func) is false,
+          -- throw: continuing forces func : object).
           match predDecide f with
           | some dec =>
-              forkTC (.kTestVar x p) (splitP1 x dec w)
+              forkTC (.kTestVar x p)
+                (splitP1 x (fun a => (dec a).map (fun bv => bv == b)) w)
                 (fun u => checkSeq sigs r u rest)
           | none =>
               match tyLookup w.Γ x with

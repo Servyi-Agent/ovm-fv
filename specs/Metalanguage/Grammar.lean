@@ -728,10 +728,6 @@ inductive Prim where              -- bedrock predicates (the axiom stratum)
 
 
 
-/-- Calls the machine answers natively when the registry misses. -/
-def nativeOps : List «String» :=
-  ["GetV", "Get", "Call", "GetMethod", "OrdinaryToPrimitive"]
-
 /- Internal-slot universe: closed by construction (ES declares the set). -/
 inductive Slot where
   | call | construct | strData | dateValue

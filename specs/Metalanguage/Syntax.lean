@@ -29,6 +29,11 @@ syntax var : algExpr
 syntax "%" ident "%" : algExpr
 syntax "true" : algExpr
 syntax "false" : algExpr
+/- "a new empty List" (Call's step 1): the draft's empty list
+   literal, as a value expression. The trailing word is captured as
+   an ident (NOT the keyword "List" - that would re-lex List
+   everywhere); the elaborator guards it to exactly "List". -/
+syntax "a" "new" "empty" ident : algExpr
 syntax "undefined" : algExpr
 syntax num : algExpr
 syntax scientific : algExpr
@@ -391,6 +396,9 @@ macro_rules
       ``(Expr.varNotPresent $(quote (firstIdentName e.raw)))
   | `([e| % $x:ident % ]) =>
       ``(Expr.const (JSValue.str $(quote ("%" ++ toString x.getId ++ "%"))))
+  | `([e| a new empty $x:ident]) =>
+      if x.getId.toString == "List" then ``(Expr.const (JSValue.listV []))
+      else Macro.throwError "expected \"a new empty List\""
   | `([e| number]) => ``(Expr.const (JSValue.str "number"))
   | `([e| string]) => ``(Expr.const (JSValue.str "string"))
 
