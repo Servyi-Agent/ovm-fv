@@ -22,8 +22,10 @@ fi
 #    surface as sorryAx here
 AX=$(PATH="$HOME/.elan/bin:$PATH" lake env lean tools/axioms.lean)
 echo "$AX"
-if echo "$AX" | grep -qv "depends on axioms: \[propext, Classical.choice, Quot.sound\]"; then
-  echo "PROOF GATE: non-standard axioms found"; exit 1
+# every axiom set must be a SUBSET of the standard three (fewer is fine)
+BAD=$(echo "$AX" | grep "depends on axioms" | grep -vE "depends on axioms: \[\]?(propext|Classical\.choice|Quot\.sound)?(, (propext|Classical\.choice|Quot\.sound))*\]" || true)
+if [ -n "$BAD" ]; then
+  echo "PROOF GATE: non-standard axioms found:"; echo "$BAD"; exit 1
 fi
 if [ "$(echo "$AX" | wc -l)" -ne "$(grep -c '#print axioms' tools/axioms.lean)" ]; then
   echo "PROOF GATE: axiom report incomplete (missing theorems?)"; exit 1
