@@ -47,6 +47,8 @@ import Metalanguage.SubjectReduction
 #print axioms checkSeq_specialize_terminal
 #print axioms frameOkUnder_elim
 #print axioms SR_kRet
+#print axioms SR_kMkList
+#print axioms SR_kNewSlot
 -- the SR arms proven so far
 #print axioms SR_kIte
 #print axioms SR_kPop
