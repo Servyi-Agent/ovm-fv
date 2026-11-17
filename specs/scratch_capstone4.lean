@@ -42,6 +42,68 @@ theorem typeMask_bare (s : «String») :
   unfold typeMask at hb
   split at hb <;> simp_all [isBareVTy]
 
+theorem markDebt_specLe_left (why : «String») {r' r : TCResult}
+    (h : specLe r' r) : specLe (markDebt why r') r := by
+  cases r with
+  | reject s w => exact trivial
+  | flows f =>
+      obtain ⟨f', rfl, hcov⟩ := specLe_flows_elim h
+      simpa [markDebt, specLe] using hcov
+
+theorem markDebt_specLe_right (why : «String») {r' r : TCResult}
+    (h : specLe r' r) : specLe r' (markDebt why r) := by
+  cases r with
+  | reject s w => exact trivial
+  | flows f =>
+      obtain ⟨f', rfl, hcov⟩ := specLe_flows_elim h
+      simpa [markDebt, specLe] using hcov
+
+def assertVerdict (sigs : SigTable) (r : Ty) (rest : List Instr)
+    (σ' : List Ty) (w : World) (a : VTy) : TCResult :=
+  match a with
+  | .isValue (.boolean Bool.true) => checkSeq sigs r { w with σ := σ' } rest
+  | .isValue (.boolean Bool.false) | .anyValue .bool =>
+      markDebt "assert obligation not discharged"
+        (checkSeq sigs r { w with σ := σ' } rest)
+  | _ => .reject .kAssert "assert: verdict is not boolean"
+
+theorem assertVerdict_spec (sigs : SigTable) (r : Ty) (rest : List Instr)
+    {w' w : World} {σr σc : List Ty}
+    (h : specLe (checkSeq sigs r { w' with σ := σr } rest)
+                (checkSeq sigs r { w with σ := σc } rest))
+    {a' a : VTy} (hmv : tmovesV a' a = Bool.true) :
+    specLe (assertVerdict sigs r rest σr w' a')
+      (assertVerdict sigs r rest σc w a) := by
+  cases a with
+  | isValue v =>
+      cases v with
+      | boolean b => cases b <;> cases a' <;> simp_all only [assertVerdict, tmovesV, tagOf, beq_iff_eq, decide_eq_true_eq] <;> try subst_vars <;> first | exact h | exact markDebt_specLe _ h | exact markDebt_specLe_left _ h | exact markDebt_specLe_right _ h | exact trivial | exact absurd hmv (by simp)
+      | number n => cases a' <;> simp_all only [assertVerdict, tmovesV, tagOf, beq_iff_eq, decide_eq_true_eq] <;> try subst_vars <;> first | exact h | exact markDebt_specLe _ h | exact markDebt_specLe_left _ h | exact markDebt_specLe_right _ h | exact trivial | exact absurd hmv (by simp)
+      | str st => cases a' <;> simp_all only [assertVerdict, tmovesV, tagOf, beq_iff_eq, decide_eq_true_eq] <;> try subst_vars <;> first | exact h | exact markDebt_specLe _ h | exact markDebt_specLe_left _ h | exact markDebt_specLe_right _ h | exact trivial | exact absurd hmv (by simp)
+      | listV l => cases a' <;> simp_all only [assertVerdict, tmovesV, tagOf, beq_iff_eq, decide_eq_true_eq] <;> try subst_vars <;> first | exact h | exact markDebt_specLe _ h | exact markDebt_specLe_left _ h | exact markDebt_specLe_right _ h | exact trivial | exact absurd hmv (by simp)
+      | compl ab vv => cases a' <;> simp_all only [assertVerdict, tmovesV, tagOf, beq_iff_eq, decide_eq_true_eq] <;> try subst_vars <;> first | exact h | exact markDebt_specLe _ h | exact markDebt_specLe_left _ h | exact markDebt_specLe_right _ h | exact trivial | exact absurd hmv (by simp)
+      | obj loc => cases a' <;> simp_all only [assertVerdict, tmovesV, tagOf, beq_iff_eq, decide_eq_true_eq] <;> try subst_vars <;> first | exact h | exact markDebt_specLe _ h | exact markDebt_specLe_left _ h | exact markDebt_specLe_right _ h | exact trivial | exact absurd hmv (by simp)
+      | descV d => cases a' <;> simp_all only [assertVerdict, tmovesV, tagOf, beq_iff_eq, decide_eq_true_eq] <;> try subst_vars <;> first | exact h | exact markDebt_specLe _ h | exact markDebt_specLe_left _ h | exact markDebt_specLe_right _ h | exact trivial | exact absurd hmv (by simp)
+      | undefined => cases a' <;> simp_all only [assertVerdict, tmovesV, tagOf, beq_iff_eq, decide_eq_true_eq] <;> try subst_vars <;> first | exact h | exact markDebt_specLe _ h | exact markDebt_specLe_left _ h | exact markDebt_specLe_right _ h | exact trivial | exact absurd hmv (by simp)
+      | null => cases a' <;> simp_all only [assertVerdict, tmovesV, tagOf, beq_iff_eq, decide_eq_true_eq] <;> try subst_vars <;> first | exact h | exact markDebt_specLe _ h | exact markDebt_specLe_left _ h | exact markDebt_specLe_right _ h | exact trivial | exact absurd hmv (by simp)
+  | anyValue c =>
+      cases c with
+      | bool =>
+          cases a' with
+          | isValue v => cases v <;> (first | (rename_i b; cases b) | skip) <;> simp_all only [assertVerdict, tmovesV, tagOf, beq_iff_eq, decide_eq_true_eq] <;> try subst_vars <;> first | exact h | exact markDebt_specLe _ h | exact markDebt_specLe_left _ h | exact markDebt_specLe_right _ h | exact trivial | exact absurd hmv (by simp)
+          | _ => simp_all only [assertVerdict, tmovesV, tagOf, beq_iff_eq, decide_eq_true_eq] <;> try subst_vars <;> first | exact h | exact markDebt_specLe _ h | exact markDebt_specLe_left _ h | exact markDebt_specLe_right _ h | exact trivial | exact absurd hmv (by simp)
+      | undef => cases a' <;> simp_all only [assertVerdict, tmovesV, tagOf, beq_iff_eq, decide_eq_true_eq] <;> try subst_vars <;> first | exact h | exact markDebt_specLe _ h | exact markDebt_specLe_left _ h | exact markDebt_specLe_right _ h | exact trivial | exact absurd hmv (by simp)
+      | null => cases a' <;> simp_all only [assertVerdict, tmovesV, tagOf, beq_iff_eq, decide_eq_true_eq] <;> try subst_vars <;> first | exact h | exact markDebt_specLe _ h | exact markDebt_specLe_left _ h | exact markDebt_specLe_right _ h | exact trivial | exact absurd hmv (by simp)
+      | num => cases a' <;> simp_all only [assertVerdict, tmovesV, tagOf, beq_iff_eq, decide_eq_true_eq] <;> try subst_vars <;> first | exact h | exact markDebt_specLe _ h | exact markDebt_specLe_left _ h | exact markDebt_specLe_right _ h | exact trivial | exact absurd hmv (by simp)
+      | str => cases a' <;> simp_all only [assertVerdict, tmovesV, tagOf, beq_iff_eq, decide_eq_true_eq] <;> try subst_vars <;> first | exact h | exact markDebt_specLe _ h | exact markDebt_specLe_left _ h | exact markDebt_specLe_right _ h | exact trivial | exact absurd hmv (by simp)
+      | list => cases a' <;> simp_all only [assertVerdict, tmovesV, tagOf, beq_iff_eq, decide_eq_true_eq] <;> try subst_vars <;> first | exact h | exact markDebt_specLe _ h | exact markDebt_specLe_left _ h | exact markDebt_specLe_right _ h | exact trivial | exact absurd hmv (by simp)
+      | obj => cases a' <;> simp_all only [assertVerdict, tmovesV, tagOf, beq_iff_eq, decide_eq_true_eq] <;> try subst_vars <;> first | exact h | exact markDebt_specLe _ h | exact markDebt_specLe_left _ h | exact markDebt_specLe_right _ h | exact trivial | exact absurd hmv (by simp)
+      | desc => cases a' <;> simp_all only [assertVerdict, tmovesV, tagOf, beq_iff_eq, decide_eq_true_eq] <;> try subst_vars <;> first | exact h | exact markDebt_specLe _ h | exact markDebt_specLe_left _ h | exact markDebt_specLe_right _ h | exact trivial | exact absurd hmv (by simp)
+  | complN pp => cases a' <;> simp_all only [assertVerdict, tmovesV, tagOf, beq_iff_eq, decide_eq_true_eq] <;> try subst_vars <;> first | exact h | exact markDebt_specLe _ h | exact markDebt_specLe_left _ h | exact markDebt_specLe_right _ h | exact trivial | exact absurd hmv (by simp)
+  | complT => cases a' <;> simp_all only [assertVerdict, tmovesV, tagOf, beq_iff_eq, decide_eq_true_eq] <;> try subst_vars <;> first | exact h | exact markDebt_specLe _ h | exact markDebt_specLe_left _ h | exact markDebt_specLe_right _ h | exact trivial | exact absurd hmv (by simp)
+  | desc fs => cases a' <;> simp_all only [assertVerdict, tmovesV, tagOf, beq_iff_eq, decide_eq_true_eq] <;> try subst_vars <;> first | exact h | exact markDebt_specLe _ h | exact markDebt_specLe_left _ h | exact markDebt_specLe_right _ h | exact trivial | exact absurd hmv (by simp)
+  | notPresent => cases a' <;> simp_all only [assertVerdict, tmovesV, tagOf, beq_iff_eq, decide_eq_true_eq] <;> try subst_vars <;> first | exact h | exact markDebt_specLe _ h | exact markDebt_specLe_left _ h | exact markDebt_specLe_right _ h | exact trivial | exact absurd hmv (by simp)
+
 theorem testTypeP_bare (p : Prim) {T : Ty} (h : testTypeP p = some T) :
     ∀ b ∈ T, isBareVTy b = Bool.true := by
   cases p <;> simp only [testTypeP] at h
@@ -352,4 +414,46 @@ theorem checkSeq_specialize (sigs : SigTable) (r : Ty) (w : World) (seq : List I
     cases hσ' : w'.σ with
     | nil => simp only [checkSeq, hσ, hσ']; exact trivial
     | cons t' σ'' => rw [hσ'] at hσle; cases hσle
+  case case55 =>
+    rename_i sigs r w rest ts σ' hσ ih1
+    intro w' h
+    obtain ⟨hΓ, hσle⟩ := h
+    rw [hσ] at hσle
+    cases hσ' : w'.σ with
+    | nil => rw [hσ'] at hσle; cases hσle
+    | cons t' σ'' =>
+        rw [hσ'] at hσle
+        obtain ⟨hslot, hσ''le⟩ := hσle
+        have hbr : worldLe { w' with σ := σ'' } { w with σ := σ' } :=
+          ⟨hΓ, hσ''le⟩
+        have hpt : specLe (checkSeq sigs r { w' with σ := σ'' } rest)
+            (checkSeq sigs r { w with σ := σ' } rest) := ih1 _ hbr
+        have hmate : ∀ b ∈ t', ∃ a ∈ ts, tmovesV b a = Bool.true :=
+          tyLe_cov_atoms hslot.1
+        cases hc : ts.foldl
+            (fun acc a => mergeTC acc (assertVerdict sigs r rest σ' w a)) vacOk with
+        | reject s why =>
+            simp only [checkSeq, hσ, hσ']
+            change specLe
+              (t'.foldl (fun acc a =>
+                mergeTC acc (assertVerdict sigs r rest σ'' w' a)) vacOk)
+              (ts.foldl (fun acc a =>
+                mergeTC acc (assertVerdict sigs r rest σ' w a)) vacOk)
+            rw [hc]
+            exact trivial
+        | flows fr =>
+            obtain ⟨fr', hfr', hcov⟩ :=
+              fold_specLe_vac (J := fun a => assertVerdict sigs r rest σ' w a)
+                (J' := fun a => assertVerdict sigs r rest σ'' w' a)
+                (R := fun b a => tmovesV b a = Bool.true)
+                ts t' fr hmate
+                (fun b a hba => assertVerdict_spec sigs r rest hpt hba) hc
+            simp only [checkSeq, hσ, hσ']
+            change specLe
+              (t'.foldl (fun acc a =>
+                mergeTC acc (assertVerdict sigs r rest σ'' w' a)) vacOk)
+              (ts.foldl (fun acc a =>
+                mergeTC acc (assertVerdict sigs r rest σ' w a)) vacOk)
+            rw [hfr', hc]
+            exact hcov
   all_goals sorry
