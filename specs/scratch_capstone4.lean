@@ -21,6 +21,39 @@ theorem decMono_map {dec : VTy → Option Bool} (g : Bool → Bool) (hm : DecMon
     | none => rw [hn hd']; simp
     | some bv => rw [hd'] at hnone; simp at hnone
 
+theorem markDebt_specLe (why : «String») {r' r : TCResult}
+    (h : specLe r' r) : specLe (markDebt why r') (markDebt why r) := by
+  cases r with
+  | reject s w => exact trivial
+  | flows f =>
+      obtain ⟨f', rfl, hcov⟩ := specLe_flows_elim h
+      simpa [markDebt, specLe] using hcov
+
+theorem anyOf_bare (cs : List Ctor) :
+    ∀ b ∈ anyOf cs, isBareVTy b = Bool.true := by
+  intro b hb
+  simp only [anyOf, List.mem_map] at hb
+  obtain ⟨c, hc, rfl⟩ := hb
+  simp [isBareVTy]
+
+theorem typeMask_bare (s : «String») :
+    ∀ b ∈ typeMask s, isBareVTy b = Bool.true := by
+  intro b hb
+  unfold typeMask at hb
+  split at hb <;> simp_all [isBareVTy]
+
+theorem testTypeP_bare (p : Prim) {T : Ty} (h : testTypeP p = some T) :
+    ∀ b ∈ T, isBareVTy b = Bool.true := by
+  cases p <;> simp only [testTypeP] at h
+  all_goals
+    cases h
+    all_goals
+      intro b hb
+      first
+      | exact anyOf_bare _ b hb
+      | exact typeMask_bare _ b hb
+      | (cases b <;> simp_all [isBareVTy])
+
 theorem checkSeq_specialize (sigs : SigTable) (r : Ty) (w : World) (seq : List Instr) :
     ∀ (w' : World), worldLe w' w →
       specLe (checkSeq sigs r w' seq) (checkSeq sigs r w seq) := by
@@ -281,4 +314,42 @@ theorem checkSeq_specialize (sigs : SigTable) (r : Ty) (w : World) (seq : List I
     rename_i sigs r w x rest hdec S hlook ih1
     intro w' h
     exact absurd hlook (by simp [primDecide])
+  case case43 =>
+    rename_i sigs r w x p rest ps hT hpred hn hc ih1
+    intro w' h
+    have hbare := testTypeP_bare p hT
+    simp only [checkSeq, hpred, hn, hc, hT]
+    exact fork_specLe (fun v' hv' => split1_cov h hv')
+      (fun hne => split1_ne_of_worldLe hbare h hne)
+      (fun u' u hu => ih1 u u' hu)
+  case case44 =>
+    rename_i sigs r w x p rest hT hlook hpred hn hc
+    intro w' h
+    obtain ⟨hΓ, -⟩ := h
+    have hlook' : tyLookup w'.Γ x = none := by
+      have hex := hΓ.1 x
+      rw [hlook] at hex
+      cases hl : tyLookup w'.Γ x with
+      | none => rfl
+      | some S => rw [hl] at hex; simp at hex
+    simp only [checkSeq, hpred, hn, hc, hT, hlook, hlook']
+    exact trivial
+  case case45 =>
+    rename_i sigs r w x p rest hT S hlook hpred hn hc ih1
+    intro w' h
+    obtain ⟨hΓ, hσle⟩ := h
+    obtain ⟨S', hlook', -⟩ := envLe_lookup_cov_full hΓ hlook
+    have hpush : worldLe { w' with σ := [.anyValue .bool] :: w'.σ }
+        { w with σ := [.anyValue .bool] :: w.σ } :=
+      ⟨hΓ, stackLe_cons_intro (slotLe_refl _) hσle⟩
+    simp only [checkSeq, hpred, hn, hc, hT, hlook, hlook']
+    exact ih1 _ hpush
+  case case54 =>
+    rename_i sigs r w rest hσ
+    intro w' h
+    obtain ⟨hΓ, hσle⟩ := h
+    rw [hσ] at hσle
+    cases hσ' : w'.σ with
+    | nil => simp only [checkSeq, hσ, hσ']; exact trivial
+    | cons t' σ'' => rw [hσ'] at hσle; cases hσle
   all_goals sorry
