@@ -25,9 +25,8 @@ jobs:
           rustup toolchain install 1.99.1-x86_64-unknown-linux-gnu
       - name: install verus
         run: |
-          ASSET=$(curl -s https://api.github.com/repos/verus-lang/verus/releases/latest \
-            | python3 -c "import json,sys; print([a['browser_download_url'] for a in json.load(sys.stdin)['assets'] if a['name'].endswith('-x86-linux.zip')][0])")
-          curl -sL "$ASSET" -o /tmp/verus.zip
+          ASSET=https://github.com/verus-lang/verus/releases/download/release/0.2026.11.02.8bf68ee/verus-0.2026.11.02.8bf68ee-x86-linux.zip
+          curl -sSfL "$ASSET" -o /tmp/verus.zip
           unzip -q /tmp/verus.zip -d /tmp/verus-dist
           echo "VERUS_DIST=$(dirname "$(find /tmp/verus-dist -name verus -type f | head -1)")" >> "$GITHUB_ENV"
       - run: verus/lookup-walk/check.sh
