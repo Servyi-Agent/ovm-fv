@@ -1046,14 +1046,15 @@ def checkSeq : SigTable → Ty → World → List Instr → TCResult
             [] (fun wsf => wsf.foldl (fun acc u => mergeTC acc (checkSeq sigs r u rest)) noFlows)
       | _ => .reject (.kForBody x [] body) "loop entry stack is not empty"
   | sigs, r, w, .kAssert :: rest =>
-      -- assert, per VERDICT ATOM, machine-aligned (the machine
-      -- continues ONLY on .boolean true; false, non-boolean and
-      -- empty are LOUD): true discharges (pop, clean); a genuinely
-      -- undecided bool pops with the debt recorded; everything
-      -- else — statically false, or not boolean at all — is a path
-      -- the machine is loud on and rejects. The fold is the
-      -- conjunction; the bottom slot is the vacuous fold
-      -- (discharged), exactly as in kIte.
+      -- assert, per VERDICT ATOM. The machine continues ONLY on
+      -- .boolean true; false and every non-boolean are LOUD. The
+      -- certificate may still continue on a non-true VERDICT ATOM
+      -- (false or undecided bool) by RECORDING A DEBT: the path is
+      -- admitted only relative to the caller's obligation to show
+      -- it unreachable. A statically non-boolean atom is not a
+      -- failed assertion but a checker/runtime mismatch and
+      -- rejects. The fold is the conjunction; the bottom slot is
+      -- the vacuous fold (discharged), exactly as in kIte.
       match w.σ with
       | [] => .reject .kAssert "assert: verdict is not boolean"
       | ts :: σ' =>
@@ -1062,7 +1063,7 @@ def checkSeq : SigTable → Ty → World → List Instr → TCResult
               (match a with
                | .isValue (.boolean Bool.true) =>
                    checkSeq sigs r { w with σ := σ' } rest
-               | .anyValue .bool =>
+               | .isValue (.boolean Bool.false) | .anyValue .bool =>
                    markDebt "assert obligation not discharged"
                      (checkSeq sigs r { w with σ := σ' } rest)
                | _ => .reject .kAssert "assert: verdict is not boolean"))
