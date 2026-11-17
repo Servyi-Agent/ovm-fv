@@ -6912,3 +6912,268 @@ theorem SR_kPrim1_pWrapC (sigs : SigTable) (reg : AOReg) (s : FM) (r : Ty) :
                   refine ⟨⟨frameTyped_pWrapC_bare (v := JSValue.descV d) (by simp [isBareVTy, typeOfV]) hpre.1.1, hpre.1.2⟩, ?_⟩
                   rw [machineRet_head_swap]
                   exact hpre.2
+/-- ## kMkList / kNewSlot: value-pushing arms. The checker pushes
+    the CLASS atom (anyValue list / obj) and typeOfV of the machine's
+    pushed value IS that atom - the transfer is direct. -/
+
+theorem popTyN_append_anyT : ∀ (l₁ l₂ : List Ty),
+    popTyN l₁.length anyT (l₁ ++ l₂)
+      = if l₁.all (fun t => tmoves t anyT) then some l₂ else none := by
+  intro l₁
+  induction l₁ with
+  | nil => intro l₂; simp [popTyN]
+  | cons t ts ih =>
+      intro l₂
+      cases ht : tmoves t anyT with
+      | false =>
+          have hall : (t :: ts).all (fun t => tmoves t anyT) = Bool.false := by
+            simp only [List.all_cons, ht, Bool.false_and]
+          simp [popTyN, popTy, ht, hall]
+      | true =>
+          have hall : (t :: ts).all (fun t => tmoves t anyT)
+              = ts.all (fun t => tmoves t anyT) := by
+            simp only [List.all_cons, ht, Bool.true_and]
+          simp only [popTyN, List.length_cons, popTy, List.cons_append, ht,
+            if_true, hall]
+          exact ih l₂
+
+/-- The n-indexed form (safe as a simp argument: no length
+    back-rewriting). -/
+theorem popTyN_anyT_append {n : Nat} {l₁ l₂ : List Ty} (hlen : l₁.length = n) :
+    popTyN n anyT (l₁ ++ l₂)
+      = if l₁.all (fun t => tmoves t anyT) then some l₂ else none := by
+  subst hlen
+  exact popTyN_append_anyT l₁ l₂
+
+theorem popTyN_anyT_short : ∀ (n : Nat) (l : List Ty),
+    l.length < n → popTyN n anyT l = none := by
+  intro n
+  induction n with
+  | zero => intro l h; omega
+  | succ k ih =>
+      intro l h
+      cases l with
+      | nil => simp [popTyN, popTy]
+      | cons t l' =>
+          cases ht : tmoves t anyT with
+          | false => simp [popTyN, popTy, ht]
+          | true =>
+              simp only [popTyN, List.length_cons, popTy, ht, if_true,
+                List.cons_append]
+              exact ih l' (by simp only [List.length_cons] at h; omega)
+
+theorem checkSeq_kMkList {sigs : SigTable} {r : Ty} {W : World}
+    {ts σ' : List Ty} {rest : List Instr}
+    (hσ : W.σ = ts ++ σ')
+    (hall : ts.all (fun t => tmoves t anyT) = Bool.true) :
+    checkSeq sigs r W (.kMkList ts.length :: rest)
+      = checkSeq sigs r { W with σ := [.anyValue .list] :: σ' } rest := by
+  simp only [checkSeq, step1, hσ, popTyN_append_anyT, hall, reduceIte,
+    Option.bind, Option.some.injEq, forkTC, List.foldl, mergeTC_noFlows]
+
+/-- The generic value-push refinement: the machine pushes the
+    CONCRETE singleton [typeOfV v] below the CLASS atom the checker
+    pushed; specialization carries terminality (the kRet pattern). -/
+theorem frameTyped_pushRefine {sigs : SigTable} {r : Ty} {v : JSValue}
+    {rest : List Instr} {env : Env} {eval' : List JSValue} {ret : «String»}
+    {c : Ctor} (hsc : sigParamsClosed sigs)
+    (hslot : slotLe [typeOfV v] [.anyValue c])
+    (h : (match checkSeq sigs r
+        { Γ := envTyOf env, σ := [.anyValue c] :: eval'.map (fun x => [typeOfV x]) }
+        rest with
+      | .flows fb => terminal fb = Bool.true
+      | x => False)) :
+    (match checkSeq sigs r
+        { Γ := envTyOf env, σ := [typeOfV v] :: eval'.map (fun x => [typeOfV x]) }
+        rest with
+      | .flows fb => terminal fb = Bool.true
+      | x => False) := by
+  have hres : ∃ fb, checkSeq sigs r
+      { Γ := envTyOf env, σ := [.anyValue c] :: eval'.map (fun x => [typeOfV x]) }
+      rest = TCResult.flows fb ∧ terminal fb = Bool.true := by
+    cases hres : checkSeq sigs r
+        { Γ := envTyOf env, σ := [.anyValue c] :: eval'.map (fun x => [typeOfV x]) }
+        rest with
+    | flows fb => exact ⟨fb, rfl, by rw [hres] at h; exact h⟩
+    | reject s w => rw [hres] at h; exact h.elim
+  obtain ⟨fb, hchk, hterm⟩ := hres
+  have hw : worldLe
+      { Γ := envTyOf env, σ := [typeOfV v] :: eval'.map (fun x => [typeOfV x]) }
+      { Γ := envTyOf env, σ := [.anyValue c] :: eval'.map (fun x => [typeOfV x]) } :=
+    ⟨envLe_refl _,
+      ⟨hslot, stackLe_refl _⟩⟩
+  obtain ⟨fb', h', ht'⟩ :=
+    checkSeq_specialize_terminal sigs r _ _ rest hsc hw hchk hterm
+  rw [h']
+  exact ht'
+
+theorem frameTyped_kMkList {sigs : SigTable} {r : Ty} {n : Nat}
+    {rest : List Instr} {env : Env} {eval : List JSValue} {ret : «String»}
+    {ts σ' : List Ty} (hsc : sigParamsClosed sigs) (hlen : ts.length = n)
+    (hσ : eval.map (fun x => [typeOfV x]) = ts ++ σ')
+    (hall : ts.all (fun t => tmoves t anyT) = Bool.true)
+    (h : frameTyped sigs r ⟨.kMkList n :: rest, env, eval, ret⟩) :
+    frameTyped sigs r
+      ⟨rest, env, .listV (eval.take ts.length).reverse :: eval.drop ts.length, ret⟩ := by
+  simp only [frameTyped, frameWorld, List.map_cons] at h ⊢
+  have hdrop : σ' = (eval.map (fun x => [typeOfV x])).drop ts.length := by
+    rw [hσ, List.drop_append]
+    simp
+  have hσ' : ({ Γ := envTyOf env, σ := eval.map (fun x => [typeOfV x]) } : World).σ
+      = ts ++ σ' := hσ
+  have hstep : checkSeq sigs r
+      { Γ := envTyOf env, σ := eval.map (fun v => [typeOfV v]) }
+      (Instr.kMkList n :: rest)
+      = checkSeq sigs r { Γ := envTyOf env, σ := [.anyValue .list] :: σ' } rest := by
+    have h0 := checkSeq_kMkList (sigs := sigs) (r := r) (rest := rest)
+      (W := { Γ := envTyOf env, σ := eval.map (fun v => [typeOfV v]) })
+      hσ' hall
+    rw [hlen] at h0
+    exact h0
+  have hcoarse : (match checkSeq sigs r
+      { Γ := envTyOf env, σ := [.anyValue .list] :: σ' } rest with
+    | .flows fb => terminal fb = Bool.true
+    | x => False) := by
+    rw [hstep] at h
+    exact h
+  rw [hdrop, ← List.map_drop] at hcoarse
+  exact frameTyped_pushRefine (v := .listV (eval.take ts.length).reverse)
+    (ret := ret) hsc (c := Ctor.list)
+    ⟨by simp [tyLe, tmoves, tmovesV, typeOfV, tagOf], by simp⟩ hcoarse
+
+theorem frameTyped_kMkList_reject {sigs : SigTable} {r : Ty} {n : Nat}
+    {rest : List Instr} {env : Env} {eval : List JSValue} {ret : «String»}
+    (hshort : eval.length < n) :
+    frameTyped sigs r ⟨.kMkList n :: rest, env, eval, ret⟩ = False := by
+  simp only [frameTyped, frameWorld, checkSeq, step1,
+    popTyN_anyT_short n (eval.map (fun x => [typeOfV x])) (by
+      simp only [List.length_map]
+      exact hshort)]
+
+theorem SR_kMkList (sigs : SigTable) (reg : AOReg) (n : Nat) (s : FM) (r : Ty) :
+    SR_arm sigs reg (.kMkList n) s r := by
+  intro _ _ hsc hpre
+  cases s with
+  | fdone => exact hpre
+  | fell => exact hpre
+  | frames fs heap nl =>
+      cases fs with
+      | nil => exact hpre
+      | cons f fs' =>
+          obtain ⟨stmts, env, eval, ret⟩ := f
+          simp only [withHead, stateTyped, framesTypedFrom] at hpre ⊢
+          by_cases hshort : eval.length < n
+          · exfalso
+            have h1 : frameTyped sigs (sigRetTy sigs ret)
+                ⟨.kMkList n :: stmts, env, eval, ret⟩ := hpre.1.1
+            rw [frameTyped_kMkList_reject hshort] at h1
+            exact h1.elim
+          · -- split the stack at n and refine
+            have hlen : n ≤ eval.length := by omega
+            have hsplit : eval.map (fun v => [typeOfV v])
+                = (eval.map (fun x => [typeOfV x])).take n
+                  ++ (eval.map (fun x => [typeOfV x])).drop n :=
+              (List.take_append_drop n _).symm
+            have htake : ((eval.map (fun x => [typeOfV x])).take n).length = n :=
+              List.length_take_of_le (by simp only [List.length_map]; omega)
+            have hall : ((eval.map (fun x => [typeOfV x])).take n).all
+                (fun t => tmoves t anyT) = Bool.true := by
+              cases hall : ((eval.map (fun x => [typeOfV x])).take n).all
+                  (fun t => tmoves t anyT) with
+              | true => rfl
+              | false =>
+                  exfalso
+                  have h1 : frameTyped sigs (sigRetTy sigs ret)
+                      ⟨.kMkList n :: stmts, env, eval, ret⟩ := hpre.1.1
+                  simp only [frameTyped, frameWorld] at h1
+                  rw [hsplit] at h1
+                  simp only [checkSeq, step1, popTyN_anyT_append htake, hall,
+                    reduceIte] at h1
+                  exact h1.elim
+            simp only [fstep] at ⊢
+            rw [if_neg (by omega)]
+            simp only [stateTyped, framesTypedFrom] at ⊢
+            have hf : frameTyped sigs (sigRetTy sigs ret)
+                ⟨.kMkList n :: stmts, env, eval, ret⟩ := hpre.1.1
+            have hft := frameTyped_kMkList (n := n)
+              (ts := (eval.map (fun x => [typeOfV x])).take n)
+              (σ' := (eval.map (fun x => [typeOfV x])).drop n)
+              hsc htake hsplit hall hf
+            rw [htake] at hft
+            refine ⟨⟨hft, hpre.1.2⟩, ?_⟩
+            rw [machineRet_head_swap]
+            exact hpre.2
+
+theorem checkSeq_kNewSlot {sigs : SigTable} {r : Ty} {W : World}
+    {sn : «String»} {ord : Nat} {t : Ty} {σ' : List Ty} {rest : List Instr}
+    (hσ : W.σ = t :: σ') (hsn : slotOfName sn = some ord)
+    (htm : tmoves t anyT = Bool.true) :
+    checkSeq sigs r W (.kNewSlot sn :: rest)
+      = checkSeq sigs r { W with σ := [.anyValue .obj] :: σ' } rest := by
+  simp only [checkSeq, step1, hσ, hsn, popTy, htm, reduceIte,
+    Option.bind, Option.some.injEq, forkTC, List.foldl, mergeTC_noFlows]
+
+theorem frameTyped_kNewSlot {sigs : SigTable} {r : Ty} {sn : «String»}
+    {ord nl : Nat} {rest : List Instr} {env : Env} {eval : List JSValue}
+    {ret : «String»} {v : JSValue}
+    (hsc : sigParamsClosed sigs) (hsn : slotOfName sn = some ord)
+    (h : frameTyped sigs r ⟨.kNewSlot sn :: rest, env, v :: eval, ret⟩) :
+    frameTyped sigs r ⟨rest, env, .obj nl :: eval, ret⟩ := by
+  simp only [frameTyped, frameWorld, List.map_cons] at h ⊢
+  cases htm2 : tmoves [typeOfV v] anyT with
+  | false =>
+      simp only [checkSeq, step1, hsn, popTy, htm2, reduceIte] at h
+      exact h.elim
+  | true =>
+      have hstep : checkSeq sigs r
+          ⟨envTyOf env, [typeOfV v] :: eval.map (fun v2 => [typeOfV v2])⟩
+          (Instr.kNewSlot sn :: rest)
+          = checkSeq sigs r
+            ⟨envTyOf env, [.anyValue .obj] :: eval.map (fun v2 => [typeOfV v2])⟩
+            rest :=
+        checkSeq_kNewSlot (W := ⟨envTyOf env,
+            [typeOfV v] :: eval.map (fun v2 => [typeOfV v2])⟩) rfl hsn htm2
+      rw [hstep] at h
+      exact frameTyped_pushRefine (v := .obj nl) (eval' := eval) (ret := ret) hsc
+        (c := Ctor.obj)
+        ⟨by simp [tyLe, tmoves, tmovesV, typeOfV, tagOf], by simp⟩ h
+
+theorem frameTyped_kNewSlot_reject {sigs : SigTable} {r : Ty} {sn : «String»}
+    {rest : List Instr} {env : Env} {eval : List JSValue} {ret : «String»}
+    (hnone : slotOfName sn = none) :
+    frameTyped sigs r ⟨.kNewSlot sn :: rest, env, eval, ret⟩ = False := by
+  simp [frameTyped, frameWorld, checkSeq, step1, hnone]
+
+theorem SR_kNewSlot (sigs : SigTable) (reg : AOReg) (sn : «String») (s : FM) (r : Ty) :
+    SR_arm sigs reg (.kNewSlot sn) s r := by
+  intro _ _ hsc hpre
+  cases s with
+  | fdone => exact hpre
+  | fell => exact hpre
+  | frames fs heap nl =>
+      cases fs with
+      | nil => exact hpre
+      | cons f fs' =>
+          obtain ⟨stmts, env, eval, ret⟩ := f
+          simp only [withHead, stateTyped, framesTypedFrom] at hpre ⊢
+          cases hsn : slotOfName sn with
+          | none =>
+              exfalso
+              have h1 : frameTyped sigs (sigRetTy sigs ret)
+                  ⟨.kNewSlot sn :: stmts, env, eval, ret⟩ := hpre.1.1
+              rw [frameTyped_kNewSlot_reject hsn] at h1
+              exact h1.elim
+          | some ord =>
+              cases eval with
+              | nil =>
+                  exfalso
+                  have h1 : frameTyped sigs (sigRetTy sigs ret)
+                      ⟨.kNewSlot sn :: stmts, env, [], ret⟩ := hpre.1.1
+                  simp only [frameTyped, frameWorld, List.map_nil, checkSeq,
+                    step1, hsn, popTy] at h1
+              | cons v eval' =>
+                  simp only [fstep, hsn, stateTyped, framesTypedFrom] at ⊢
+                  refine ⟨⟨frameTyped_kNewSlot (ord := ord) hsc hsn hpre.1.1,
+                    hpre.1.2⟩, ?_⟩
+                  rw [machineRet_head_swap]
+                  exact hpre.2
