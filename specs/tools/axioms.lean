@@ -42,6 +42,11 @@ import Metalanguage.SubjectReduction
 #print axioms fold_terminal_falls_nil
 #print axioms flatMap_falls_nil
 #print axioms fork_lift
+-- the kRet arm and its tools (the capstone's first full consumer)
+#print axioms checkSeq_kRet_elim
+#print axioms checkSeq_specialize_terminal
+#print axioms frameOkUnder_elim
+#print axioms SR_kRet
 -- the SR arms proven so far
 #print axioms SR_kIte
 #print axioms SR_kPop
