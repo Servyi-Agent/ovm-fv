@@ -4045,11 +4045,62 @@ def stateTyped (sigs : SigTable) (r : Ty) (m : FM) : Prop :=
     kCall arm draws its post-frame typing from the registry's
     certificates. -/
 
+def slotClosed (p : Ty) : Prop :=
+  ∀ {t' t : Ty}, slotLe t' t → tmoves t' p = Bool.true → tmoves t p = Bool.true
+
+theorem leTy_up_closed {ts' ts ps : List Ty} (hslots : slotsLe ts' ts)
+    (hps : ∀ p ∈ ps, slotClosed p) (hle : leTy ts' ps = Bool.true) :
+    leTy ts ps = Bool.true := by
+  revert ps
+  induction ts' generalizing ts with
+  | nil =>
+      intro ps hps hle
+      cases ts with
+      | nil => cases ps <;> simp [leTy] at hle ⊢
+      | cons t ts => cases hslots
+  | cons t' ts' ih =>
+      intro ps hps hle
+      cases ts with
+      | nil => cases hslots
+      | cons t ts =>
+          obtain ⟨hslot, hslots'⟩ := hslots
+          cases ps with
+          | nil => simp [leTy] at hle
+          | cons p ps =>
+              simp only [leTy] at hle ⊢
+              obtain ⟨h1, h2⟩ := (Bool.and_eq_true _ _) |>.mp hle
+              have h1' : tmoves t p = Bool.true := hps p (by simp) hslot h1
+              have h2' : leTy ts ps = Bool.true :=
+                ih hslots' (fun q hq => hps q (by simp [hq])) h2
+              exact (Bool.and_eq_true _ _) |>.mpr ⟨h1', h2'⟩
+
+def sigParamsClosed (sigs : SigTable) : Prop :=
+  ∀ n ps ret, sigFind sigs n = some (ps, ret) → ∀ p ∈ ps, slotClosed p
+
+/-- kRet inversion: an accepted kRet had a top slot below the
+    frame's destiny. -/
+theorem checkSeq_kRet_elim {sigs : SigTable} {r : Ty} {W : World}
+    {rest : List Instr} {fb : Flows}
+    (h : checkSeq sigs r W (.kRet :: rest) = TCResult.flows fb) :
+    ∃ t σ', W.σ = t :: σ' ∧ tmoves t r = Bool.true := by
+  cases hσ : W.σ with
+  | nil =>
+      rw [checkSeq, hσ] at h
+      cases h
+  | cons t σ' =>
+      rw [checkSeq, hσ] at h
+      cases htr : tmoves t r with
+      | false =>
+          simp only [htr, reduceIte] at h
+          cases h
+      | true => exact ⟨t, σ', rfl, htr⟩
+
 def SR_arm (sigs : SigTable) (reg : AOReg) (h : Instr) (s : FM) (r : Ty) : Prop :=
   registryCertified sigs reg →
     closedRegistry sigs reg →
-      stateTyped sigs r (withHead h s) →
-        stateTyped sigs r (fstep reg (withHead h s))
+      sigParamsClosed sigs →
+        stateTyped sigs r (withHead h s) →
+          stateTyped sigs r (fstep reg (withHead h s))
 
 /- Machine-ret stability: swapping the head frame's non-ret fields
     (a same-frame step) does not change the machine's answer type;
@@ -4087,7 +4138,7 @@ theorem envTyOf_zipTy : ∀ (ps : List «String») (vs : List JSValue),
 /-- The kIte arm. -/
 theorem SR_kIte (sigs : SigTable) (reg : AOReg) (t e : List Instr) (s : FM) (r : Ty) :
     SR_arm sigs reg (.kIte t e) s r := by
-  intro _ _ hpre
+  intro _ _ _ hpre
   cases s with
   | fdone v fs heap nl n => exact hpre
   | fell fs heap nl n => exact hpre
@@ -4169,7 +4220,7 @@ theorem SR_kIte (sigs : SigTable) (reg : AOReg) (t e : List Instr) (s : FM) (r :
 /-- The kPop arm. -/
 theorem SR_kPop (sigs : SigTable) (reg : AOReg) (s : FM) (r : Ty) :
     SR_arm sigs reg .kPop s r := by
-  intro _ _ hpre
+  intro _ _ _ hpre
   cases s with
   | fdone v fs heap nl n => exact hpre
   | fell fs heap nl n => exact hpre
@@ -4193,7 +4244,7 @@ theorem SR_kPop (sigs : SigTable) (reg : AOReg) (s : FM) (r : Ty) :
 /-- The kSet arm. -/
 theorem SR_kSet (sigs : SigTable) (reg : AOReg) (x : «String») (s : FM) (r : Ty) :
     SR_arm sigs reg (.kSet x) s r := by
-  intro _ _ hpre
+  intro _ _ _ hpre
   cases s with
   | fdone v fs heap nl n => exact hpre
   | fell fs heap nl n => exact hpre
@@ -4217,7 +4268,7 @@ theorem SR_kSet (sigs : SigTable) (reg : AOReg) (x : «String») (s : FM) (r : T
 /-- The kEval-const arm (a pushing arm; all value shapes). -/
 theorem SR_kEval_const (sigs : SigTable) (reg : AOReg) (v : JSValue) (s : FM) (r : Ty) :
     SR_arm sigs reg (.kEval (.const v)) s r := by
-  intro _ _ hpre
+  intro _ _ _ hpre
   cases s with
   | fdone v' fs heap nl n => exact hpre
   | fell fs heap nl n => exact hpre
@@ -4455,12 +4506,25 @@ theorem frameChecks_elim {sigs : SigTable} {f : Fr}
       rw [frameChecks, hc] at h
       exact h.elim
 
+theorem frameOkUnder_elim {sigs : SigTable} {n : «String»} {f : Fr}
+    (h : frameOkUnder sigs n f) :
+    ∃ fb, checkSeq sigs (sigRetTy sigs f.ret)
+      { Γ := envTyOf f.env,
+        σ := complTy (sigCompls sigs n) :: f.eval.map (fun v => [typeOfV v]) }
+      f.stmts = TCResult.flows fb ∧ terminal fb = Bool.true := by
+  cases hch : checkSeq sigs (sigRetTy sigs f.ret)
+      { Γ := envTyOf f.env,
+        σ := complTy (sigCompls sigs n) :: f.eval.map (fun v => [typeOfV v]) }
+      f.stmts with
+  | flows fb => exact ⟨fb, rfl, by rw [frameOkUnder, hch] at h; exact h⟩
+  | reject s w => rw [frameOkUnder, hch] at h; exact h.elim
+
 /-- THE kCall ARM (registry-hit; the native branch is the
     specialization capstone's business). -/
 theorem SR_kCall (sigs : SigTable) (reg : AOReg)
     (fname : «String») (n : Nat) (s : FM) (r : Ty) :
     SR_arm sigs reg (.kCall fname n) s r := by
-  intro hcert hcover hpre
+  intro hcert hcover _ hpre
   -- coverage lives in the unified judgement: every sig the checker
   -- accepts is registry-found (closedRegistry.1)
   have hclosed : ∀ (m : «String») (ps : List Ty) (retj : List Pending),
@@ -5701,38 +5765,6 @@ theorem testTypeP_bare (p : Prim) {T : Ty} (h : testTypeP p = some T) :
       | exact typeMask_bare _ b hb
       | (cases b <;> simp_all [isBareVTy])
 
-def slotClosed (p : Ty) : Prop :=
-  ∀ {t' t : Ty}, slotLe t' t → tmoves t' p = Bool.true → tmoves t p = Bool.true
-
-theorem leTy_up_closed {ts' ts ps : List Ty} (hslots : slotsLe ts' ts)
-    (hps : ∀ p ∈ ps, slotClosed p) (hle : leTy ts' ps = Bool.true) :
-    leTy ts ps = Bool.true := by
-  revert ps
-  induction ts' generalizing ts with
-  | nil =>
-      intro ps hps hle
-      cases ts with
-      | nil => cases ps <;> simp [leTy] at hle ⊢
-      | cons t ts => cases hslots
-  | cons t' ts' ih =>
-      intro ps hps hle
-      cases ts with
-      | nil => cases hslots
-      | cons t ts =>
-          obtain ⟨hslot, hslots'⟩ := hslots
-          cases ps with
-          | nil => simp [leTy] at hle
-          | cons p ps =>
-              simp only [leTy] at hle ⊢
-              obtain ⟨h1, h2⟩ := (Bool.and_eq_true _ _) |>.mp hle
-              have h1' : tmoves t p = Bool.true := hps p (by simp) hslot h1
-              have h2' : leTy ts ps = Bool.true :=
-                ih hslots' (fun q hq => hps q (by simp [hq])) h2
-              exact (Bool.and_eq_true _ _) |>.mpr ⟨h1', h2'⟩
-
-def sigParamsClosed (sigs : SigTable) : Prop :=
-  ∀ n ps ret, sigFind sigs n = some (ps, ret) → ∀ p ∈ ps, slotClosed p
-
 theorem markThrow_specLe (sigs : SigTable) (ex : Expr) {r' r : TCResult}
     (h : specLe r' r) : specLe (markThrow sigs ex r') (markThrow sigs ex r) := by
   cases r with
@@ -6452,6 +6484,126 @@ theorem checkSeq_specialize (sigs : SigTable) (r : Ty) (w : World) (seq : List I
     simp only [checkSeq, hstep, hstep']
     exact fork_specLe hcov hne hpoint
 
+/-- THE TERMINALITY COROLLARY: specialization preserves
+    terminality. specLe carries the falls; checkSeq_exits turns
+    empty falls into the exit bit. No separate induction needed. -/
+theorem checkSeq_specialize_terminal (sigs : SigTable) (r : Ty)
+    (w w' : World) (seq : List Instr) (hsc : sigParamsClosed sigs)
+    (hle : worldLe w' w) {fb : Flows}
+    (h : checkSeq sigs r w seq = TCResult.flows fb)
+    (ht : terminal fb = Bool.true) :
+    ∃ fb', checkSeq sigs r w' seq = TCResult.flows fb'
+      ∧ terminal fb' = Bool.true := by
+  have hspec := checkSeq_specialize sigs r w seq hsc w' hle
+  rw [h] at hspec
+  obtain ⟨fb', h', hcov⟩ := specLe_flows_elim hspec
+  refine ⟨fb', h', ?_⟩
+  have hf : fb.falls = [] :=
+    List.isEmpty_iff.mp ((Bool.and_eq_true _ _).mp ht).2
+  have hf' : fb'.falls = [] := by
+    match hfl : fb'.falls with
+    | [] => rfl
+    | v :: vs =>
+        have hvm : v ∈ fb'.falls := by
+          rw [hfl]
+          exact List.mem_cons.mpr (Or.inl rfl)
+        obtain ⟨u, hu, -⟩ := hcov v hvm
+        rw [hf] at hu
+        cases hu
+  have he := checkSeq_exits sigs r w' seq fb' h' hf'
+  exact (Bool.and_eq_true _ _).mpr ⟨he, List.isEmpty_iff.mpr hf'⟩
+
+/- ## THE kRet ARM: the anticipated union becomes the delivered
+    singleton. The callee's own kRet acceptance (inverted from its
+    CURRENT frameChecks) gives [typeOfV v] ⊑ complTy retj; the
+    caller's union-anticipated judgement then refines to the
+    ordinary frameChecks via the terminality corollary. -/
+
+theorem SR_kRet (sigs : SigTable) (reg : AOReg) (s : FM) (r : Ty) :
+    SR_arm sigs reg .kRet s r := by
+  intro _ _ hsc hpre
+  cases s with
+  | fdone => exact hpre
+  | fell => exact hpre
+  | frames fs heap nl =>
+    cases fs with
+    | nil => exact hpre
+    | cons f fs0 =>
+        obtain ⟨stmts, env, eval, ret⟩ := f
+        simp only [withHead, stateTyped, framesTypedFrom] at hpre ⊢
+        cases eval with
+        | nil =>
+            -- kRet with an EMPTY eval: the callee's own judgement
+            -- read kRet at an empty top slot and rejected, so hpre
+            -- is contradictory (the machine's no-push case never
+            -- arises in typed states)
+            exfalso
+            obtain ⟨fb, hchk, -⟩ :=
+              frameChecks_elim (f := { stmts := .kRet :: stmts, env := env,
+                                       eval := [], ret := ret }) hpre.1.1
+            rw [checkSeq] at hchk
+            cases hchk
+        | cons v eval' =>
+            have hval : tmoves [typeOfV v] (complTy (sigCompls sigs ret))
+                = Bool.true := by
+              obtain ⟨fb2, hchk2, -⟩ := frameChecks_elim
+                (f := { stmts := .kRet :: stmts, env := env,
+                        eval := v :: eval', ret := ret }) hpre.1.1
+              obtain ⟨t, σ2, hcons, htm⟩ := checkSeq_kRet_elim hchk2
+              have hm : [typeOfV v] :: eval'.map (fun x => [typeOfV x])
+                  = t :: σ2 := hcons
+              obtain ⟨rfl, -⟩ := List.cons.inj hm
+              simp only [sigRetTy] at htm
+              exact htm
+            cases fs0 with
+            | nil =>
+                -- fdone v: typed directly by the (now known) fact
+                have hr : complTy (sigCompls sigs ret) = r := hpre.2
+                show tmoves [typeOfV v] r = Bool.true
+                rw [← hr]
+                exact hval
+            | cons caller fs1 =>
+                obtain ⟨cstmts, cenv, ceval, cret⟩ := caller
+                refine ⟨⟨?_, hpre.1.2.2⟩, ?_⟩
+                · -- the caller's ordinary frameChecks at the
+                  -- DELIVERED singleton (anticipated union refined)
+                  obtain ⟨fb, hchk, hterm⟩ :=
+                    frameOkUnder_elim (n := ret)
+                      (f := ⟨cstmts, cenv, ceval, cret⟩) hpre.1.2.1
+                  have hw : worldLe
+                      { Γ := envTyOf cenv,
+                        σ := [typeOfV v] :: ceval.map (fun x => [typeOfV x]) }
+                      { Γ := envTyOf cenv,
+                        σ := complTy (sigCompls sigs ret)
+                          :: ceval.map (fun x => [typeOfV x]) } :=
+                    ⟨envLe_refl _,
+                      ⟨hval, fun _ => by simp⟩,
+                      stackLe_refl _⟩
+                  obtain ⟨fb', h', ht'⟩ :=
+                    checkSeq_specialize_terminal sigs (sigRetTy sigs cret)
+                      _ _ cstmts hsc hw hchk hterm
+                  have hgoal : (match checkSeq sigs (sigRetTy sigs cret)
+                      { Γ := envTyOf cenv,
+                        σ := [typeOfV v] :: ceval.map (fun x => [typeOfV x]) }
+                      cstmts with
+                    | TCResult.flows fb => terminal fb = Bool.true
+                    | x => False) := by
+                    rw [h']
+                    exact ht'
+                  exact hgoal
+                · -- machineRet: the bottom frame rules; the head
+                  -- swap is eval-only
+                  have h1 : machineRet sigs
+                      (⟨.kRet :: stmts, env, v :: eval', ret⟩
+                        :: ⟨cstmts, cenv, ceval, cret⟩ :: fs1)
+                      = machineRet sigs (⟨cstmts, cenv, ceval, cret⟩ :: fs1) :=
+                    machineRet_cons_cons
+                  have h2 : machineRet sigs (⟨cstmts, cenv, v :: ceval, cret⟩ :: fs1)
+                      = machineRet sigs (⟨cstmts, cenv, ceval, cret⟩ :: fs1) :=
+                    machineRet_cons_congr rfl
+                  exact h2.trans (h1.symm.trans hpre.2)
+
+
 theorem frameTyped_kEval_nat {sigs : SigTable} {r : Ty} {n : Nat} {rest : List Instr}
     {env : Env} {eval : List JSValue} {ret : «String»}
     (h : frameTyped sigs r ⟨.kEval (.nat n) :: rest, env, eval, ret⟩) :
@@ -6462,7 +6614,7 @@ theorem frameTyped_kEval_nat {sigs : SigTable} {r : Ty} {n : Nat} {rest : List I
 
 theorem SR_kEval_nat (sigs : SigTable) (reg : AOReg) (n : Nat) (s : FM) (r : Ty) :
     SR_arm sigs reg (.kEval (.nat n)) s r := by
-  intro _ _ hpre
+  intro _ _ _ hpre
   cases s with
   | fdone v fs heap nl n' => exact hpre
   | fell fs heap nl n' => exact hpre
@@ -6498,7 +6650,7 @@ theorem frameTyped_kEval_nv_reject_unbound {sigs : SigTable} {r : Ty} {x : «Str
 
 theorem SR_kEval_nv (sigs : SigTable) (reg : AOReg) (x : «String») (s : FM) (r : Ty) :
     SR_arm sigs reg (.kEval (.nv x)) s r := by
-  intro _ _ hpre
+  intro _ _ _ hpre
   cases s with
   | fdone v fs heap nl n => exact hpre
   | fell fs heap nl n => exact hpre
@@ -6556,7 +6708,7 @@ theorem frameTyped_kTest_reject {sigs : SigTable} {r : Ty} {v : JSValue}
 
 theorem SR_kTest (sigs : SigTable) (reg : AOReg) (s : FM) (r : Ty) :
     SR_arm sigs reg .kTest s r := by
-  intro _ _ hpre
+  intro _ _ _ hpre
   cases s with
   | fdone v fs heap nl n => exact hpre
   | fell fs heap nl n => exact hpre
@@ -6617,7 +6769,7 @@ theorem frameTyped_kUnwrap_reject {sigs : SigTable} {r : Ty} {v : JSValue}
 
 theorem SR_kUnwrap (sigs : SigTable) (reg : AOReg) (s : FM) (r : Ty) :
     SR_arm sigs reg .kUnwrap s r := by
-  intro _ _ hpre
+  intro _ _ _ hpre
   cases s with
   | fdone v fs heap nl n => exact hpre
   | fell fs heap nl n => exact hpre
@@ -6662,7 +6814,7 @@ theorem frameTyped_pThrowC_reject_nil {sigs : SigTable} {r : Ty}
 
 theorem SR_kPrim1_pThrowC (sigs : SigTable) (reg : AOReg) (s : FM) (r : Ty) :
     SR_arm sigs reg (.kPrim1 .pThrowC) s r := by
-  intro _ _ hpre
+  intro _ _ _ hpre
   cases s with
   | fdone v fs heap nl n => exact hpre
   | fell fs heap nl n => exact hpre
@@ -6706,7 +6858,7 @@ theorem frameTyped_pWrapC_reject_nil {sigs : SigTable} {r : Ty}
 
 theorem SR_kPrim1_pWrapC (sigs : SigTable) (reg : AOReg) (s : FM) (r : Ty) :
     SR_arm sigs reg (.kPrim1 .pWrapC) s r := by
-  intro _ _ hpre
+  intro _ _ _ hpre
   cases s with
   | fdone v fs heap nl n => exact hpre
   | fell fs heap nl n => exact hpre
