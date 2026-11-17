@@ -5523,14 +5523,14 @@ def iteVerdict (sigs : SigTable) (r : Ty) (t e rest : List Instr)
     verdict atom that moves to a coarse one is either the same
     singleton verdict (IH) or the boolean union (both IH branches). -/
 theorem iteVerdict_spec {sigs : SigTable} {r : Ty} {rest t e : List Instr}
-    {w' w : World} {σ' : List Ty}
-    (ht : specLe (checkSeq sigs r { w' with σ := σ' } (t ++ rest))
-                 (checkSeq sigs r { w with σ := σ' } (t ++ rest)))
-    (he : specLe (checkSeq sigs r { w' with σ := σ' } (e ++ rest))
-                 (checkSeq sigs r { w with σ := σ' } (e ++ rest)))
+    {w' w : World} {σr σc : List Ty}
+    (ht : specLe (checkSeq sigs r { w' with σ := σr } (t ++ rest))
+                 (checkSeq sigs r { w with σ := σc } (t ++ rest)))
+    (he : specLe (checkSeq sigs r { w' with σ := σr } (e ++ rest))
+                 (checkSeq sigs r { w with σ := σc } (e ++ rest)))
     {a' a : VTy} (hmv : tmovesV a' a = Bool.true) :
-    specLe (iteVerdict sigs r t e rest σ' w' a')
-      (iteVerdict sigs r t e rest σ' w a) := by
+    specLe (iteVerdict sigs r t e rest σr w' a')
+      (iteVerdict sigs r t e rest σc w a) := by
   revert hmv
   cases a with
   | complN p => intro hmv; exact trivial
