@@ -5445,3 +5445,143 @@ theorem fork_lift {J' J : World → TCResult}
   rw [show exitsT noFlows = Bool.false from rfl, hany, Bool.false_or,
       show fallsT noFlows = ([] : Worlds) from rfl, List.nil_append, hfm]
   rfl
+
+/- ## Proof layer XXII: the vacOk-seeded verdict fork lift (kIte) -/
+
+theorem fold_vac_falls {α : Type} {J : α → TCResult} :
+    ∀ (ts : List α) (fb : Flows),
+      ts.foldl (fun x a => mergeTC x (J a)) vacOk = TCResult.flows fb →
+      (∀ a ∈ ts, ∃ f, J a = TCResult.flows f)
+      ∧ fb.falls = ts.flatMap (fun a => fallsT (J a)) := by
+  intro ts fb h
+  have hnr : ∀ s w, ts.foldl (fun x a => mergeTC x (J a)) vacOk
+      ≠ TCResult.reject s w := ne_reject_of_flows h
+  obtain ⟨hcomp, heq⟩ := fold_merge_flows J ts vacOk hnr
+  refine ⟨hcomp, ?_⟩
+  have hfall : fb.falls = fallsT vacOk ++ ts.flatMap (fun a => fallsT (J a)) := by
+    have hres : TCResult.flows fb = TCResult.flows
+        { exits := exitsT vacOk || ts.any (fun a => exitsT (J a)),
+          throws := throwsT vacOk || ts.any (fun a => throwsT (J a)),
+          falls := fallsT vacOk ++ ts.flatMap (fun a => fallsT (J a)),
+          assumes := assumesT vacOk ++ ts.flatMap (fun a => assumesT (J a)) } :=
+      h.symm.trans heq
+    exact congrArg Flows.falls (TCResult.flows.inj hres)
+  rw [hfall]
+  simp [fallsT, vacOk]
+
+theorem fold_specLe_vac {α β : Type} {J : α → TCResult} {J' : β → TCResult}
+    {R : β → α → Prop} :
+    ∀ (ws : List α) (ws' : List β) (fr : Flows),
+      (∀ b ∈ ws', ∃ a ∈ ws, R b a) →
+      (∀ b a, R b a → specLe (J' b) (J a)) →
+      ws.foldl (fun x a => mergeTC x (J a)) vacOk = TCResult.flows fr →
+      ∃ fr', ws'.foldl (fun x b => mergeTC x (J' b)) vacOk = TCResult.flows fr'
+        ∧ ∀ v ∈ fr'.falls, ∃ u ∈ fr.falls, worldLe v u := by
+  intro ws ws' fr hmate hpoint hcoarse
+  obtain ⟨hccomp, hcfalls⟩ := fold_vac_falls ws fr hcoarse
+  have hcomp' : ∀ b ∈ ws', ∃ f, J' b = TCResult.flows f := by
+    intro b hb
+    obtain ⟨a, ha, hR⟩ := hmate b hb
+    obtain ⟨fa, hfa⟩ := hccomp a ha
+    have hpb := hpoint b a hR
+    rw [hfa] at hpb
+    obtain ⟨fb', hfb', -⟩ := specLe_flows_elim hpb
+    exact ⟨fb', hfb'⟩
+  obtain ⟨fr', hfr'⟩ := fold_flows_exists ws' vacOk ⟨_, rfl⟩ hcomp'
+  have hcfalls' := (fold_vac_falls ws' fr' hfr').2
+  refine ⟨fr', hfr', ?_⟩
+  intro v hv
+  rw [hcfalls'] at hv
+  obtain ⟨b, hb, hvb⟩ := List.mem_flatMap.mp hv
+  obtain ⟨a, ha, hR⟩ := hmate b hb
+  obtain ⟨fa, hfa⟩ := hccomp a ha
+  have hpb := hpoint b a hR
+  rw [hfa] at hpb
+  obtain ⟨fb', hfb', hcov⟩ := specLe_flows_elim hpb
+  have hvb' : v ∈ fb'.falls := by
+    rw [hfb'] at hvb
+    exact hvb
+  obtain ⟨u, hu, hle⟩ := hcov v hvb'
+  refine ⟨u, ?_, hle⟩
+  rw [hcfalls]
+  exact List.mem_flatMap.mpr ⟨a, ha, by rw [hfa]; exact hu⟩
+
+/-- The per-atom `kIte` verdict body (a named `match` so that
+    dependent elimination never has to reduce a match in the goal). -/
+def iteVerdict (sigs : SigTable) (r : Ty) (t e rest : List Instr)
+    (σ' : List Ty) (w : World) : VTy → TCResult
+  | .isValue (.boolean Bool.true) =>
+      checkSeq sigs r { w with σ := σ' } (t ++ rest)
+  | .isValue (.boolean Bool.false) =>
+      checkSeq sigs r { w with σ := σ' } (e ++ rest)
+  | .anyValue .bool =>
+      mergeTC (checkSeq sigs r { w with σ := σ' } (t ++ rest))
+        (checkSeq sigs r { w with σ := σ' } (e ++ rest))
+  | _ => .reject (.kIte t e) "kIte: verdict is not boolean"
+
+/-- Verdict-atom refinement for `kIte`-style folds.  A refined
+    verdict atom that moves to a coarse one is either the same
+    singleton verdict (IH) or the boolean union (both IH branches). -/
+theorem iteVerdict_spec {sigs : SigTable} {r : Ty} {rest t e : List Instr}
+    {w' w : World} {σ' : List Ty}
+    (ht : specLe (checkSeq sigs r { w' with σ := σ' } (t ++ rest))
+                 (checkSeq sigs r { w with σ := σ' } (t ++ rest)))
+    (he : specLe (checkSeq sigs r { w' with σ := σ' } (e ++ rest))
+                 (checkSeq sigs r { w with σ := σ' } (e ++ rest)))
+    {a' a : VTy} (hmv : tmovesV a' a = Bool.true) :
+    specLe (iteVerdict sigs r t e rest σ' w' a')
+      (iteVerdict sigs r t e rest σ' w a) := by
+  revert hmv
+  cases a with
+  | complN p => intro hmv; exact trivial
+  | complT => intro hmv; exact trivial
+  | desc fs => intro hmv; exact trivial
+  | notPresent => intro hmv; exact trivial
+  | anyValue c =>
+      cases c with
+      | bool =>
+          cases a' with
+          | anyValue c' =>
+              intro hmv
+              simp_all [iteVerdict, tmovesV, decide_eq_true_eq]
+              exact specLe_merge ht he
+          | isValue v' =>
+              cases v' with
+              | boolean b' =>
+                  cases b'
+                  · intro hmv
+                    simp_all [iteVerdict, tmovesV, decide_eq_true_eq, beq_iff_eq]
+                    exact specLe_merge_left he
+                  · intro hmv
+                    simp_all [iteVerdict, tmovesV, decide_eq_true_eq]
+                    exact specLe_merge_right ht
+              | _ => intro hmv; simp_all [iteVerdict, tmovesV, tagOf]
+          | _ => intro hmv; simp_all [iteVerdict, tmovesV, tagOf]
+      | _ => intro hmv; exact trivial
+  | isValue v =>
+      cases v with
+      | boolean b =>
+          cases b
+          · cases a' with
+            | isValue w =>
+                cases w with
+                | boolean b' =>
+                    cases b'
+                    · intro hmv
+                      simp_all [iteVerdict, tmovesV, beq_iff_eq]
+                    · intro hmv
+                      simp_all [iteVerdict, tmovesV, beq_iff_eq]
+                | _ => intro hmv; simp_all [iteVerdict, tmovesV, tagOf]
+            | _ => intro hmv; simp_all [iteVerdict, tmovesV, tagOf]
+          · cases a' with
+            | isValue w =>
+                cases w with
+                | boolean b' =>
+                    cases b'
+                    · intro hmv
+                      simp_all [iteVerdict, tmovesV, beq_iff_eq]
+                    · intro hmv
+                      simp_all [iteVerdict, tmovesV, beq_iff_eq]
+                | _ => intro hmv; simp_all [iteVerdict, tmovesV, tagOf]
+            | _ => intro hmv; simp_all [iteVerdict, tmovesV, tagOf]
+      | _ => intro hmv; exact trivial
