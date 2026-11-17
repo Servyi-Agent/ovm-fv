@@ -6013,7 +6013,7 @@ theorem checkSeq_specialize (sigs : SigTable) (r : Ty) (w : World) (seq : List I
     rename_i sigs r w b f x rest hfused ih1
     intro w' h
     simp only [checkSeq.eq_21]
-    simp only [if_pos hfused]
+    simp only [ite_eq_left hfused]
     exact ih1 hsc w' h
   case case26 =>
     rename_i sigs r w b f x rest hf hnone
@@ -6022,7 +6022,7 @@ theorem checkSeq_specialize (sigs : SigTable) (r : Ty) (w : World) (seq : List I
     cases hreff : typeOfE sigs w'.Γ
         (.isBoolVal b (.call f [.nv x])) with
     | none =>
-        simp only [checkSeq.eq_21, if_neg hf, hnone, hreff]
+        simp only [checkSeq.eq_21, ite_eq_right hf, hnone, hreff]
         exact trivial
     | some t' =>
         exfalso
@@ -6073,7 +6073,7 @@ theorem checkSeq_specialize (sigs : SigTable) (r : Ty) (w : World) (seq : List I
                                 intro htrue
                                 rw [hg] at htrue
                                 cases htrue
-                              rw [if_neg hng] at hcall'
+                              rw [ite_eq_right hng] at hcall'
                               cases hcall'
                           | true => rfl
                         have hgc : (leTy [tl] ps ||
@@ -6099,7 +6099,7 @@ theorem checkSeq_specialize (sigs : SigTable) (r : Ty) (w : World) (seq : List I
                         have hcoarse : typeOfE sigs w.Γ (.call f [.nv x]) =
                             some (complPayload retj) := by
                           simp only [typeOfE, hsig, typesOf, hl]
-                          rw [if_pos hgc]
+                          rw [ite_eq_left hgc]
                         have hcoarseTop : typeOfE sigs w.Γ
                             (.isBoolVal b (.call f [.nv x])) =
                             some [.anyValue .bool] := by
@@ -6118,7 +6118,7 @@ theorem checkSeq_specialize (sigs : SigTable) (r : Ty) (w : World) (seq : List I
     have hpt : specLe (checkSeq sigs r { w' with σ := S' :: w'.σ } rest)
         (checkSeq sigs r { w with σ := S :: w.σ } rest) := ih1 hsc _ hpush
     simp only [checkSeq.eq_21]
-    simp only [if_neg hf]
+    simp only [ite_eq_right hf]
     simp only [hsome, hsome']
     exact markThrow_specLe sigs _ hpt
   case case34 =>
@@ -6183,7 +6183,7 @@ theorem checkSeq_specialize (sigs : SigTable) (r : Ty) (w : World) (seq : List I
     rename_i sigs r w x p rest ps hT hpred hn hc ih1
     intro w' h
     have hbare := testTypeP_bare p hT
-    simp only [checkSeq, hpred, hn, hc, hT]
+    simp only [checkSeq, hT]
     exact fork_specLe (fun v' hv' => split1_cov h hv')
       (fun hne => split1_ne_of_worldLe hbare h hne)
       (fun u' u hu => ih1 u hsc u' hu)
@@ -6197,7 +6197,7 @@ theorem checkSeq_specialize (sigs : SigTable) (r : Ty) (w : World) (seq : List I
       cases hl : tyLookup w'.Γ x with
       | none => rfl
       | some S => rw [hl] at hex; simp at hex
-    simp only [checkSeq, hpred, hn, hc, hT, hlook, hlook']
+    simp only [checkSeq, hT, hlook, hlook']
     exact trivial
   case case45 =>
     rename_i sigs r w x p rest hT S hlook hpred hn hc ih1
@@ -6207,7 +6207,7 @@ theorem checkSeq_specialize (sigs : SigTable) (r : Ty) (w : World) (seq : List I
     have hpush : worldLe { w' with σ := [.anyValue .bool] :: w'.σ }
         { w with σ := [.anyValue .bool] :: w.σ } :=
       ⟨hΓ, stackLe_cons_intro (slotLe_refl _) hσle⟩
-    simp only [checkSeq, hpred, hn, hc, hT, hlook, hlook']
+    simp only [checkSeq, hT, hlook, hlook']
     exact ih1 hsc _ hpush
   case case54 =>
     rename_i sigs r w rest hσ
@@ -6277,7 +6277,7 @@ theorem checkSeq_specialize (sigs : SigTable) (r : Ty) (w : World) (seq : List I
           ih2 hsc w' hworld
         have hk := fold_worlds_specLe sigs r rest
           (fun u v huv => ih1 v hsc u huv)
-        simp only [checkSeq, hσ, hσ', hsome, hsome', if_pos hbool, if_pos hbool']
+        simp only [checkSeq, hσ, hσ', hsome, hsome', ite_eq_left hbool, ite_eq_left hbool']
         exact checkLoopBody_spec (.kRepeatWhile c body) []
           (fun fs => fs.foldl (fun acc u => mergeTC acc (checkSeq sigs r u rest)) noFlows)
           hbody hk
@@ -6300,12 +6300,12 @@ theorem checkSeq_specialize (sigs : SigTable) (r : Ty) (w : World) (seq : List I
         | nil => exact absurd hstack hσne
         | cons t σ =>
             exfalso
-            simpa [hσ', hstack, stackLe] using hσle
+            simp [hσ', hstack, stackLe] at hσle
     | cons t' σ'' =>
         cases hstack : w.σ with
         | nil =>
             exfalso
-            simpa [hσ', hstack, stackLe] using hσle
+            simp [hσ', hstack, stackLe] at hσle
         | cons t σ =>
             simp only [checkSeq, hσ', hstack]
             exact trivial
@@ -6336,7 +6336,7 @@ theorem checkSeq_specialize (sigs : SigTable) (r : Ty) (w : World) (seq : List I
         cases hσ' : w'.σ with
         | nil =>
             exfalso
-            simpa [hσ, hσ', stackLe] using hσle
+            simp [hσ, hσ', stackLe] at hσle
         | cons t' σ' =>
             rw [hσ] at hpop
             rw [hσ, hσ'] at hσle
@@ -6368,7 +6368,7 @@ theorem checkSeq_specialize (sigs : SigTable) (r : Ty) (w : World) (seq : List I
         cases hσ' : w'.σ with
         | nil =>
             exfalso
-            simpa [hσ, hσ', stackLe] using hσle
+            simp [hσ, hσ', stackLe] at hσle
         | cons t' σ' =>
             rw [hσ] at hpop
             rw [hσ, hσ'] at hσle
@@ -6416,7 +6416,7 @@ theorem checkSeq_specialize (sigs : SigTable) (r : Ty) (w : World) (seq : List I
           hbody' hk
     | cons t' σ'' =>
         exfalso
-        simpa [hσ, hσ', stackLe] using hσle
+        simp [hσ, hσ', stackLe] at hσle
   case case53 =>
     rename_i sigs r w x elems body rest hσne
     intro w' h
@@ -6427,12 +6427,12 @@ theorem checkSeq_specialize (sigs : SigTable) (r : Ty) (w : World) (seq : List I
         | nil => exact absurd hstack hσne
         | cons t σ =>
             exfalso
-            simpa [hσ', hstack, stackLe] using hσle
+            simp [hσ', hstack, stackLe] at hσle
     | cons t' σ'' =>
         cases hstack : w.σ with
         | nil =>
             exfalso
-            simpa [hσ', hstack, stackLe] using hσle
+            simp [hσ', hstack, stackLe] at hσle
         | cons t σ =>
             simp only [checkSeq, hσ', hstack]
             exact trivial
