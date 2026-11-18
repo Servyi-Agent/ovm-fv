@@ -68,6 +68,12 @@ import Metalanguage.SubjectReduction
 #print axioms SR_kEval_hasField_nv
 #print axioms SR_kEval_isNullOrUnd_nv
 #print axioms SR_kEval_isBoolVal_call_nv_fused
+#print axioms SR_kEval_fused_step
+#print axioms SR_kEval_isNull_nv
+#print axioms SR_kEval_isNormalC_nv
+#print axioms SR_kEval_isThrowC_nv
+#print axioms SR_kEval_isCompletion_nv
+#print axioms SR_kEval_isType_nv
 #print axioms SR_kTest
 #print axioms SR_kTestVar_pIsObj
 #print axioms SR_kTestVar_shape

@@ -481,18 +481,28 @@ def fstep (reg : AOReg) : FM → FM
         done (⟨.kTestVar x (.pHasField nm) :: rest, env, f.eval, f.ret⟩ :: fs)
     | .kEval (.hasField nm e) :: rest, _, _ =>
         done (⟨.kEval e :: .kPrim1 (.pHasField nm) :: rest, f.env, f.eval, f.ret⟩ :: fs)
+    | .kEval (.isNormalC (.nv x)) :: rest, env, _ =>
+        done (⟨.kTestVar x .pIsNormalC :: rest, env, f.eval, f.ret⟩ :: fs)
     | .kEval (.isNormalC e) :: rest, _, _ =>
         done (⟨.kEval e :: .kPrim1 .pIsNormalC :: rest, f.env, f.eval, f.ret⟩ :: fs)
+    | .kEval (.isCompletion (.nv x)) :: rest, env, _ =>
+        done (⟨.kTestVar x .pIsCompletion :: rest, env, f.eval, f.ret⟩ :: fs)
     | .kEval (.isCompletion e) :: rest, _, _ =>
         done (⟨.kEval e :: .kPrim1 .pIsCompletion :: rest, f.env, f.eval, f.ret⟩ :: fs)
+    | .kEval (.isThrowC (.nv x)) :: rest, env, _ =>
+        done (⟨.kTestVar x .pIsThrowC :: rest, env, f.eval, f.ret⟩ :: fs)
     | .kEval (.isThrowC e) :: rest, _, _ =>
         done (⟨.kEval e :: .kPrim1 .pIsThrowC :: rest, f.env, f.eval, f.ret⟩ :: fs)
     | .kEval (.complValue e) :: rest, _, _ =>
         done (⟨.kEval e :: .kPrim1 .pUnwrapC :: rest, f.env, f.eval, f.ret⟩ :: fs)
     | .kEval (.completionOf e) :: rest, _, _ =>
         done (⟨.kEval e :: .kPrim1 .pWrapC :: rest, f.env, f.eval, f.ret⟩ :: fs)
+    | .kEval (.isType ty (.nv x)) :: rest, env, _ =>
+        done (⟨.kTestVar x (.pIsType ty) :: rest, env, f.eval, f.ret⟩ :: fs)
     | .kEval (.isType ty e) :: rest, _, _ =>
         done (⟨.kEval e :: .kPrim1 (.pIsType ty) :: rest, f.env, f.eval, f.ret⟩ :: fs)
+    | .kEval (.isNull (.nv x)) :: rest, env, _ =>
+        done (⟨.kTestVar x .pIsNull :: rest, env, f.eval, f.ret⟩ :: fs)
     | .kEval (.isNull e) :: rest, _, _ =>
         done (⟨.kEval e :: .kPrim1 .pIsNull :: rest, f.env, f.eval, f.ret⟩ :: fs)
     | .kEval (.imeth nm recv args) :: rest, _, _ =>
