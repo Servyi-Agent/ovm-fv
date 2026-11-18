@@ -69,6 +69,7 @@ import Metalanguage.SubjectReduction
 #print axioms SR_kEval_isNullOrUnd_nv
 #print axioms SR_kEval_isBoolVal_call_nv_fused
 #print axioms SR_kTest
+#print axioms SR_kTestVar_pIsObj
 #print axioms SR_kUnwrap
 #print axioms SR_kPrim1_pThrowC
 #print axioms SR_kPrim1_pWrapC
