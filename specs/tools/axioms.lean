@@ -86,6 +86,9 @@ import Metalanguage.SubjectReduction
 #print axioms SR_kTestVar_pHasCtor
 #print axioms SR_kTestVar_pHasField
 #print axioms SR_kTestVar_pPred_unknown
+#print axioms SR_kTestVar_pPred_split
+#print axioms SR_kTestVar_pPred_data
+#print axioms SR_kTestVar_pPred_acc
 #print axioms SR_kUnwrap
 #print axioms SR_kPrim1_pThrowC
 #print axioms SR_kPrim1_pWrapC
