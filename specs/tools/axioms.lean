@@ -70,6 +70,13 @@ import Metalanguage.SubjectReduction
 #print axioms SR_kEval_isBoolVal_call_nv_fused
 #print axioms SR_kTest
 #print axioms SR_kTestVar_pIsObj
+#print axioms SR_kTestVar_shape
+#print axioms SR_kTestVar_pIsU
+#print axioms SR_kTestVar_pIsNull
+#print axioms SR_kTestVar_pNullOrUnd
+#print axioms SR_kTestVar_pIsTrue
+#print axioms SR_kTestVar_pIsFalse
+#print axioms SR_kTestVar_pIsStr
 #print axioms SR_kUnwrap
 #print axioms SR_kPrim1_pThrowC
 #print axioms SR_kPrim1_pWrapC
