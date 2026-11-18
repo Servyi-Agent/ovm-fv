@@ -56,6 +56,7 @@ import Metalanguage.SubjectReduction
 #print axioms SR_kEval_const
 #print axioms SR_kEval_nat
 #print axioms SR_kEval_nv
+#print axioms SR_kEval_varNotPresent
 #print axioms SR_kTest
 #print axioms SR_kUnwrap
 #print axioms SR_kPrim1_pThrowC
