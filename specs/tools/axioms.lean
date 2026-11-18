@@ -77,6 +77,7 @@ import Metalanguage.SubjectReduction
 #print axioms SR_kTestVar_pIsTrue
 #print axioms SR_kTestVar_pIsFalse
 #print axioms SR_kTestVar_pIsStr
+#print axioms SR_kTestVar_pIsType
 #print axioms SR_kUnwrap
 #print axioms SR_kPrim1_pThrowC
 #print axioms SR_kPrim1_pWrapC
