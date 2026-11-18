@@ -4921,103 +4921,90 @@ theorem splitP1_cov {x : «String»} {dec : VTy → Option Bool} {w' w : World}
                            σ := [.isValue (.boolean Bool.false)] :: w.σ },
                     ⟨a, ha, by simp [splitP1At, hnone]⟩, mk_le haa⟩
 
-/-- The IsCallable decider is refinement-stable: the object class
-    atom is its only undecided atom; every other atom is decided
-    false, and a decided atom moves only to decided atoms (the obj
-    class atom's only strict refinements are object singletons,
-    which stay decided). -/
+def callableUndecidedAtom : VTy → Prop
+  | .anyValue .obj | .isValue (.obj _) => True
+  | _ => False
+
+theorem isCallableAtom_none_iff (a : VTy) :
+    isCallableAtom a = none ↔ callableUndecidedAtom a := by
+  cases a with
+  | anyValue c =>
+      cases c <;> simp [isCallableAtom, callableUndecidedAtom]
+  | isValue v =>
+      cases v with
+      | obj loc => simp [isCallableAtom, callableUndecidedAtom]
+      | undefined | null | boolean _ | number _ | str _ | listV _
+        | descV _ | compl _ _ =>
+          simp [isCallableAtom, callableUndecidedAtom]
+  | complN p | complT | desc fs | notPresent =>
+      simp [isCallableAtom, callableUndecidedAtom]
+
+theorem isCallableAtom_false_of_not_undecided (a : VTy)
+    (h : ¬ callableUndecidedAtom a) : isCallableAtom a = some Bool.false := by
+  cases a with
+  | anyValue c =>
+      cases c <;> simp [isCallableAtom, callableUndecidedAtom] at h ⊢
+  | isValue v =>
+      cases v with
+      | obj loc => simp [callableUndecidedAtom] at h
+      | undefined | null | boolean _ | number _ | str _ | listV _
+        | descV _ | compl _ _ =>
+          simp [isCallableAtom, callableUndecidedAtom] at h ⊢
+  | complN p | complT | desc fs | notPresent =>
+      simp [isCallableAtom, callableUndecidedAtom] at h ⊢
+
+theorem callableUndecided_up {a' a : VTy}
+    (haa : tmovesV a' a = Bool.true) (h : callableUndecidedAtom a') :
+    callableUndecidedAtom a := by
+  cases a' with
+  | anyValue c =>
+      cases c with
+      | obj =>
+          cases a with
+          | anyValue c =>
+              cases c <;> simp_all [tmovesV, callableUndecidedAtom]
+          | isValue v =>
+              cases v <;> simp_all [tmovesV, callableUndecidedAtom]
+          | complN p | complT | desc fs | notPresent =>
+              simp_all [tmovesV, callableUndecidedAtom]
+      | undef | null | bool | num | str | list | desc =>
+          exact absurd h (by simp [callableUndecidedAtom])
+  | isValue v =>
+      cases v with
+      | obj loc =>
+          cases a with
+          | anyValue c =>
+              cases c <;> simp_all [tmovesV, tagOf, callableUndecidedAtom]
+          | isValue v =>
+              cases v <;> simp_all [tmovesV, tagOf, callableUndecidedAtom]
+          | complN p | complT | desc fs | notPresent =>
+              simp_all [tmovesV, tagOf, callableUndecidedAtom]
+      | undefined | null | boolean _ | number _ | str _ | listV _
+        | descV _ | compl _ _ =>
+          exact absurd h (by simp [callableUndecidedAtom])
+  | complN p | complT | desc fs | notPresent =>
+      exact absurd h (by simp [callableUndecidedAtom])
+
+/-- The IsCallable decider is refinement-stable: every non-object atom
+    is statically not callable, while both object representations are
+    heap-undecided. -/
 theorem decMono_isCallable : DecMono isCallableAtom := by
-  have hf : ∀ x, x ≠ .anyValue .obj → isCallableAtom x = some Bool.false := by
-    intro x hne
-    cases x with
-      | anyValue c =>
-        cases c with
-          | obj => exact absurd rfl hne
-          | undef => rfl
-          | null => rfl
-          | bool => rfl
-          | num => rfl
-          | str => rfl
-          | list => rfl
-          | desc => rfl
-      | complN p => rfl
-      | complT => rfl
-      | isValue v => rfl
-      | desc fs => rfl
-      | notPresent => rfl
   intro a' a haa
   constructor
   · intro b hb
-    cases hd' : isCallableAtom a' with
-    | none => rw [hd'] at hb; cases hb
-    | some bv =>
-        have hne' : a' ≠ .anyValue .obj := by
-          intro he
-          rw [he] at hd'
-          cases hd'
-        rw [hf a' hne'] at hb
-        injection hb with hbf
-        subst hbf
-        cases a with
-          | anyValue c =>
-              cases c with
-                | obj => exact Or.inr rfl
-                | undef => exact Or.inl rfl
-                | null => exact Or.inl rfl
-                | bool => exact Or.inl rfl
-                | num => exact Or.inl rfl
-                | str => exact Or.inl rfl
-                | list => exact Or.inl rfl
-                | desc => exact Or.inl rfl
-          | complN p => exact Or.inl rfl
-          | complT => exact Or.inl rfl
-          | isValue v => exact Or.inl rfl
-          | desc fs => exact Or.inl rfl
-          | notPresent => exact Or.inl rfl
+    have hnot : ¬ callableUndecidedAtom a' := by
+      intro hu
+      rw [(isCallableAtom_none_iff a').mpr hu] at hb
+      simp at hb
+    rw [isCallableAtom_false_of_not_undecided a' hnot] at hb
+    injection hb with hbf
+    subst hbf
+    by_cases hu : callableUndecidedAtom a
+    · exact Or.inr ((isCallableAtom_none_iff a).mpr hu)
+    · exact Or.inl (isCallableAtom_false_of_not_undecided a hu)
   · intro hnone
-    cases hd' : isCallableAtom a' with
-    | some bv =>
-        have hne' : a' ≠ .anyValue .obj := by
-          intro he
-          rw [he] at hd'
-          cases hd'
-        rw [hf a' hne'] at hnone
-        cases hnone
-    | none =>
-        have heq' : a' = .anyValue .obj := by
-            cases a' with
-              | anyValue c =>
-                  cases c with
-                    | obj => rfl
-                    | undef => simp [isCallableAtom] at hd'
-                    | null => simp [isCallableAtom] at hd'
-                    | bool => simp [isCallableAtom] at hd'
-                    | num => simp [isCallableAtom] at hd'
-                    | str => simp [isCallableAtom] at hd'
-                    | list => simp [isCallableAtom] at hd'
-                    | desc => simp [isCallableAtom] at hd'
-              | complN p => simp [isCallableAtom] at hd'
-              | complT => simp [isCallableAtom] at hd'
-              | isValue v => simp [isCallableAtom] at hd'
-              | desc fs => simp [isCallableAtom] at hd'
-              | notPresent => simp [isCallableAtom] at hd'
-        subst heq'
-        cases a with
-          | anyValue c =>
-              cases c with
-                | obj => rfl
-                | undef => simp_all [tmovesV]
-                | null => simp_all [tmovesV]
-                | bool => simp_all [tmovesV]
-                | num => simp_all [tmovesV]
-                | str => simp_all [tmovesV]
-                | list => simp_all [tmovesV]
-                | desc => simp_all [tmovesV]
-          | complN p => simp_all [tmovesV]
-          | complT => simp_all [tmovesV]
-          | isValue v => simp_all [tmovesV]
-          | desc fs => simp_all [tmovesV]
-          | notPresent => simp_all [tmovesV]
+    have hu : callableUndecidedAtom a' := (isCallableAtom_none_iff a').mp hnone
+    exact (isCallableAtom_none_iff a).mpr (callableUndecided_up haa hu)
 
 
 theorem decMono_predDecide (f : «String») (dec : VTy → Option Bool)
@@ -8793,3 +8780,94 @@ theorem SR_kTestVar_pPred_acc (sigs : SigTable) (reg : AOReg)
     predDecide_acc
     (fun _ Γ σ hΓ => splitP1_pPred_acc_machine b hΓ)
     (fun heap v => applyPrim_pPred_acc heap b v)
+
+theorem applyPrim_pPred_callable (heap : Heap) (b : Bool) (v : JSValue) :
+    applyPrim heap (.pPred "IsCallable" b) v
+      = .boolean (b == hasCallV heap v) := by
+  cases v with
+  | obj loc =>
+      cases hobj : heap loc with
+      | none => simp [applyPrim, hasCallV, hobj]
+      | some o =>
+          cases o.kind <;> simp [applyPrim, hasCallV, hobj]
+  | undefined | null | boolean _ | number _ | str _ | listV _ | descV _
+    | compl _ _ =>
+      simp [applyPrim, hasCallV]
+
+theorem splitP1_pPred_callable_machine (heap : Heap) (b : Bool)
+    {Γ : TyEnv} {x : «String»} {v : JSValue} {σ : List Ty}
+    (hΓ : tyLookup Γ x = some [typeOfV v]) :
+    { Γ := (x, [typeOfV v]) :: Γ,
+      σ := [.isValue (.boolean (b == hasCallV heap v))] :: σ }
+      ∈ splitP1 x (fun a => (isCallableAtom a).map (fun bv => bv == b))
+        { Γ := Γ, σ := σ } := by
+  cases v with
+  | obj loc =>
+      cases hb : b == hasCallV heap (JSValue.obj loc) <;>
+        simp [splitP1, splitP1At, hΓ, typeOfV, isCallableAtom, hb]
+  | compl abrupt w =>
+      cases abrupt <;> cases b <;>
+        simp [splitP1, splitP1At, hΓ, typeOfV, isCallableAtom, hasCallV]
+  | undefined | null | boolean _ | number _ | str _ | listV _ | descV _ =>
+      cases b <;>
+        simp [splitP1, splitP1At, hΓ, typeOfV, isCallableAtom, hasCallV]
+
+theorem frameTyped_kTestVar_pPred_callable_present {sigs : SigTable}
+    {r : Ty} {heap : Heap} {b : Bool} {x : «String»} {v : JSValue}
+    {rest : List Instr} {env : Env} {eval : List JSValue} {ret : «String»}
+    {hsc : sigParamsClosed sigs}
+    (hΓ : tyLookup (envTyOf env) x = some [typeOfV v])
+    (h : frameTyped sigs r ⟨.kTestVar x (.pPred "IsCallable" b) :: rest,
+        env, eval, ret⟩) :
+    frameTyped sigs r ⟨rest, env, .boolean (b == hasCallV heap v) :: eval,
+        ret⟩ :=
+  frameTyped_kTestVar_pPred_present (hsc := hsc)
+    (f := "IsCallable") (b := b) (dec := isCallableAtom)
+    (g := fun y => b == hasCallV heap y) (x := x) (v := v)
+    (rest := rest) (env := env) (eval := eval) (ret := ret) rfl
+    (fun Γ σ hlookup => splitP1_pPred_callable_machine heap b hlookup) hΓ h
+
+theorem frameTyped_kTestVar_pPred_callable_reject_unbound {sigs : SigTable}
+    {r : Ty} {b : Bool} {x : «String»} {rest : List Instr} {env : Env}
+    {eval : List JSValue} {ret : «String»}
+    (hΓ : tyLookup (envTyOf env) x = none) :
+    frameTyped sigs r ⟨.kTestVar x (.pPred "IsCallable" b) :: rest,
+        env, eval, ret⟩ = False := by
+  simp [frameTyped, frameWorld, checkSeq, predDecide, splitP1, hΓ, forkTC]
+
+theorem SR_kTestVar_pPred_callable (sigs : SigTable) (reg : AOReg)
+    (b : Bool) (x : «String») (s : FM) (r : Ty) :
+    SR_arm sigs reg (.kTestVar x (.pPred "IsCallable" b)) s r := by
+  intro _ _ hsc hpre
+  cases s with
+  | fdone => exact hpre
+  | fell => exact hpre
+  | frames fs heap nl =>
+      cases fs with
+      | nil => exact hpre
+      | cons f fs' =>
+          obtain ⟨stmts, env, eval, ret⟩ := f
+          simp only [withHead, stateTyped, framesTypedFrom] at hpre ⊢
+          cases hl : lookup env x with
+          | none =>
+              have hΓ : tyLookup (envTyOf env) x = none := by
+                have hbridge := envTyOf_lookup env x
+                simp only [hl, Option.map_none] at hbridge
+                exact hbridge.symm
+              exfalso
+              have h1 : frameTyped sigs (sigRetTy sigs ret)
+                  ⟨.kTestVar x (.pPred "IsCallable" b) :: stmts, env, eval,
+                      ret⟩ := hpre.1.1
+              rw [frameTyped_kTestVar_pPred_callable_reject_unbound hΓ] at h1
+              exact h1.elim
+          | some v =>
+              have hΓ : tyLookup (envTyOf env) x = some [typeOfV v] := by
+                have hbridge := envTyOf_lookup env x
+                simp only [hl, Option.map_some] at hbridge
+                exact hbridge.symm
+              simp only [fstep, hl] at ⊢
+              rw [applyPrim_pPred_callable heap b v]
+              refine ⟨⟨frameTyped_kTestVar_pPred_callable_present
+                  (hsc := hsc) hΓ hpre.1.1, hpre.1.2⟩, ?_⟩
+              rw [machineRet_head_swap]
+              exact hpre.2
