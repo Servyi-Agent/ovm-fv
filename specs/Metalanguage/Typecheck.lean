@@ -757,10 +757,8 @@ def step1 (sigs : SigTable) (i : Instr) (w : World) : Option Worlds :=
     statically not callable; the object atom is heap-dependent
     (undecided: both worlds). -/
 def isCallableAtom : VTy → Option Bool
-  | .anyValue c =>
-      match c with
-      | .obj => none
-      | _ => some Bool.false
+  | .anyValue .obj => none
+  | .isValue (.obj _) => none
   | _ => some Bool.false
 
 /-- Correlated predicate tests: IsDataDescriptor(x) /
