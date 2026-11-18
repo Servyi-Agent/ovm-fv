@@ -60,6 +60,7 @@ import Metalanguage.SubjectReduction
 #print axioms SR_kUnwrap
 #print axioms SR_kPrim1_pThrowC
 #print axioms SR_kPrim1_pWrapC
+#print axioms SR_kPrim1_bool
 -- the kCall bridge (registry-hit arm)
 #print axioms popArgs_le_take
 #print axioms runtime_args_le
