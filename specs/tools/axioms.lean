@@ -19,10 +19,11 @@ import Metalanguage.SubjectReduction
 #print axioms typeOfE_cov
 -- the one-step machine covariance
 #print axioms step1_cov
--- the specialization layer (#8): decider stability + split covariance
-#print axioms decMono_predDecide
-#print axioms decMono_isCallable
-#print axioms decMono_primDecide
+-- the specialization layer: verdict agreement + split covariance
+#print axioms DecAgree_predDecide
+#print axioms DecAgree_beq
+#print axioms DecAgree_primDecide
+#print axioms decAgree_of_pure_cover
 #print axioms split1_cov
 #print axioms splitP1_cov
 -- the specLe relational layer (#8)

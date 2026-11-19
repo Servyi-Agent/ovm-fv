@@ -142,16 +142,16 @@ def corpusSigs : SigTable := [
   -- the coercers provably return non-objects or throw (every return
   -- is guarded by an is-not-an-Object split): the tight return is a
   -- FACT, and it discharges ToString step 11's assert
-  ("OrdinaryToPrimitive", ([[.anyValue .obj], [.isValue (.str "string"), .isValue (.str "number")]],
+  ("OrdinaryToPrimitive", ([objT, [.isValue (.str "string"), .isValue (.str "number")]],
       [.normal [.anyValue .undef, .anyValue .null, .anyValue .bool, .anyValue .num, .anyValue .str], .throw])),
   ("ToPrimitive",         ([langT, [.notPresent, .isValue (.str "string"), .isValue (.str "number")]],
       [.normal [.anyValue .undef, .anyValue .null, .anyValue .bool, .anyValue .num, .anyValue .str], .throw])),
   -- ToObject throws TypeError on undefined/null (spec 7.1.13):
-  ("ToObject",            ([langT], [.normal [.anyValue .obj], .throw])),
+  ("ToObject",            ([langT], [.normal objT, .throw])),
   -- GetV propagates ? ToObject(V); GetMethod propagates ? GetV:
   ("GetV",                ([langT, [.anyValue .str]], [.normal langT, .throw])),
   ("GetMethod",           ([langT, [.anyValue .str]], [.normal langT, .throw])),
-  ("OrdinaryGet",         ([[.anyValue .obj], langT, langT], [.normal langT, .throw])),
+  ("OrdinaryGet",         ([objT, langT, langT], [.normal langT, .throw])),
   -- 6/2/6/3: generic descriptor test (fused pPred calls to the other two)
   ("IsGenericDescriptor", ([[.anyValue .desc]], [.normal [.anyValue .bool]])),
   -- 5.2.4.1: completion in, same completion out; the delivered
@@ -168,15 +168,15 @@ def corpusSigs : SigTable := [
   ("BigInt::toString",    ([[.anyValue .num], [.anyValue .num]], [.normal [.anyValue .str]])),
   ("«Number::toString»",    ([[.anyValue .num], [.anyValue .num]], [.normal [.anyValue .str]])),
   ("«BigInt::toString»",    ([[.anyValue .num], [.anyValue .num]], [.normal [.anyValue .str]])),
-  ("IteratorNext",        ([[.anyValue .obj], [.notPresent] ++ langT], [.normal [.anyValue .obj], .throw])),
-  ("IteratorComplete",    ([[.anyValue .obj]], [.normal [.anyValue .bool], .throw])),
+  ("IteratorNext",        ([objT, [.notPresent] ++ langT], [.normal objT, .throw])),
+  ("IteratorComplete",    ([objT], [.normal [.anyValue .bool], .throw])),
   ("ToBoolean",           ([langT], [.normal [.anyValue .bool]])),
   -- returns "either an Object or done"; done is the spec's marker,
   -- typed as the true singleton (step 5.b's Return done).
-  ("IteratorStep",        ([[.anyValue .obj]], [.normal [.anyValue .obj, .isValue (.boolean Bool.true)], .throw])),
-  ("IteratorClose",       ([[.anyValue .obj], complTy [.normal langT, .throw]], [.normal langT, .throw])),
+  ("IteratorStep",        ([objT], [.normal (objT ++ [.isValue (.boolean Bool.true)]), .throw])),
+  ("IteratorClose",       ([objT, complTy [.normal langT, .throw]], [.normal langT, .throw])),
   -- registry-backed (7.3.2): the one-step [[Get]] wrapper
-  ("Get",                 ([[.anyValue .obj], langT], [.normal langT, .throw])),
+  ("Get",                 ([objT, langT], [.normal langT, .throw])),
   -- deviation: the spec's « argList » is written bare (list
   -- brackets are Lean identifier delimiters) in IteratorNext but
   -- compiled as a list literal in ToPrimitive — the third Call
@@ -217,15 +217,15 @@ example : tcOk corpusSigs (liftC langT) []
 
 #eval typecheckSeq corpusSigs (sigRetTy corpusSigs "IteratorClose")
     (zipTy ["iteratorRecord", "completion"]
-      [[.anyValue .obj], complTy [.normal langT, .throw]])
+      [objT, complTy [.normal langT, .throw]])
     (compileSteps (build iteratorClose7_4_11))
 #eval typeOfE corpusSigs
     (zipTy ["iteratorRecord", "completion"]
-      [[.anyValue .obj], complTy [.normal langT, .throw]])
+      [objT, complTy [.normal langT, .throw]])
     (Expr.completionOf (Expr.call "GetMethod" [Expr.nv "iterator", Expr.const (JSValue.str "return")]))
 #eval typeOfE corpusSigs
     (zipTy ["iteratorRecord", "completion"]
-      [[.anyValue .obj], complTy [.normal langT, .throw]])
+      [objT, complTy [.normal langT, .throw]])
     (Expr.call "GetMethod" [Expr.nv "iterator", Expr.const (JSValue.str "return")])
 #eval typecheckRegOk corpusSigs theReg
 
