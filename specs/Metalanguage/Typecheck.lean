@@ -26,10 +26,14 @@ theorem sizeOf_append_le {α : Type} [SizeOf α] :
 /- ## Constructor tags (the coarse universe) -/
 
 inductive Ctor where
-  | undef | null | bool | num | str | obj | list | desc
+  | undef | null | bool | num | str | obj (callable : Bool) | list | desc
   deriving Repr, DecidableEq, BEq
 
-def langTags : List Ctor := [.undef, .null, .bool, .num, .str, .obj]
+def objTags : List Ctor := [.obj Bool.true, .obj Bool.false]
+def Ctor.isObj : Ctor → Bool
+  | .obj _ => Bool.true
+  | _ => Bool.false
+def langTags : List Ctor := [.undef, .null, .bool, .num, .str] ++ objTags
 def anyTags : List Ctor := langTags ++ [.list, .desc]
 
 /- ## Descriptor fields -/
@@ -89,7 +93,7 @@ inductive Pending where
 def tagOf : JSValue → Ctor
   | .undefined => .undef | .null => .null
   | .boolean _ => .bool | .number _ => .num | .str _ => .str
-  | .obj _ => .obj | .listV _ => .list | .descV _ => .desc
+  | .obj _ => .obj Bool.false | .listV _ => .list | .descV _ => .desc
   | .compl _ _ => .undef        -- completions are never stack atoms
 
 /-- Canonical abstraction of a stack value — completions included:
@@ -102,7 +106,24 @@ def typeOfV : JSValue → VTy
 
 def anyOf (cs : List Ctor) : Ty := cs.map VTy.anyValue
 def langT : Ty := anyOf langTags
+def objT : Ty := [.anyValue (.obj Bool.true), .anyValue (.obj Bool.false)]
 def anyT : Ty := anyOf anyTags
+
+/-- Heap-level callability facts. At an object location, `true`
+    denotes a builtin/callable object and `false` an ordinary or other
+    non-callable object. -/
+abbrev HeapCallableTy := Nat → Bool
+instance : Repr HeapCallableTy := ⟨fun _ _ => "<heap-callability>"⟩
+
+/-- Resolve exact object singletons through heap callability, including
+    object payloads parked inside normal completions. -/
+def normalizeAtom (η : HeapCallableTy) : VTy → VTy
+  | .isValue (.obj loc) => .anyValue (.obj (η loc))
+  | .complN p => .complN ((normalizeAtom η) p)
+  | a => a
+
+def normalizeTy (η : HeapCallableTy) : Ty → Ty :=
+  fun t => t.map (normalizeAtom η)
 
 /- ## Subtyping: a finite grid on atoms; forall-exists on flat types -/
 
@@ -242,9 +263,9 @@ def mopResult : «String» → List Pending
   | "Get" | "Call" => [.normal langT, .throw]
   -- Iterator Record fields: [[Iterator]] is an Object (spec 7.4.1);
   -- the others are dynamic guards.
-  | "Iterator" => [.normal [.anyValue .obj]]
+  | "Iterator" => [.normal objT]
   | "NextMethod" | "Done" => [.normal langT]
-  | "GetPrototypeOf" => [.normal [.anyValue .null, .anyValue .obj]]
+  | "GetPrototypeOf" => [.normal ([.anyValue .null] ++ objT)]
   | "Value" | "Getter" | "Setter" => [.normal langT]
   | "Writable" | "Enumerable" | "Configurable" => [.normal [.anyValue .bool]]
   | "GetOwnProperty" =>
@@ -260,6 +281,7 @@ def mopPayload («nm» : «String») : Ty := complPayload (mopResult nm)
 /- ## Worlds -/
 
 structure World where
+  η : HeapCallableTy := fun _ => Bool.false
   Γ : TyEnv
   σ : List Ty
   deriving Repr
@@ -283,21 +305,19 @@ def payloadsOf (t : Ty) : Ty :=
   t.flatMap (fun a => match a with | .complN p => [p] | _ => [])
 
 /-- The completion-kind decider for the splitP1 stratum. -/
-def primDecide : Prim → Option (VTy → Option Bool)
+def primDecide : Prim → Option (VTy → Bool)
   | .pIsNormalC =>
       some (fun t => match t with
-        | .complN _ => some Bool.true
-        | .complT => some Bool.false
-        | _ => none)
+        | .complN _ => Bool.true
+        | _ => Bool.false)
   | .pIsThrowC =>
       some (fun t => match t with
-        | .complN _ => some Bool.false
-        | .complT => some Bool.true
-        | _ => none)
+        | .complT => Bool.true
+        | _ => Bool.false)
   | .pIsCompletion =>
       some (fun t => match t with
-        | .complN _ | .complT => some Bool.true
-        | _ => none)
+        | .complN _ | .complT => Bool.true
+        | _ => Bool.false)
   | _ => none
 
 /-- complN-only slot -> payload atoms (none if mixed/bare). -/
@@ -348,7 +368,7 @@ def typeOfE (sigs : SigTable) (Γ : TyEnv) : Expr → Option Ty
       | some k =>
           if args.length == k
              && (match typeOfE sigs Γ recv with
-                 | some t => tmoves t [.anyValue .obj]
+                 | some t => tmoves t objT
                  | none => Bool.false)
              && (typesOf sigs Γ args).isSome
           then some (mopPayload nm) else none
@@ -379,8 +399,8 @@ def typeOfE (sigs : SigTable) (Γ : TyEnv) : Expr → Option Ty
       -- (IteratorClose's step-1 assert discharges)
       match typeOfE sigs Γ x with
       | some t =>
-          if tmoves t [.anyValue .obj] then some [.isValue (.boolean Bool.true)]
-          else if (removeTy t [.anyValue .obj]).isEmpty && !t.isEmpty then
+          if tmoves t objT then some [.isValue (.boolean Bool.true)]
+          else if (removeTy t objT).isEmpty && !t.isEmpty then
             some [.isValue (.boolean Bool.false)]
           else some [.anyValue .bool]
       | none => none
@@ -462,6 +482,10 @@ def popTy (T : Ty) (σ : List Ty) : Option (List Ty) :=
 
 def popA (t : VTy) (σ : List Ty) : Option (List Ty) := popTy [t] σ
 
+def popAObj (σ : List Ty) : Option (List Ty) :=
+  (popA (.anyValue (.obj Bool.true)) σ).orElse
+    (fun _ => popA (.anyValue (.obj Bool.false)) σ)
+
 def popTyN : Nat → Ty → List Ty → Option (List Ty)
   | 0, _, σ => some σ
   | k + 1, t, σ =>
@@ -501,8 +525,8 @@ def typeMask : «String» → Ty
   | _ => []        -- no such constructor in our universe
 
 def testType : Expr → Option Ty
-  | .isObject _ => some [.anyValue .obj]
-  | .isNotObject _ => some (anyOf (anyTags.filter (fun c => c != .obj)))
+  | .isObject _ => some objT
+  | .isNotObject _ => some (anyOf (anyTags.filter (fun c => !c.isObj)))
   | .isU _ => some [.anyValue .undef]
   | .isNotUndefined _ => some (anyOf (anyTags.filter (fun c => c != .undef)))
   | .isNull _ => some [.anyValue .null]
@@ -521,8 +545,8 @@ def fusedPred (f : «String») : Bool :=
 /-- The THEN-type of a fused variable test (per Prim). none = no
     refinement (undecided predicate: plain boolean push). -/
 def testTypeP : Prim → Option Ty
-  | .pIsObj => some [.anyValue .obj]
-  | .pIsNotObj => some (anyOf (anyTags.filter (fun c => c != .obj)))
+  | .pIsObj => some objT
+  | .pIsNotObj => some (anyOf (anyTags.filter (fun c => !c.isObj)))
   | .pIsU => some [.anyValue .undef]
   | .pIsNotU => some (anyOf (anyTags.filter (fun c => c != .undef)))
   | .pIsNull => some [.anyValue .null]
@@ -736,7 +760,7 @@ def step1 (sigs : SigTable) (i : Instr) (w : World) : Option Worlds :=
           match popTyN n anyT w.σ with
           | none => none
           | some σ' =>
-              match popA (.anyValue .obj) σ' with
+              match popAObj σ' with
               | none => none
               | some σ'' =>
                   some [{ w with σ := complTy (mopResult nm) :: σ'' }]
@@ -749,34 +773,31 @@ def step1 (sigs : SigTable) (i : Instr) (w : World) : Option Worlds :=
       | none => none
       | some _ =>
           match popTy anyT w.σ with
-          | some σ' => some [{ w with σ := [.anyValue .obj] :: σ' }]
+          | some σ' => some [{ w with σ := objT :: σ' }]
           | none => none
   | _ => some [w]
 
-/-- IsCallable per-atom verdict: every non-object atom is
-    statically not callable; the object atom is heap-dependent
-    (undecided: both worlds). -/
-def isCallableAtom : VTy → Option Bool
-  | .anyValue .obj => none
-  | .isValue (.obj _) => none
-  | _ => some Bool.false
+/-- IsCallable per-atom verdict. Object-class tags carry the
+    heap-derived callability bit directly; an exact object location is
+    resolved through the heap-callability typing. -/
+def isCallableAtom (η : HeapCallableTy) : VTy → Bool
+  | .anyValue (.obj callable) => callable
+  | .isValue (.obj loc) => η loc
+  | _ => Bool.false
 
-/-- Correlated predicate tests: IsDataDescriptor(x) /
-    IsAccessorDescriptor(x) are decidable per EXACT desc atom;
-    IsCallable(x) is decidable per VALUE CLASS - every non-object
-    atom is statically not callable, the object atom is
-    heap-dependent (undecided: both worlds). -/
-def predDecide (f : «String») : Option (VTy → Option Bool) :=
+/-- Correlated predicate tests. Native deciders are total: a nonmatching
+    atom means the predicate is false, not undecided. -/
+def predDecide (η : HeapCallableTy) (f : «String») : Option (VTy → Bool) :=
   match f with
   | "IsDataDescriptor" =>
       some (fun t => match t with
-        | .desc fs => some (fs.any (fun fld => fData.contains fld))
-        | _ => none)
+        | .desc fs => fs.any (fun fld => fData.contains fld)
+        | _ => Bool.false)
   | "IsAccessorDescriptor" =>
       some (fun t => match t with
-        | .desc fs => some (fs.any (fun fld => fAcc.contains fld))
-        | _ => none)
-  | "IsCallable" => some isCallableAtom
+        | .desc fs => fs.any (fun fld => fAcc.contains fld)
+        | _ => Bool.false)
+  | "IsCallable" => some (isCallableAtom η)
   | _ => none
 
 /-- Split ONE world at a shape test of x with then-type T. -/
@@ -786,30 +807,17 @@ def split1 (x : «String») (T : Ty) (w : World) : Worlds :=
   | some S =>
       (match meetTy S T with
        | [] => []
-       | _ => [{ Γ := (x, meetTy S T) :: w.Γ,
-                 σ := [.isValue (.boolean Bool.true)] :: w.σ }])
+       | _ => { w with Γ := (x, meetTy S T) :: w.Γ, σ := [.isValue (.boolean Bool.true)] :: w.σ } :: [])
       ++ (match removeTy S T with
        | [] => []
-       | _ => [{ Γ := (x, removeTy S T) :: w.Γ,
-                 σ := [.isValue (.boolean Bool.false)] :: w.σ }])
+       | _ => { w with Γ := (x, removeTy S T) :: w.Γ, σ := [.isValue (.boolean Bool.false)] :: w.σ } :: [])
 
-/-- Split ONE world by a per-atom predicate decider. -/
-def splitP1At (x : «String») (dec : VTy → Option Bool) (w : World)
+/-- Split ONE world by a total per-atom predicate decider. -/
+def splitP1At (x : «String») (dec : VTy → Bool) (w : World)
     (a : VTy) : Worlds :=
-  match dec a with
-  | some Bool.true =>
-      [{ Γ := (x, [a]) :: w.Γ,
-         σ := [.isValue (.boolean Bool.true)] :: w.σ }]
-  | some Bool.false =>
-      [{ Γ := (x, [a]) :: w.Γ,
-         σ := [.isValue (.boolean Bool.false)] :: w.σ }]
-  | none =>
-      [{ Γ := (x, [a]) :: w.Γ,
-         σ := [.isValue (.boolean Bool.true)] :: w.σ },
-       { Γ := (x, [a]) :: w.Γ,
-         σ := [.isValue (.boolean Bool.false)] :: w.σ }]
+  { w with Γ := (x, [a]) :: w.Γ, σ := [.isValue (.boolean (dec a))] :: w.σ } :: []
 
-def splitP1 (x : «String») (dec : VTy → Option Bool) (w : World) : Worlds :=
+def splitP1 (x : «String») (dec : VTy → Bool) (w : World) : Worlds :=
   match tyLookup w.Γ x with
   | none => []
   | some S => S.flatMap (splitP1At x dec w)
@@ -958,7 +966,7 @@ def checkSeq : SigTable → Ty → World → List Instr → TCResult
             "ill-typed expression (unbound or bad args)"
         | some t =>
             markThrow sigs (.isBoolVal b (.call f [.nv x]))
-              (checkSeq sigs r { w with σ := t :: w.σ } rest)
+              (checkSeq sigs r { w with σ := normalizeTy w.η t :: w.σ } rest)
   | sigs, r, w, .kRepeatWhile c body :: rest =>
       -- LOOPS RUN ON THE EMPTY STACK: loop-local state lives in Γ
       -- (kSet/kEval pairs are net-zero on σ). The neutrality
@@ -981,7 +989,8 @@ def checkSeq : SigTable → Ty → World → List Instr → TCResult
       match typeOfE sigs w.Γ ex with
       | none => .reject (.kEval ex) "ill-typed expression (unbound or bad args)"
       | some t =>
-          markThrow sigs ex (checkSeq sigs r { w with σ := t :: w.σ } rest)
+          markThrow sigs ex
+            (checkSeq sigs r { w with σ := normalizeTy w.η t :: w.σ } rest)
   | sigs, r, w, .kTestVar x p :: rest =>
       -- FUSED variable test: the Γ-correlated split site
       match p with
@@ -991,10 +1000,10 @@ def checkSeq : SigTable → Ty → World → List Instr → TCResult
           -- `is false` guard refines the SURVIVING branch to the
           -- predicate's true atoms - e.g. IsCallable(func) is false,
           -- throw: continuing forces func : object).
-          match predDecide f with
+          match predDecide w.η f with
           | some dec =>
               forkTC (.kTestVar x p)
-                (splitP1 x (fun a => (dec a).map (fun bv => bv == b)) w)
+                (splitP1 x (fun a => dec a == b) w)
                 (fun u => checkSeq sigs r u rest)
           | none =>
               match tyLookup w.Γ x with
