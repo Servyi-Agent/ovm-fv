@@ -19,6 +19,8 @@ import Metalanguage.SubjectReduction
 #print axioms typeOfE_cov
 -- loop and throw-transfer helpers
 #print axioms terminal_markThrow
+#print axioms boolBranchTC_exits
+#print axioms boolBranchTC_specLe
 #print axioms meetTy_le_left
 #print axioms removeTy_le_left
 #print axioms fork_single_terminal

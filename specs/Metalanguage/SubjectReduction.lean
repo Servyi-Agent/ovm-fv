@@ -7864,7 +7864,17 @@ theorem boolBranchTC_specLe {site : Instr} {ts' ts : Ty}
                         exact specLe_merge_left hfalse
                     | _ => simp [tmovesV, tagOf] at hba
                 | _ => simp [tmovesV] at hba
-        | _ => cases a <;> simp_all [tmovesV, tagOf, decide_eq_true_eq, beq_iff_eq, specLe]
+        | _ =>
+            cases a with
+            | isValue v =>
+                cases v with
+                | boolean b => cases b <;> simp [tmovesV] at hba
+                | _ => exact trivial
+            | anyValue c =>
+                cases c with
+                | bool => simp [tmovesV, tagOf] at hba
+                | _ => exact trivial
+            | complN p | complT | desc _ | notPresent => exact trivial
     | anyValue c =>
         cases c with
         | bool =>
@@ -7874,7 +7884,17 @@ theorem boolBranchTC_specLe {site : Instr} {ts' ts : Ty}
                 | bool => exact specLe_merge htrue hfalse
                 | _ => simp [tmovesV] at hba
             | _ => simp [tmovesV, tagOf] at hba
-        | _ => cases a <;> simp_all [tmovesV, tagOf, decide_eq_true_eq, beq_iff_eq, specLe]
+        | _ =>
+            cases a with
+            | isValue v =>
+                cases v with
+                | boolean b => cases b <;> simp [tmovesV] at hba
+                | _ => exact trivial
+            | anyValue c =>
+                cases c with
+                | bool => simp [tmovesV] at hba
+                | _ => exact trivial
+            | complN p | complT | desc _ | notPresent => exact trivial
     | complN p | complT | desc _ | notPresent =>
         cases a with
         | isValue v =>
@@ -7923,7 +7943,7 @@ theorem boolBranchTC_specLe {site : Instr} {ts' ts : Ty}
           cases hfr'
       | flows fr2 =>
           have hfr2 : fr2 = fr' :=
-            (TCResult.flows.inj (hres.symm.trans hfr')).symm
+            TCResult.flows.inj (hres.symm.trans hfr')
           rw [hfr2]
           exact hcov
 
@@ -8407,11 +8427,18 @@ theorem checkSeq_specialize (sigs : SigTable) (r : Ty) (w : World) (seq : List I
   case case29 =>
     rename_i _dummy _body _rest _hempty _ps hnt
     intro w' h
-    simp_all [checkSeq]
+    have hfalse : tmoves _hempty [.anyValue .bool] = Bool.false := by
+      cases hb : tmoves _hempty [.anyValue .bool] with
+      | true => exact absurd hb hnt
+      | false => rfl
+    simp only [checkSeq, _rest, _ps, hfalse]
+    rw [if_neg (by decide)]
+    exact trivial
   case case30 =>
     rename_i _dummy _body _rest _hempty hnone
     intro w' h
-    simp_all [checkSeq]
+    simp only [checkSeq, _hempty, hnone]
+    exact trivial
   case case31 =>
     rename_i sigs r w c body rest hσne
     intro w' h
@@ -8465,7 +8492,8 @@ theorem checkSeq_specialize (sigs : SigTable) (r : Ty) (w : World) (seq : List I
     | nil =>
         exfalso
         rw [hstack] at hσle
-        simp [stackLe] at hσle
+        rw [hσ'] at hσle
+        cases hσle
     | cons t' σ'' =>
         rw [hstack] at hσle
         rw [hstack] at hcovσ
@@ -8474,21 +8502,17 @@ theorem checkSeq_specialize (sigs : SigTable) (r : Ty) (w : World) (seq : List I
         obtain ⟨hslot, hrest⟩ := hσle
         obtain ⟨-, hcovσ'⟩ := hcovσ
         have hp : popTy [.anyValue .bool] (ts :: σ') = some ([] : List Ty) := by
-          rw [hstack]; exact hpop
-        have htsbool : tmoves ts [.anyValue .bool] = Bool.true := by
-          simp only [popTy] at hp
-          split at hp
-          · next h => exact h
-          · next h => exact Bool.noConfusion hp
-        have hσ'nil : σ' = ([] : List Ty) := by
-          simp only [popTy, if_pos htsbool] at hp
-          exact Option.some.inj hp
+          rw [← hstack]
+          exact hpop
+        obtain ⟨hcoarsenil, _⟩ :=
+          popTy_some_nil_cov (slotLe_refl ts) (stackLe_refl σ') hp
+        obtain ⟨hσ'nil, hpop'⟩ :=
+          popTy_some_nil_cov hslot hrest hp
+        subst hcoarsenil
         subst hσ'nil
-        have ht'bool : tmoves t' [.anyValue .bool] = Bool.true :=
-          tmoves_trans hslot.1 htsbool
         have hw0 : worldLe { w' with σ := ([] : List Ty) } { w0 with σ := ([] : List Ty) } :=
           ⟨hη, hΓ, by simp [stackLe], hcovΓ, by simp [stackCov]⟩
-        have hw1 : worldLe { w' with σ := σ'' } { w0 with σ := ([] : List Ty) } :=
+        have hw1 : worldLe { w' with σ := ([] : List Ty) } { w0 with σ := ([] : List Ty) } :=
           ⟨hη, hΓ, hrest, hcovΓ, hcovσ'⟩
         have hbody := ihbody hsc _ hw0
         have htail := ihrest hsc _ hw1
@@ -8499,9 +8523,7 @@ theorem checkSeq_specialize (sigs : SigTable) (r : Ty) (w : World) (seq : List I
         have hloop := checkLoopBody_spec (.kRepeatTest c0 body0) []
           (fun fs => fs.foldl (fun acc u => mergeTC acc (checkSeq sigs r0 u rest0)) noFlows)
           hbody hk
-        have hpop' : popTy [.anyValue .bool] (t' :: σ'') = some ([] : List Ty) := by
-          simp only [popTy, if_pos ht'bool]
-        simp only [checkSeq, hstack, hσ', hpop, hpop']
+        simp only [checkSeq, hstack, hσ', hp, hpop']
         exact boolBranchTC_specLe hmate hloop htail
   case case49 =>
     intro w' h
@@ -8620,8 +8642,8 @@ theorem checkSeq_specialize (sigs : SigTable) (r : Ty) (w : World) (seq : List I
   case case57 =>
     rename_i sigs r w i rest hdisj hstep
     intro w' h
-    simp only [checkSeq, hstep] at h
-    exact TCResult.noConfusion h
+    simp only [checkSeq, hstep]
+    exact trivial
   case case58 =>
     rename_i sigs r w i rest n1 n2 n3 n4 n5 n6 n7 n8 n9 n10 n11 n12 n13 n14 n15 n16 n17 n18 n19 n20 n21 n22 n23 n24 n25 n26 n27 ws hstep ih1
     intro w' h
