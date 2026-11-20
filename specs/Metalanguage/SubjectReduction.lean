@@ -12485,3 +12485,276 @@ theorem SR_kEval_isType_nv (sigs : SigTable) (reg : AOReg) (η : HeapCallableTy)
   SR_kEval_fused_step sigs reg η (.isType ty (.nv x)) x (.pIsType ty) s r
     (by intro _ _ _ _ _ _ _; rfl)
     (by intro _ _ _ _; simp [checkSeq])
+
+theorem popAObj_normalizeObj (η : HeapCallableTy) (loc : Nat) (σ : List Ty) :
+    popAObj ([normalizeAtom η (typeOfV (JSValue.obj loc))] :: σ) = some σ := by
+  cases hη : η loc <;>
+    simp [popAObj, popA, popTy, tmoves, tmovesV, typeOfV, normalizeAtom, hη]
+
+theorem getProto_obj_slot (η : HeapCallableTy) (p : Nat) :
+    slotLe [normalizeAtom η (typeOfV (.compl Bool.false (JSValue.obj p)))]
+      (complTy (mopResult "GetPrototypeOf")) := by
+  cases hη : η p <;>
+    simp [slotLe, tyLe, tmoves, tmovesV, typeOfV, normalizeAtom,
+      complTy, complPayload, mopResult, objT, anyTags, langTags, anyOf, hη]
+
+theorem getProto_obj_cov (η : HeapCallableTy) (p : Nat) :
+    tyCov η [normalizeAtom η (typeOfV (.compl Bool.false (JSValue.obj p)))]
+      (complTy (mopResult "GetPrototypeOf")) := by
+  cases hη : η p <;>
+    simp [tyCov, atomCov, tmovesV, typeOfV, normalizeAtom,
+      complTy, complPayload, mopResult, objT, anyTags, langTags, anyOf,
+      decAgree, predDecide, hη]
+
+theorem getProto_null_slot (η : HeapCallableTy) :
+    slotLe [normalizeAtom η (typeOfV (.compl Bool.false JSValue.null))]
+      (complTy (mopResult "GetPrototypeOf")) := by
+  refine ⟨?_, by simp⟩
+  apply tyLe_of_atom_cov
+  intro a ha
+  simp only [List.mem_singleton] at ha
+  subst ha
+  refine ⟨VTy.complN (VTy.anyValue Ctor.null), ?_, by
+    simp [normalizeAtom, typeOfV, tmovesV, tagOf]⟩
+  simp only [complTy, complPayload, mopResult]
+  exact List.mem_cons_self
+
+theorem getProto_null_cov (η : HeapCallableTy) :
+    tyCov η [normalizeAtom η (typeOfV (.compl Bool.false JSValue.null))]
+      (complTy (mopResult "GetPrototypeOf")) := by
+  intro a ha
+  simp only [List.mem_singleton] at ha
+  subst ha
+  refine ⟨VTy.complN (VTy.anyValue Ctor.null), ?_, atomCov_complN_of
+    (atomCov_of_pure_cover η (by rfl) (by trivial))⟩
+  simp only [complTy, complPayload, mopResult]
+  exact List.mem_cons_self
+
+theorem frameTyped_kIMeth_getProto_obj {sigs : SigTable} {r : Ty}
+    {loc p : Nat} {rest : List Instr} {env : Env}
+    {older : List JSValue} {ret : «String»} {hsc : sigParamsClosed sigs}
+    (h : frameTyped sigs η r
+      ⟨.kIMeth "GetPrototypeOf" 0 :: rest, env, JSValue.obj loc :: older, ret⟩) :
+    frameTyped sigs η r
+      ⟨rest, env, .compl Bool.false (JSValue.obj p) :: older, ret⟩ := by
+  simp only [frameTyped, frameWorld, List.map_cons] at h ⊢
+  have hpop : popAObj
+      ([normalizeAtom η (typeOfV (JSValue.obj loc))] ::
+        older.map (fun x => [normalizeAtom η (typeOfV x)]))
+      = some (older.map (fun x => [normalizeAtom η (typeOfV x)])) :=
+    popAObj_normalizeObj η loc _
+  have hchk : checkSeq sigs r
+      { η := η, Γ := envTyOf η env,
+        σ := [normalizeAtom η (typeOfV (JSValue.obj loc))] ::
+          older.map (fun x => [normalizeAtom η (typeOfV x)]) }
+      (.kIMeth "GetPrototypeOf" 0 :: rest)
+      = checkSeq sigs r
+          { η := η, Γ := envTyOf η env,
+            σ := complTy (mopResult "GetPrototypeOf") ::
+              older.map (fun x => [normalizeAtom η (typeOfV x)]) } rest := by
+    simp [checkSeq, step1, mopArity, popTyN, hpop, forkTC_cons]
+  rw [hchk] at h
+  exact frameTyped_pushRefine (ret := ret) hsc
+    (T := complTy (mopResult "GetPrototypeOf"))
+    (getProto_obj_slot η p) (getProto_obj_cov η p) h
+
+theorem frameTyped_kIMeth_getProto_null {sigs : SigTable} {r : Ty}
+    {loc : Nat} {rest : List Instr} {env : Env}
+    {older : List JSValue} {ret : «String»} {hsc : sigParamsClosed sigs}
+    (h : frameTyped sigs η r
+      ⟨.kIMeth "GetPrototypeOf" 0 :: rest, env, JSValue.obj loc :: older, ret⟩) :
+    frameTyped sigs η r
+      ⟨rest, env, .compl Bool.false JSValue.null :: older, ret⟩ := by
+  simp only [frameTyped, frameWorld, List.map_cons] at h ⊢
+  have hpop : popAObj
+      ([normalizeAtom η (typeOfV (JSValue.obj loc))] ::
+        older.map (fun x => [normalizeAtom η (typeOfV x)]))
+      = some (older.map (fun x => [normalizeAtom η (typeOfV x)])) :=
+    popAObj_normalizeObj η loc _
+  have hchk : checkSeq sigs r
+      { η := η, Γ := envTyOf η env,
+        σ := [normalizeAtom η (typeOfV (JSValue.obj loc))] ::
+          older.map (fun x => [normalizeAtom η (typeOfV x)]) }
+      (.kIMeth "GetPrototypeOf" 0 :: rest)
+      = checkSeq sigs r
+          { η := η, Γ := envTyOf η env,
+            σ := complTy (mopResult "GetPrototypeOf") ::
+              older.map (fun x => [normalizeAtom η (typeOfV x)]) } rest := by
+    simp [checkSeq, step1, mopArity, popTyN, hpop, forkTC_cons]
+  rw [hchk] at h
+  exact frameTyped_pushRefine (ret := ret) hsc
+    (T := complTy (mopResult "GetPrototypeOf"))
+    (getProto_null_slot η) (getProto_null_cov η) h
+
+theorem frameTyped_kIMeth_getProto_reject {sigs : SigTable} {r : Ty}
+    {v : JSValue} {rest : List Instr} {env : Env}
+    {older : List JSValue} {ret : «String»}
+    (hv : ¬ ∃ loc, v = JSValue.obj loc) :
+    frameTyped sigs η r
+      ⟨.kIMeth "GetPrototypeOf" 0 :: rest, env, v :: older, ret⟩ = False := by
+  cases v with
+  | obj loc => exact absurd ⟨loc, rfl⟩ hv
+  | undefined | null | boolean _ | number _ | str _ | listV _ | descV _ =>
+      simp [frameTyped, frameWorld, checkSeq, step1, mopArity, popTyN,
+        popAObj, popA, popTy, tmoves, tmovesV, typeOfV, normalizeAtom,
+        tagOf, List.map_cons]
+  | compl abrupt w =>
+      have hnc : ∀ b, tmoves [normalizeAtom η (typeOfV (JSValue.compl abrupt w))]
+          [VTy.anyValue (Ctor.obj b)] = Bool.false := by
+        intro b
+        cases abrupt with
+        | false =>
+            rw [typeOfV.eq_2, normalizeAtom.eq_2]
+            simp [tmoves, tmovesV]
+        | true =>
+            rw [typeOfV.eq_3]
+            change tmovesV VTy.complT (VTy.anyValue (Ctor.obj b)) = Bool.false
+            rfl
+      have hn : popAObj
+          ([normalizeAtom η (typeOfV (JSValue.compl abrupt w))] ::
+            older.map (fun x => [normalizeAtom η (typeOfV x)])) = none := by
+        simp [popAObj, popA, popTy, hnc Bool.true, hnc Bool.false]
+      simp [frameTyped, frameWorld, checkSeq, step1, mopArity, popTyN,
+        hn, List.map_cons]
+
+theorem frameTyped_kIMeth_getProto_nil {sigs : SigTable} {r : Ty}
+    {rest : List Instr} {env : Env} {ret : «String»} :
+    frameTyped sigs η r
+      ⟨.kIMeth "GetPrototypeOf" 0 :: rest, env, [], ret⟩ = False := by
+  simp [frameTyped, frameWorld, checkSeq, step1, mopArity, popTyN, popAObj, popA, popTy]
+
+theorem heapOk_object_proto {heap : Heap} {nl : Nat} :
+    ∀ (fs : List Fr), heapOk heap nl fs ->
+      ∀ l < nl, ∀ o, heap l = some o ->
+        ∀ p, o.proto = some p -> p < nl ∧ (heap p).isSome = Bool.true := by
+  intro fs
+  induction fs with
+  | nil =>
+      intro h l hl o ho p hp
+      exact (h.1 l hl o ho).2 p hp
+  | cons f fs ih =>
+      intro h l hl o ho p hp
+      exact ih h.2 l hl o ho p hp
+
+theorem fstep_getproto_none {reg : AOReg} {heap : Heap} {nl loc : Nat}
+    {rest : List Instr} {env : Env} {older : List JSValue} {ret : «String»}
+    {fs : List Fr} {o : JsObj}
+    (hheap : heap loc = some o) (hproto : o.proto = none) :
+    fstep reg (FM.frames
+        (⟨.kIMeth "GetPrototypeOf" 0 :: rest, env, JSValue.obj loc :: older, ret⟩ :: fs)
+        heap nl)
+    = FM.frames (⟨rest, env, JSValue.compl Bool.false JSValue.null :: older, ret⟩ :: fs)
+        heap nl := by
+  simp [fstep, hheap, hproto]
+
+theorem fstep_getproto_some {reg : AOReg} {heap : Heap} {nl loc p : Nat}
+    {rest : List Instr} {env : Env} {older : List JSValue} {ret : «String»}
+    {fs : List Fr} {o : JsObj}
+    (hheap : heap loc = some o) (hproto : o.proto = some p) :
+    fstep reg (FM.frames
+        (⟨.kIMeth "GetPrototypeOf" 0 :: rest, env, JSValue.obj loc :: older, ret⟩ :: fs)
+        heap nl)
+    = FM.frames
+        (⟨rest, env, JSValue.compl Bool.false (JSValue.obj p) :: older, ret⟩ :: fs)
+        heap nl := by
+  simp [fstep, hheap, hproto]
+
+theorem stateTyped_getProto_push {sigs : SigTable} {η : HeapCallableTy}
+    {r : Ty} {heap : Heap} {nl : Nat}
+    {rest : List Instr} {env : Env} {older : List JSValue}
+    {ret : «String»} {fs : List Fr} {loc : Nat} {v : JSValue}
+    (hv : ∀ l ∈ locsOf v, l < nl ∧ (heap l).isSome = Bool.true)
+    (hpre : stateTyped sigs η r (FM.frames
+      (⟨.kIMeth "GetPrototypeOf" 0 :: rest, env, JSValue.obj loc :: older, ret⟩ :: fs)
+      heap nl))
+    (hft : frameTyped sigs η (sigRetTy sigs ret)
+      ⟨rest, env, v :: older, ret⟩) :
+    stateTyped sigs η r (FM.frames
+      (⟨rest, env, v :: older, ret⟩ :: fs) heap nl) := by
+  simp only [stateTyped, framesTypedFrom] at hpre ⊢
+  refine ⟨hpre.1, heapOk_cons_intro
+      (f := ⟨rest, env, v :: older, ret⟩) (by
+        intro l hl
+        rcases mem_frameLocs_cons_eval hl with hl | hl
+        · exact hv l hl
+        · refine hpre.2.1.1 l ?_
+          show l ∈ List.flatMap locsOf (JSValue.obj loc :: older)
+            ++ List.flatMap locsOf (List.map Prod.snd env)
+          rcases List.mem_append.mp hl with hl | hl
+          · exact List.mem_append_left _
+              (List.mem_append_right _ hl)
+          · exact List.mem_append_right _ hl) hpre.2.1.2,
+    ⟨instrsWf_tail hpre.2.2.1.1, hpre.2.2.1.2⟩,
+    ⟨hft, hpre.2.2.2.1.2⟩, ?_⟩
+  rw [machineRet_head_swap]
+  exact hpre.2.2.2.2
+
+theorem SR_kIMeth_getPrototypeOf (sigs : SigTable) (reg : AOReg)
+    (η : HeapCallableTy) (s : FM) (r : Ty) :
+    SR_arm sigs reg η (.kIMeth "GetPrototypeOf" 0) s r := by
+  intro _ _ hsc hpre
+  cases s with
+  | fdone => exact ⟨η, hpre⟩
+  | fell => exact ⟨η, hpre⟩
+  | frames fs heap nl =>
+      cases fs with
+      | nil => exact ⟨η, hpre⟩
+      | cons f fs' =>
+          obtain ⟨stmts, env, eval, ret⟩ := f
+          simp only [withHead] at hpre
+          have hs := hpre
+          simp only [withHead, stateTyped, framesTypedFrom] at hs
+          cases eval with
+          | nil =>
+              exfalso
+              have h1 : frameTyped sigs η (sigRetTy sigs ret)
+                  ⟨.kIMeth "GetPrototypeOf" 0 :: stmts, env, [], ret⟩ :=
+                hs.2.2.2.1.1
+              rw [frameTyped_kIMeth_getProto_nil] at h1
+              exact h1.elim
+          | cons v older =>
+              cases v with
+              | undefined | null | boolean _ | number _ | str _ | listV _
+                  | compl _ _ | descV _ =>
+                  exfalso
+                  have h1 := hs.2.2.2.1.1
+                  rw [← frameTyped_eq_frameChecks] at h1
+                  rw [frameTyped_kIMeth_getProto_reject (by
+                    intro hobj
+                    obtain ⟨loc, hloc⟩ := hobj
+                    nomatch hloc)] at h1
+                  exact h1.elim
+              | obj loc =>
+                  have hlocmem : loc ∈ frameLocs
+                      ⟨.kIMeth "GetPrototypeOf" 0 :: stmts, env,
+                        JSValue.obj loc :: older, ret⟩ := by
+                    simp [frameLocs, locsOf]
+                  obtain ⟨hloclt, hheap⟩ := hs.2.1.1 loc hlocmem
+                  cases hheapo : heap loc with
+                  | none =>
+                      exact absurd hheap (by rw [hheapo] at hheap; simp at hheap)
+                  | some o =>
+                      cases hproto : o.proto with
+                      | none =>
+                          simp only [withHead] at ⊢
+                          rw [fstep_getproto_none hheapo hproto]
+                          exact ⟨η, stateTyped_getProto_push
+                            (v := JSValue.compl Bool.false JSValue.null)
+                            (by simp [locsOf]) hpre
+                            (frameTyped_kIMeth_getProto_null
+                              (hsc := hsc) hs.2.2.2.1.1)⟩
+                      | some p =>
+                          have hprotolive :=
+                            heapOk_object_proto fs' hs.2.1.2 loc hloclt o hheapo p hproto
+                          have hvloc : ∀ l ∈ locsOf
+                              (JSValue.compl Bool.false (JSValue.obj p)),
+                              l < nl ∧ (heap l).isSome = Bool.true := by
+                            intro l hl
+                            have lp : l = p := by simpa [locsOf] using hl
+                            subst lp
+                            exact hprotolive
+                          simp only [withHead] at ⊢
+                          rw [fstep_getproto_some hheapo hproto]
+                          exact ⟨η, stateTyped_getProto_push hvloc hpre
+                            (frameTyped_kIMeth_getProto_obj
+                              (hsc := hsc) hs.2.2.2.1.1)⟩
