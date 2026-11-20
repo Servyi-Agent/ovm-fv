@@ -199,18 +199,23 @@ theorem locsOf_compl (b : Bool) (v : JSValue) :
 /- References out of an allocated object: property descriptor
     payloads. -/
 def objRefs (o : JsObj) : List Nat :=
-  (o.props.flatMap (fun (_, d) =>
-     match d with
-     | .mk (some v) _ _ _ _ _ => locsOf v
-     | _ => []))
+  o.props.flatMap (fun (_, d) => locsOf (JSValue.descV d))
+
+def descriptorComplete : Descriptor → Prop
+  | .mk value writable getter setter enumerable configurable =>
+      ((value.isSome ∧ writable.isSome ∧ enumerable.isSome ∧ configurable.isSome)
+        ∧ getter.isNone ∧ setter.isNone)
+      ∨ ((getter.isSome ∧ setter.isSome ∧ enumerable.isSome ∧ configurable.isSome)
+        ∧ value.isNone ∧ writable.isNone)
 
 /-- Heap agreement over a BOUNDED region [0, n) — the region grows
     with allocation, so no separate nextLoc conjunct is needed. -/
 def heapOk (heap : Heap) (n : Nat) : List Fr → Prop
   | [] =>
       (∀ l < n, ∀ o, heap l = some o →
-          (objRefs o).all (fun r => r < n ∧ (heap r).isSome)
+          ((objRefs o).all (fun r => r < n ∧ (heap r).isSome)
             ∧ ∀ p, o.proto = some p → p < n ∧ (heap p).isSome)
+          ∧ ∀ d ∈ o.props.map Prod.snd, descriptorComplete d)
       ∧ ∀ l, n ≤ l → heap l = none
   | f :: fs =>
       (∀ l ∈ (f.eval.flatMap locsOf ++ (f.env.map Prod.snd).flatMap locsOf),
@@ -6050,7 +6055,8 @@ theorem heapSet_get_self (heap : Heap) (nl : Nat) (o : JsObj) :
   simp [heapSet]
 
 theorem heapOk_heapSet_succ {heap : Heap} {nl : Nat} {o : JsObj}
-    (hobj : objRefs o = []) (hproto : o.proto = none) :
+    (hobj : objRefs o = []) (hproto : o.proto = none)
+    (hdesc : ∀ d ∈ o.props.map Prod.snd, descriptorComplete d) :
     ∀ (fs : List Fr), heapOk heap nl fs → heapOk (heapSet heap nl o) (nl + 1) fs := by
   intro fs
   induction fs with
@@ -6058,32 +6064,32 @@ theorem heapOk_heapSet_succ {heap : Heap} {nl : Nat} {o : JsObj}
       intro h
       refine ⟨?_, ?_⟩
       · intro l hl o' ho'
-        refine ⟨?_, ?_⟩
-        · rcases Nat.lt_succ_iff_lt_or_eq.mp hl with hlt | heq
-          · rw [heapSet_get_ne (Nat.ne_of_lt hlt)] at ho'
-            have h2 := (h.1 l hlt o' ho').1
+        rcases Nat.lt_succ_iff_lt_or_eq.mp hl with hlt | heq
+        · rw [heapSet_get_ne (Nat.ne_of_lt hlt)] at ho'
+          refine ⟨⟨?_, ?_⟩, ?_⟩
+          · have h2 := (h.1 l hlt o' ho').1.1
             simp only [List.all_eq_true] at h2 ⊢
             intro r hr
             have hr2 := h2 r hr
             simp only [decide_eq_true_eq] at hr2 ⊢
             exact ⟨Nat.lt_succ_of_lt hr2.1, by
               rw [heapSet_get_ne (Nat.ne_of_lt hr2.1)]; exact hr2.2⟩
-          · subst heq
-            rw [heapSet_get_self] at ho'
-            obtain rfl := Option.some.inj ho'
-            rw [hobj]
-            simp
-        · intro p hp
-          rcases Nat.lt_succ_iff_lt_or_eq.mp hl with hlt | heq
-          · rw [heapSet_get_ne (Nat.ne_of_lt hlt)] at ho'
-            have h2 := (h.1 l hlt o' ho').2 p hp
+          · intro p hp
+            have h2 := (h.1 l hlt o' ho').1.2 p hp
             exact ⟨Nat.lt_succ_of_lt h2.1, by
               rw [heapSet_get_ne (Nat.ne_of_lt h2.1)]; exact h2.2⟩
-          · subst heq
-            rw [heapSet_get_self] at ho'
-            obtain rfl := Option.some.inj ho'
+          · intro d hd
+            exact (h.1 l hlt o' ho').2 d hd
+        · subst heq
+          rw [heapSet_get_self] at ho'
+          obtain rfl := Option.some.inj ho'
+          refine ⟨⟨?_, ?_⟩, ?_⟩
+          · rw [hobj]
+            simp
+          · intro p hp
             rw [hproto] at hp
             cases hp
+          · exact hdesc
       · intro l hl
         by_cases heq : l = nl
         · exact absurd (heq ▸ hl) (Nat.not_succ_le_self nl)
@@ -10625,6 +10631,13 @@ theorem SR_kNewSlot (sigs : SigTable) (reg : AOReg) (η : HeapCallableTy)
                   have hprotonone :
                       { objWith Kind.ordinary none with
                           slots := [(ord, v)] }.proto = none := rfl
+                  have hdescnone : ∀ d ∈
+                      ({ objWith Kind.ordinary none with
+                          slots := [(ord, v)] }.props.map Prod.snd),
+                      descriptorComplete d := by
+                    intro d hd
+                    simp only [objWith] at hd
+                    cases hd
                   have hfresh := heapOk_fresh _ hpre.2.1 nl (Nat.le_refl nl)
                   have hηnl : η nl = Bool.false := by
                     rw [hpre.1 nl]
@@ -10646,7 +10659,7 @@ theorem SR_kNewSlot (sigs : SigTable) (reg : AOReg) (η : HeapCallableTy)
                     heapOk_heapSet_succ (heap := heap) (nl := nl)
                       (o := { objWith Kind.ordinary none with
                           slots := [(ord, v)] })
-                      hobjrefs hprotonone _ hpre.2.1
+                      hobjrefs hprotonone hdescnone _ hpre.2.1
                   have houtheap :
                       heapOk (heapSet heap nl
                           { objWith Kind.ordinary none with slots := [(ord, v)] })
@@ -12631,7 +12644,7 @@ theorem heapOk_object_proto {heap : Heap} {nl : Nat} :
   induction fs with
   | nil =>
       intro h l hl o ho p hp
-      exact (h.1 l hl o ho).2 p hp
+      exact (h.1 l hl o ho).1.2 p hp
   | cons f fs ih =>
       intro h l hl o ho p hp
       exact ih h.2 l hl o ho p hp
