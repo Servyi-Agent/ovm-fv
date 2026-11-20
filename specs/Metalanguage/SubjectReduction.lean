@@ -3425,6 +3425,74 @@ theorem tyLe_of_atom_cov {t' t : Ty}
 /-- The three stubborn meetAtom combos, as standalone lemmas in
     ORIGINAL form (for exact-wiring into the grid). -/
 
+theorem meetAtom_le_left : ∀ a b m, meetAtom a b = some m →
+    tmovesV m a = Bool.true := by
+  intro a b m h
+  cases b with
+  | complN q | complT =>
+      simp only [meetAtom] at h
+      exact absurd h (by simp)
+  | notPresent | anyValue c2 | isValue w | desc fs2 =>
+      cases a <;>
+        simp only [meetAtom, tmovesV, beq_iff_eq, decide_eq_true_eq,
+          Option.some.injEq] at h ⊢ <;>
+        (try split at h) <;>
+        simp_all [tmovesV_refl, tagOf] <;>
+        first
+        | rfl
+        | (next htag => subst h; exact decide_eq_true htag)
+        | (subst h; simp [tmovesV])
+        | (subst h; exact tmovesV_refl _)
+
+theorem meetTy_le_left (S T : Ty) : tyLe (meetTy S T) S := by
+  unfold tyLe tmoves meetTy
+  simp only [List.all_eq_true]
+  intro m hm
+  simp only [List.mem_flatMap] at hm
+  obtain ⟨a, ha, ⟨b, hb, hm⟩⟩ := hm
+  cases hma : meetAtom a b with
+  | none => simp [hma] at hm
+  | some m' =>
+      simp only [hma, List.mem_singleton] at hm
+      subst hm
+      apply List.any_eq_true.mpr
+      exact ⟨a, ha, meetAtom_le_left a b _ hma⟩
+
+theorem removeAtom_le_left : ∀ a T a', a' ∈ removeAtom a T →
+    tmovesV a' a = Bool.true := by
+  intro a T a' h
+  simp only [removeAtom] at h
+  by_cases hd : T.any (fun b => tmovesV a b) = Bool.true
+  · rw [if_pos hd] at h; cases h
+  · rw [if_neg hd] at h
+    cases a with
+    | anyValue c =>
+        cases c with
+        | bool =>
+            simp only [isBoolClass] at h
+            repeat' split at h
+            all_goals simp_all [isBoolSing, tmovesV] <;>
+              first | rfl | simp [tagOf] | exact tmovesV_refl _
+        | undef | null | num | str | obj b | list | desc =>
+            simp only [isBoolClass] at h
+            simp at h
+            subst h
+            exact tmovesV_refl _
+    | complN p | complT | isValue v | desc fs | notPresent =>
+        simp only [isBoolClass] at h
+        simp at h
+        subst h
+        exact tmovesV_refl _
+
+theorem removeTy_le_left (S T : Ty) : tyLe (removeTy S T) S := by
+  unfold tyLe tmoves removeTy
+  simp only [List.all_eq_true]
+  intro a' ha'
+  simp only [List.mem_flatMap] at ha'
+  obtain ⟨a, ha, hmem⟩ := ha'
+  apply List.any_eq_true.mpr
+  exact ⟨a, ha, removeAtom_le_left a T a' hmem⟩
+
 theorem meetAtom_cov_aad {c1 c2 : Ctor} {fs : List Field} {m' : VTy}
     (hcov : tmovesV (VTy.desc fs) (VTy.anyValue c1) = Bool.true)
     (hm' : meetAtom (VTy.desc fs) (VTy.anyValue c2) = some m') :
@@ -8488,6 +8556,62 @@ theorem checkSeq_specialize_terminal (sigs : SigTable) (r : Ty)
         cases hu
   have he := checkSeq_exits sigs r w' seq fb' h' hf'
   exact (Bool.and_eq_true _ _).mpr ⟨he, List.isEmpty_iff.mpr hf'⟩
+
+theorem fork_single_terminal {sigs : SigTable} {r : Ty} {site : Instr}
+    {ws : Worlds} {w : World} {seq : List Instr} {fb : Flows}
+    (hsc : sigParamsClosed sigs)
+    (hne : ws ≠ [])
+    (hcov : ∀ u ∈ ws, worldLe u w)
+    (hcoarse : checkSeq sigs r w seq = TCResult.flows fb)
+    (hterm : terminal fb = Bool.true) :
+    ∃ fb', forkTC site ws (fun u => checkSeq sigs r u seq)
+      = TCResult.flows fb' ∧ terminal fb' = Bool.true := by
+  have hbranch : ∀ u ∈ ws, ∃ fbu,
+      checkSeq sigs r u seq = TCResult.flows fbu ∧ terminal fbu = Bool.true := by
+    intro u hu
+    obtain ⟨fbu, hflu, htermu⟩ :=
+      checkSeq_specialize_terminal sigs r w u seq hsc (hcov u hu) hcoarse hterm
+    exact ⟨fbu, hflu, htermu⟩
+  obtain ⟨ffold, hfold⟩ := fold_flows_exists ws noFlows
+    ⟨{ exits := Bool.false, throws := Bool.false, falls := [], assumes := [] }, rfl⟩
+    (fun u hu => ⟨(hbranch u hu).choose, (hbranch u hu).choose_spec.1⟩)
+  cases ws with
+  | nil => exact absurd rfl hne
+  | cons u us =>
+      have hfork : forkTC site (u :: us)
+          (fun v => checkSeq sigs r v seq) = TCResult.flows ffold := by
+        simp only [forkTC, hfold]
+      refine ⟨ffold, hfork, ?_⟩
+      have hsingle : [w].foldl
+          (fun acc v => mergeTC acc (checkSeq sigs r v seq)) noFlows
+          = TCResult.flows fb := by
+        simp [List.foldl_cons, List.foldl_nil, mergeTC, noFlows, hcoarse]
+      refine fork_lift
+        (J' := fun v => checkSeq sigs r v seq)
+        (J := fun v => checkSeq sigs r v seq) ?_ ?_ (u :: us) [w] ?_ ?_ fb
+        hsingle hterm ffold hfold
+      · intro u' v hle fbu hflu hcfalls
+        have hs := checkSeq_specialize sigs r v seq hsc u' hle
+        rw [hflu] at hs
+        obtain ⟨fbu', hflu', hcov⟩ := specLe_flows_elim hs
+        refine ⟨fbu', hflu', ?_⟩
+        cases hfl : fbu'.falls with
+        | nil => rfl
+        | cons x xs =>
+            have hx : x ∈ fbu'.falls := by
+              rw [hfl]
+              exact List.mem_cons.mpr (Or.inl rfl)
+            obtain ⟨y, hy, -⟩ := hcov x hx
+            rw [hcfalls] at hy
+            cases hy
+      · intro u' v hle fbu hflu hcterm
+        exact checkSeq_specialize_terminal sigs r v u' seq hsc hle hflu hcterm
+      · intro u' hu'
+        exact ⟨w, List.mem_cons.mpr (Or.inl rfl), hcov u' hu'⟩
+      · intro v hv
+        have hvw : v = w := by simpa using hv
+        subst hvw
+        exact ⟨u, List.mem_cons.mpr (Or.inl rfl), hcov u (List.mem_cons.mpr (Or.inl rfl))⟩
 
 /- ## THE kRet ARM: the anticipated union becomes the delivered
     singleton. The callee's own kRet acceptance (inverted from its

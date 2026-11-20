@@ -20,6 +20,9 @@ import Metalanguage.SubjectReduction
 -- loop and throw-transfer helpers
 #print axioms checkSeq_kRepeatTest
 #print axioms terminal_markThrow
+#print axioms meetTy_le_left
+#print axioms removeTy_le_left
+#print axioms fork_single_terminal
 -- the one-step machine covariance
 #print axioms step1_cov
 -- the specialization layer: verdict agreement + split covariance
