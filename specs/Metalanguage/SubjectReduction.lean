@@ -2216,6 +2216,30 @@ theorem normalizeTy_cov {η : HeapCallableTy} {t' t : Ty}
   exact ⟨normalizeAtom η a,
     List.mem_map.mpr ⟨a, ha, rfl⟩, normalizeAtom_cov hac⟩
 
+theorem checkSeq_kRepeatTest {sigs : SigTable} {r : Ty}
+    {c : Expr} {body rest : List Instr} {W : World} {t : Ty}
+    (hσ : W.σ = [t])
+    (ht : tmoves t [.anyValue .bool] = Bool.true) :
+    checkSeq sigs r W (.kRepeatTest c body :: rest)
+      = checkLoopBody
+          (checkSeq sigs r { W with σ := ([] : List Ty) } body)
+          (.kRepeatTest c body) []
+          (fun wsf => wsf.foldl
+            (fun acc u => mergeTC acc (checkSeq sigs r u rest)) noFlows) := by
+  rw [checkSeq, hσ, popTy, ht]
+  simp only [reduceIte]
+
+theorem terminal_markThrow (sigs : SigTable) (ex : Expr) (res : TCResult) :
+    (match markThrow sigs ex res with
+      | .flows fb => terminal fb = Bool.true
+      | _ => False) ↔
+      (match res with
+        | .flows fb => terminal fb = Bool.true
+        | _ => False) := by
+  cases res with
+  | flows fb => simp [markThrow, terminal]
+  | reject s why => exact Iff.rfl
+
 theorem typeOfE_cov (sigs : SigTable) (Γ' Γ : TyEnv) {η : HeapCallableTy} :
     ∀ (e : Expr), envLe Γ' Γ → envCov η Γ' Γ →
       ∀ t, typeOfE sigs Γ e = some t →

@@ -17,6 +17,9 @@ import Metalanguage.SubjectReduction
 #print axioms complHasThrow_cov
 -- expression-summary covariance (the 53-arm induction)
 #print axioms typeOfE_cov
+-- loop and throw-transfer helpers
+#print axioms checkSeq_kRepeatTest
+#print axioms terminal_markThrow
 -- the one-step machine covariance
 #print axioms step1_cov
 -- the specialization layer: verdict agreement + split covariance
