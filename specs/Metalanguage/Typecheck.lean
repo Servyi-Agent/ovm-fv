@@ -876,6 +876,17 @@ def markDebt (why : «String») : TCResult → TCResult :=
   | .flows f => .flows { f with assumes := why :: f.assumes }
   | r => r
 
+def boolBranchTC (site : Instr) (ts : Ty)
+    (trueResult falseResult : TCResult) : TCResult :=
+  ts.foldl (fun acc a =>
+    mergeTC acc
+      (match a with
+       | .isValue (.boolean Bool.true) => trueResult
+       | .isValue (.boolean Bool.false) => falseResult
+       | .anyValue .bool => mergeTC trueResult falseResult
+       | _ => .reject site "loop verdict is not boolean"))
+    vacOk
+
 def checkSeq : SigTable → Ty → World → List Instr → TCResult
   | _, _, w, [] => .flows { exits := Bool.false, throws := Bool.false, falls := [w], assumes := [] }
   | _, r, w, .kRet :: _ =>
@@ -977,8 +988,11 @@ def checkSeq : SigTable → Ty → World → List Instr → TCResult
           match typeOfE sigs w.Γ c with
           | some t =>
               if tmoves t [.anyValue .bool] then
-                  checkLoopBody (checkSeq sigs r w body) (.kRepeatWhile c body)
-                    [] (fun wsf => wsf.foldl (fun acc u => mergeTC acc (checkSeq sigs r u rest)) noFlows)
+                boolBranchTC (.kRepeatWhile c body) (normalizeTy w.η t)
+                  (checkLoopBody (checkSeq sigs r w body) (.kRepeatWhile c body)
+                    [] (fun wsf => wsf.foldl
+                      (fun acc u => mergeTC acc (checkSeq sigs r u rest)) noFlows))
+                  (checkSeq sigs r w rest)
               else .reject (.kRepeatWhile c body) "loop condition is not boolean"
           | none => .reject (.kRepeatWhile c body) "loop condition is not boolean"
       | _ => .reject (.kRepeatWhile c body) "loop entry stack is not empty"
@@ -1034,8 +1048,15 @@ def checkSeq : SigTable → Ty → World → List Instr → TCResult
       match popTy [.anyValue .bool] w.σ with
       | none => .reject (.kRepeatTest c body) "loop verdict is not boolean"
       | some [] =>
-          checkLoopBody (checkSeq sigs r { w with σ := [] } body) (.kRepeatTest c body)
-            [] (fun wsf => wsf.foldl (fun acc u => mergeTC acc (checkSeq sigs r u rest)) noFlows)
+          match w.σ with
+          | [] => .reject (.kRepeatTest c body) "loop verdict is not boolean"
+          | ts :: σ' =>
+              boolBranchTC (.kRepeatTest c body) ts
+                (checkLoopBody (checkSeq sigs r { w with σ := ([] : List Ty) } body)
+                  (.kRepeatTest c body) []
+                  (fun wsf => wsf.foldl
+                    (fun acc u => mergeTC acc (checkSeq sigs r u rest)) noFlows))
+                (checkSeq sigs r { w with σ := σ' } rest)
       | some (_ :: _) => .reject (.kRepeatTest c body) "loop entry stack is not empty"
   | sigs, r, w, .kForStart x body :: rest =>
       match popA (.anyValue .list) w.σ with

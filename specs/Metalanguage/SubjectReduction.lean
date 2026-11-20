@@ -2216,19 +2216,6 @@ theorem normalizeTy_cov {η : HeapCallableTy} {t' t : Ty}
   exact ⟨normalizeAtom η a,
     List.mem_map.mpr ⟨a, ha, rfl⟩, normalizeAtom_cov hac⟩
 
-theorem checkSeq_kRepeatTest {sigs : SigTable} {r : Ty}
-    {c : Expr} {body rest : List Instr} {W : World} {t : Ty}
-    (hσ : W.σ = [t])
-    (ht : tmoves t [.anyValue .bool] = Bool.true) :
-    checkSeq sigs r W (.kRepeatTest c body :: rest)
-      = checkLoopBody
-          (checkSeq sigs r { W with σ := ([] : List Ty) } body)
-          (.kRepeatTest c body) []
-          (fun wsf => wsf.foldl
-            (fun acc u => mergeTC acc (checkSeq sigs r u rest)) noFlows) := by
-  rw [checkSeq, hσ, popTy, ht]
-  simp only [reduceIte]
-
 theorem terminal_markThrow (sigs : SigTable) (ex : Expr) (res : TCResult) :
     (match markThrow sigs ex res with
       | .flows fb => terminal fb = Bool.true
@@ -4880,6 +4867,38 @@ theorem step1_cov (sigs : SigTable) (i : Instr) :
                                             (stackCov_cons_intro
                                               (tyCov_refl _ _) hcovσ.2)⟩
                                       · cases h2
+theorem boolBranchTC_exits {site : Instr} {ts : Ty}
+    {trueResult falseResult : TCResult} {fb : Flows}
+    (h : ts.foldl
+      (fun acc a => mergeTC acc
+        (match a with
+         | .isValue (.boolean Bool.true) => trueResult
+         | .isValue (.boolean Bool.false) => falseResult
+         | .anyValue .bool => mergeTC trueResult falseResult
+         | _ => .reject site "loop verdict is not boolean"))
+      vacOk = TCResult.flows fb) :
+    fb.exits = Bool.true := by
+  have hnr : ∀ s w, ts.foldl
+      (fun acc a => mergeTC acc
+        (match a with
+         | .isValue (.boolean Bool.true) => trueResult
+         | .isValue (.boolean Bool.false) => falseResult
+         | .anyValue .bool => mergeTC trueResult falseResult
+         | _ => .reject site "loop verdict is not boolean"))
+      vacOk ≠ TCResult.reject s w := by
+    intro s w hsw
+    exact TCResult.noConfusion (h.symm.trans hsw)
+  obtain ⟨-, heq⟩ := fold_merge_flows
+    (fun a => match a with
+      | .isValue (.boolean Bool.true) => trueResult
+      | .isValue (.boolean Bool.false) => falseResult
+      | .anyValue .bool => mergeTC trueResult falseResult
+      | _ => .reject site "loop verdict is not boolean")
+    ts vacOk hnr
+  have hinj := TCResult.flows.inj (h.symm.trans heq)
+  subst hinj
+  simp [exitsT, vacOk]
+
 /- ## THE NO-SILENT-FALLS INVARIANT: every checkSeq result that is
     flows with empty falls EXITED (re-derived on the flat
     completion universe). -/
@@ -5042,60 +5061,18 @@ theorem checkSeq_exits (sigs : SigTable) (r : Ty) (w : World) (seq : List Instr)
       dsimp only at h
       exact markThrow_exits h hf ih1
   case case28 =>
-    rename_i sigs r w c body rest hempty ps hty hbool ih2 ih1
     intro fb h hf
-    simp only [checkSeq, hempty, hty] at h
-    split at h
-    · cases hbody : checkSeq sigs r w body with
-      | reject s w' =>
-          rw [hbody] at h
-          simp only [checkLoopBody] at h
-          exact TCResult.noConfusion h
-      | flows fb₁ =>
-          rw [hbody] at h
-          simp only [checkLoopBody] at h
-          split at h
-          · cases hkf : fb₁.falls.foldl
-                (fun acc u => mergeTC acc (checkSeq sigs r u rest)) noFlows with
-            | reject s w' =>
-                rw [hkf] at h
-                dsimp only at h
-                exact TCResult.noConfusion h
-            | flows fr =>
-                rw [hkf] at h
-                dsimp only at h
-                have hinj := TCResult.flows.inj h
-                subst hinj
-                match hfalls : fb₁.falls with
-                | [] =>
-                    rw [ih2 fb₁ hbody hfalls]
-                    simp
-                | u :: us =>
-                    have hfr : fr.falls = [] := hf
-                    rw [fold_noFlows_exits ih1 _ fr hkf hfr (by simp [hfalls])]
-                    simp
-          · exact TCResult.noConfusion h
-    · exact absurd hbool (by assumption)
+    simp_all only [checkSeq, boolBranchTC]
+    exact boolBranchTC_exits h
   case case29 =>
-    rename_i sigs r w c body rest hempty ps hty hnt
     intro fb h hf
-    simp only [checkSeq, hempty, hty] at h
-    split at h
-    · next hcond => exact absurd hcond hnt
-    · exact TCResult.noConfusion h
+    simp_all [checkSeq, boolBranchTC]
   case case30 =>
-    rename_i sigs r w c body rest hempty hty
     intro fb h hf
-    simp only [checkSeq, hempty, hty] at h
-    exact TCResult.noConfusion h
+    simp_all [checkSeq, boolBranchTC]
   case case31 =>
-    rename_i sigs r w c body rest hne
     intro fb h hf
-    cases hσ : w.σ with
-    | nil => exact absurd hσ hne
-    | cons a as =>
-        simp only [checkSeq, hσ] at h
-        exact TCResult.noConfusion h
+    simp_all [checkSeq, boolBranchTC]
   case case32 =>
     rename_i sigs r w ex rest hdisj hty
     intro fb h hf
@@ -5172,49 +5149,25 @@ theorem checkSeq_exits (sigs : SigTable) (r : Ty) (w : World) (seq : List Instr)
     simp only [checkSeq, hpop] at h
     exact TCResult.noConfusion h
   case case47 =>
-    rename_i sigs r w c body rest hpop ih2 ih1
+    rename_i sigs r w c body rest hpop hnil
     intro fb h hf
-    simp only [checkSeq, hpop] at h
-    cases hbody : checkSeq sigs r { η := w.η, Γ := w.Γ, σ := []} body with
-    | reject s w' =>
-        rw [hbody] at h
-        simp only [checkLoopBody] at h
-        exact TCResult.noConfusion h
-    | flows fb₁ =>
-        rw [hbody] at h
-        simp only [checkLoopBody] at h
-        split at h
-        · cases hkf : fb₁.falls.foldl
-              (fun acc u => mergeTC acc (checkSeq sigs r u rest)) noFlows with
-          | reject s w' =>
-              rw [hkf] at h
-              dsimp only at h
-              exact TCResult.noConfusion h
-          | flows fr =>
-              rw [hkf] at h
-              dsimp only at h
-              have hinj := TCResult.flows.inj h
-              subst hinj
-              match hfalls : fb₁.falls with
-              | [] =>
-                  rw [ih2 fb₁ hbody hfalls]
-                  simp
-              | u :: us =>
-                  have hfr : fr.falls = [] := hf
-                  rw [fold_noFlows_exits ih1 _ fr hkf hfr (by simp [hfalls])]
-                  simp
-        · exact TCResult.noConfusion h
+    simp only [checkSeq, hpop, hnil] at h
+    exact TCResult.noConfusion h
   case case48 =>
+    intro fb h hf
+    simp_all only [checkSeq, boolBranchTC]
+    exact boolBranchTC_exits h
+  case case49 =>
     rename_i sigs r w c body rest hd htl hpop
     intro fb h hf
     simp only [checkSeq, hpop] at h
     exact TCResult.noConfusion h
-  case case49 =>
+  case case50 =>
     rename_i sigs r w x body rest hpop
     intro fb h hf
     simp only [checkSeq, hpop] at h
     exact TCResult.noConfusion h
-  case case50 =>
+  case case51 =>
     rename_i sigs r w x body rest hpop ih2 ih1
     intro fb h hf
     simp only [checkSeq, hpop] at h
@@ -5247,12 +5200,12 @@ theorem checkSeq_exits (sigs : SigTable) (r : Ty) (w : World) (seq : List Instr)
                   rw [fold_noFlows_exits ih1 _ fr hkf hfr (by simp [hfalls])]
                   simp
         · exact TCResult.noConfusion h
-  case case51 =>
+  case case52 =>
     rename_i sigs r w x body rest hd htl hpop
     intro fb h hf
     simp only [checkSeq, hpop] at h
     exact TCResult.noConfusion h
-  case case52 =>
+  case case53 =>
     rename_i sigs r w x elems body rest hempty ih2 ih1
     intro fb h hf
     simp only [checkSeq, hempty] at h
@@ -5286,7 +5239,7 @@ theorem checkSeq_exits (sigs : SigTable) (r : Ty) (w : World) (seq : List Instr)
                   rw [fold_noFlows_exits ih1 _ fr hkf hfr (by simp [hfalls])]
                   simp
         · exact TCResult.noConfusion h
-  case case53 =>
+  case case54 =>
     rename_i sigs r w x elems body rest hne
     intro fb h hf
     cases hσ : w.σ with
@@ -5294,12 +5247,12 @@ theorem checkSeq_exits (sigs : SigTable) (r : Ty) (w : World) (seq : List Instr)
     | cons a as =>
         simp only [checkSeq, hσ] at h
         exact TCResult.noConfusion h
-  case case54 =>
+  case case55 =>
     rename_i sigs r w rest hσ
     intro fb h hf
     simp only [checkSeq, hσ] at h
     exact TCResult.noConfusion h
-  case case55 =>
+  case case56 =>
     rename_i sigs r w rest ts σ' hσ ih1
     intro fb h hf
     simp only [checkSeq, hσ] at h
@@ -5308,12 +5261,12 @@ theorem checkSeq_exits (sigs : SigTable) (r : Ty) (w : World) (seq : List Instr)
     have hinj := TCResult.flows.inj h
     subst hinj
     rfl
-  case case56 =>
+  case case57 =>
     rename_i sigs r w i rest hdisj hstep
     intro fb h hf
     simp only [checkSeq, hstep] at h
     exact TCResult.noConfusion h
-  case case57 =>
+  case case58 =>
     rename_i sigs r w i rest hdisj ws' hstep ih1
     intro fb h hf
     simp only [checkSeq, hstep] at h
@@ -7855,6 +7808,145 @@ theorem fold_worlds_specLe (sigs : SigTable) (r : Ty) (rest : List Instr)
           cases hfr0
           exact hfrcov
 
+theorem boolBranchTC_specLe {site : Instr} {ts' ts : Ty}
+    {true' true false' false : TCResult}
+    (hmate : ∀ b ∈ ts', ∃ a ∈ ts, tmovesV b a = Bool.true)
+    (htrue : specLe true' true) (hfalse : specLe false' false) :
+    specLe (boolBranchTC site ts' true' false')
+      (boolBranchTC site ts true false) := by
+  have hpoint : ∀ b a, tmovesV b a = Bool.true →
+      specLe
+        (match b with
+         | .isValue (.boolean Bool.true) => true'
+         | .isValue (.boolean Bool.false) => false'
+         | .anyValue .bool => mergeTC true' false'
+         | _ => .reject site "loop verdict is not boolean")
+        (match a with
+         | .isValue (.boolean Bool.true) => true
+         | .isValue (.boolean Bool.false) => false
+         | .anyValue .bool => mergeTC true false
+         | _ => .reject site "loop verdict is not boolean") := by
+    intro b a hba
+    cases b with
+    | isValue v =>
+        cases v with
+        | boolean b =>
+            cases b with
+            | true =>
+                cases a with
+                | isValue v =>
+                    cases v with
+                    | boolean b =>
+                        cases b with
+                        | true => exact htrue
+                        | false => simp [tmovesV] at hba
+                    | _ => simp [tmovesV, tagOf] at hba
+                | anyValue c =>
+                    cases c with
+                    | bool =>
+                        show specLe true' (mergeTC true false)
+                        exact specLe_merge_right htrue
+                    | _ => simp [tmovesV, tagOf] at hba
+                | _ => simp [tmovesV] at hba
+            | false =>
+                cases a with
+                | isValue v =>
+                    cases v with
+                    | boolean b =>
+                        cases b with
+                        | true => simp [tmovesV] at hba
+                        | false => exact hfalse
+                    | _ => simp [tmovesV, tagOf] at hba
+                | anyValue c =>
+                    cases c with
+                    | bool =>
+                        show specLe false' (mergeTC true false)
+                        exact specLe_merge_left hfalse
+                    | _ => simp [tmovesV, tagOf] at hba
+                | _ => simp [tmovesV] at hba
+        | _ =>
+            cases a with
+            | isValue v =>
+                cases v with
+                | boolean b => cases b <;> simp [tmovesV] at hba
+                | _ => exact trivial
+            | anyValue c =>
+                cases c with
+                | bool => simp [tmovesV, tagOf] at hba
+                | _ => exact trivial
+            | complN p | complT | desc _ | notPresent => exact trivial
+    | anyValue c =>
+        cases c with
+        | bool =>
+            cases a with
+            | anyValue c =>
+                cases c with
+                | bool => exact specLe_merge htrue hfalse
+                | _ => simp [tmovesV] at hba
+            | _ => simp [tmovesV, tagOf] at hba
+        | _ =>
+            cases a with
+            | isValue v =>
+                cases v with
+                | boolean b => cases b <;> simp [tmovesV] at hba
+                | _ => exact trivial
+            | anyValue c =>
+                cases c with
+                | bool => simp [tmovesV] at hba
+                | _ => exact trivial
+            | complN p | complT | desc _ | notPresent => exact trivial
+    | complN p | complT | desc _ | notPresent =>
+        cases a with
+        | isValue v =>
+            cases v with
+            | boolean b => cases b <;> simp [tmovesV] at hba
+            | _ => simp [tmovesV, tagOf] at hba
+        | anyValue c =>
+            cases c with
+            | bool => simp [tmovesV] at hba
+            | _ => exact trivial
+        | complN p | complT | desc _ | notPresent => exact trivial
+  unfold boolBranchTC
+  cases hcoarse : ts.foldl
+      (fun acc a => mergeTC acc
+        (match a with
+         | .isValue (.boolean Bool.true) => true
+         | .isValue (.boolean Bool.false) => false
+         | .anyValue .bool => mergeTC true false
+         | _ => .reject site "loop verdict is not boolean"))
+      vacOk with
+  | reject s why => exact trivial
+  | flows fr =>
+      obtain ⟨fr', hfr', hcov⟩ :=
+        fold_specLe_vac
+          (J := fun a => match a with
+            | .isValue (.boolean Bool.true) => true
+            | .isValue (.boolean Bool.false) => false
+            | .anyValue .bool => mergeTC true false
+            | _ => .reject site "loop verdict is not boolean")
+          (J' := fun a => match a with
+            | .isValue (.boolean Bool.true) => true'
+            | .isValue (.boolean Bool.false) => false'
+            | .anyValue .bool => mergeTC true' false'
+            | _ => .reject site "loop verdict is not boolean")
+          (R := fun b a => tmovesV b a = Bool.true) ts ts' fr hmate hpoint hcoarse
+      cases hres : ts'.foldl
+          (fun acc a => mergeTC acc
+            (match a with
+             | .isValue (.boolean Bool.true) => true'
+             | .isValue (.boolean Bool.false) => false'
+             | .anyValue .bool => mergeTC true' false'
+             | _ => .reject site "loop verdict is not boolean"))
+          vacOk with
+      | reject s why =>
+          rw [hres] at hfr'
+          cases hfr'
+      | flows fr2 =>
+          have hfr2 : fr2 = fr' :=
+            TCResult.flows.inj (hres.symm.trans hfr')
+          rw [hfr2]
+          exact hcov
+
 theorem checkSeq_specialize (sigs : SigTable) (r : Ty) (w : World) (seq : List Instr)
     (hsc : sigParamsClosed sigs) :
     ∀ (w' : World), worldLe w' w →
@@ -8273,6 +8365,25 @@ theorem checkSeq_specialize (sigs : SigTable) (r : Ty) (w : World) (seq : List I
     simp only [checkSeq, hT, hlook, hlook']
     exact ih1 hsc _ hpush
   case case54 =>
+    rename_i sigs r w x elems body rest hσne
+    intro w' h
+    obtain ⟨hη, hΓ, hσle, hcovΓ, hcovσ⟩ := h
+    cases hσ' : w'.σ with
+    | nil =>
+        cases hstack : w.σ with
+        | nil => exact absurd hstack hσne
+        | cons t σ =>
+            exfalso
+            simp [hσ', hstack, stackLe] at hσle
+    | cons t' σ'' =>
+        cases hstack : w.σ with
+        | nil =>
+            exfalso
+            simp [hσ', hstack, stackLe] at hσle
+        | cons t σ =>
+            simp only [checkSeq, hσ', hstack]
+            exact trivial
+  case case55 =>
     rename_i sigs r w rest hσ
     intro w' h
     obtain ⟨hη, hΓ, hσle, hcovΓ, hcovσ⟩ := h
@@ -8281,7 +8392,208 @@ theorem checkSeq_specialize (sigs : SigTable) (r : Ty) (w : World) (seq : List I
     cases hσ' : w'.σ with
     | nil => simp only [checkSeq, hσ, hσ']; exact trivial
     | cons t' σ'' => rw [hσ'] at hσle; cases hσle
-  case case55 =>
+  case case28 =>
+    rename_i sigs r w c body rest hσ ps hsome hbool ihbody ihrestu ihrest
+    intro w' h
+    obtain ⟨hη, hΓ, hσle, hcovΓ, hcovσ⟩ := h
+    have hworld : worldLe w' w := ⟨hη, hΓ, hσle, hcovΓ, hcovσ⟩
+    rw [hσ] at hσle
+    cases hσ' : w'.σ with
+    | nil =>
+        obtain ⟨ps', hsome', hslot, hscov⟩ :=
+          typeOfE_cov sigs w'.Γ w.Γ c hΓ hcovΓ ps hsome
+        have hbool' : tmoves ps' [.anyValue .bool] = Bool.true :=
+          tmoves_class_down hslot hbool
+        have hbody : specLe (checkSeq sigs r w' body) (checkSeq sigs r w body) :=
+          ihbody hsc w' hworld
+        have htail : specLe (checkSeq sigs r w' rest) (checkSeq sigs r w rest) :=
+          ihrest hsc w' hworld
+        have hmate : ∀ b ∈ normalizeTy w'.η ps', ∃ a ∈ normalizeTy w.η ps,
+            tmovesV b a = Bool.true := by
+          have hηps : normalizeTy w.η ps = normalizeTy w'.η ps := by rw [hη]
+          rw [hηps]
+          exact tyLe_cov_atoms (normalizeTy_slotLe hslot hscov).1
+        have hk := fold_worlds_specLe sigs r rest
+          (fun u v huv => ihrestu v hsc u huv)
+        have hloop := checkLoopBody_spec (.kRepeatWhile c body) []
+          (fun fs => fs.foldl (fun acc u => mergeTC acc (checkSeq sigs r u rest)) noFlows)
+          hbody hk
+        simp only [checkSeq, hσ, hσ', hsome, hsome',
+          ite_eq_left hbool, ite_eq_left hbool']
+        exact boolBranchTC_specLe hmate hloop htail
+    | cons t σ'' =>
+        rw [hσ'] at hσle
+        cases hσle
+  case case29 =>
+    rename_i _dummy _body _rest _hempty _ps hnt
+    intro w' h
+    have hfalse : tmoves _hempty [.anyValue .bool] = Bool.false := by
+      cases hb : tmoves _hempty [.anyValue .bool] with
+      | true => exact absurd hb hnt
+      | false => rfl
+    simp only [checkSeq, _rest, _ps, hfalse]
+    rw [if_neg (by decide)]
+    exact trivial
+  case case30 =>
+    rename_i _dummy _body _rest _hempty hnone
+    intro w' h
+    simp only [checkSeq, _hempty, hnone]
+    exact trivial
+  case case31 =>
+    rename_i sigs r w c body rest hσne
+    intro w' h
+    obtain ⟨hη, hΓ, hσle, hcovΓ, hcovσ⟩ := h
+    cases hσ' : w'.σ with
+    | nil =>
+        cases hstack : w.σ with
+        | nil => exact absurd hstack hσne
+        | cons t σ =>
+            exfalso
+            simp [hσ', hstack, stackLe] at hσle
+    | cons t' σ'' =>
+        cases hstack : w.σ with
+        | nil =>
+            exfalso
+            simp [hσ', hstack, stackLe] at hσle
+        | cons t σ =>
+            simp only [checkSeq, hσ', hstack]
+            exact trivial
+  case case32 =>
+    intro w' h
+    simp [checkSeq, specLe, *]
+  case case33 =>
+    rename_i sigs r w ex rest n1 n2 n3 n4 n5 n6 n7 n8 n9 n10 n11 n12 n13 n14 n15 n16 n17 n18 S hsome ih1
+    intro w' h
+    obtain ⟨hη, hΓ, hσle, hcovΓ, hcovσ⟩ := h
+    obtain ⟨S', hsome', hslot, hscov⟩ :=
+      typeOfE_cov sigs w'.Γ w.Γ ex hΓ hcovΓ S hsome
+    have hpush : worldLe { w' with σ := normalizeTy w'.η S' :: w'.σ }
+        { w with σ := normalizeTy w.η S :: w.σ } := by
+      have hnorm : normalizeTy w'.η S = normalizeTy w.η S :=
+        congrArg (fun ξ => normalizeTy ξ S) hη
+      rw [← hnorm]
+      exact ⟨hη, hΓ,
+        stackLe_cons_intro (normalizeTy_slotLe hslot hscov) hσle, hcovΓ,
+        stackCov_cons_intro (normalizeTy_cov hscov) hcovσ⟩
+    simp only [checkSeq, hsome, hsome']
+    exact markThrow_specLe sigs ex (ih1 hsc _ hpush)
+  case case46 =>
+    intro w' h
+    simp [checkSeq, specLe, *]
+  case case47 =>
+    rename_i _c _body _rest hpop hnil
+    intro w' h
+    simp_all [checkSeq, popTy]
+  case case48 =>
+    rename_i sigs r0 w0 c0 body0 rest0 hpop ts σ' hstack ihbody ihrestall ihrest
+    intro w' h
+    obtain ⟨hη, hΓ, hσle, hcovΓ, hcovσ⟩ := h
+    cases hσ' : w'.σ with
+    | nil =>
+        exfalso
+        rw [hstack] at hσle
+        rw [hσ'] at hσle
+        cases hσle
+    | cons t' σ'' =>
+        rw [hstack] at hσle
+        rw [hstack] at hcovσ
+        rw [hσ'] at hσle
+        rw [hσ'] at hcovσ
+        obtain ⟨hslot, hrest⟩ := hσle
+        obtain ⟨-, hcovσ'⟩ := hcovσ
+        have hp : popTy [.anyValue .bool] (ts :: σ') = some ([] : List Ty) := by
+          rw [← hstack]
+          exact hpop
+        obtain ⟨hcoarsenil, _⟩ :=
+          popTy_some_nil_cov (slotLe_refl ts) (stackLe_refl σ') hp
+        obtain ⟨hσ'nil, hpop'⟩ :=
+          popTy_some_nil_cov hslot hrest hp
+        subst hcoarsenil
+        subst hσ'nil
+        have hw0 : worldLe { w' with σ := ([] : List Ty) } { w0 with σ := ([] : List Ty) } :=
+          ⟨hη, hΓ, by simp [stackLe], hcovΓ, by simp [stackCov]⟩
+        have hw1 : worldLe { w' with σ := ([] : List Ty) } { w0 with σ := ([] : List Ty) } :=
+          ⟨hη, hΓ, hrest, hcovΓ, hcovσ'⟩
+        have hbody := ihbody hsc _ hw0
+        have htail := ihrest hsc _ hw1
+        have hmate : ∀ b ∈ t', ∃ a ∈ ts, tmovesV b a = Bool.true :=
+          tyLe_cov_atoms hslot.1
+        have hk := fold_worlds_specLe sigs r0 rest0
+          (fun u v huv => ihrestall v hsc u huv)
+        have hloop := checkLoopBody_spec (.kRepeatTest c0 body0) []
+          (fun fs => fs.foldl (fun acc u => mergeTC acc (checkSeq sigs r0 u rest0)) noFlows)
+          hbody hk
+        simp only [checkSeq, hstack, hσ', hp, hpop']
+        exact boolBranchTC_specLe hmate hloop htail
+  case case49 =>
+    intro w' h
+    simp [checkSeq, specLe, *]
+  case case50 =>
+    intro w' h
+    simp [checkSeq, specLe, *]
+  case case51 =>
+    rename_i sigs r w x body rest hpop ih2 ih1
+    intro w' h
+    obtain ⟨hη, hΓ, hσle, hcovΓ, hcovσ⟩ := h
+    cases hσ : w.σ with
+    | nil => simp [hσ, popA, popTy] at hpop
+    | cons t σ =>
+        cases hσ' : w'.σ with
+        | nil =>
+            exfalso
+            simp [hσ, hσ', stackLe] at hσle
+        | cons t' σ' =>
+            rw [hσ] at hpop
+            rw [hσ, hσ'] at hσle
+            obtain ⟨hslot, hrest⟩ := hσle
+            have hp : popTy [.anyValue .list] (t :: σ) = some [] := by
+              simpa [popA] using hpop
+            obtain ⟨hnil, hpop'⟩ := popTy_some_nil_cov hslot hrest hp
+            have hpopA' : popA (.anyValue .list) (t' :: σ') = some [] := by
+              simpa [popA] using hpop'
+            subst σ'
+            have hw0 : worldLe
+                { w' with Γ := (x, langT) :: w'.Γ, σ := [] }
+                { w with Γ := (x, langT) :: w.Γ, σ := [] } :=
+              ⟨hη, envLe_cons hΓ (slotLe_refl _), by simp [stackLe],
+                envCov_cons hcovΓ (tyCov_refl _ _), by simp [stackCov]⟩
+            have hbody := ih2 hsc _ hw0
+            have hk := fold_worlds_specLe sigs r rest
+              (fun u v huv => ih1 v hsc u huv)
+            simp only [checkSeq, hσ, hσ', hpop, hpopA']
+            exact checkLoopBody_spec (.kForStart x body) []
+              (fun fs => fs.foldl (fun acc u => mergeTC acc (checkSeq sigs r u rest)) noFlows)
+              hbody hk
+  case case52 =>
+    intro w' h
+    simp [checkSeq, specLe, *]
+  case case53 =>
+    rename_i sigs r w x elems body rest hσ ih2 ih1
+    intro w' h
+    obtain ⟨hη, hΓ, hσle, hcovΓ, hcovσ⟩ := h
+    cases hσ' : w'.σ with
+    | nil =>
+        have hw0 : worldLe
+            { w' with Γ := (x, langT) :: w'.Γ, σ := w'.σ }
+            { w with Γ := (x, langT) :: w.Γ, σ := w.σ } :=
+          ⟨hη, envLe_cons hΓ (slotLe_refl _), hσle,
+            envCov_cons hcovΓ (tyCov_refl _ _), hcovσ⟩
+        have hbody := ih2 hsc _ hw0
+        have hbody' : specLe
+            (checkSeq sigs r { w' with Γ := (x, langT) :: w'.Γ, σ := [] } body)
+            (checkSeq sigs r { w with Γ := (x, langT) :: w.Γ, σ := [] } body) := by
+          rw [hσ', hσ] at hbody
+          exact hbody
+        have hk := fold_worlds_specLe sigs r rest
+          (fun u v huv => ih1 v hsc u huv)
+        simp only [checkSeq, hσ, hσ']
+        exact checkLoopBody_spec (.kForBody x [] body) []
+          (fun fs => fs.foldl (fun acc u => mergeTC acc (checkSeq sigs r u rest)) noFlows)
+          hbody' hk
+    | cons t' σ'' =>
+        exfalso
+        simp [hσ, hσ', stackLe] at hσle
+  case case56 =>
     rename_i sigs r w rest ts σ' hσ ih1
     intro w' h
     obtain ⟨hη, hΓ, hσle, hcovΓ, hcovσ⟩ := h
@@ -8327,195 +8639,12 @@ theorem checkSeq_specialize (sigs : SigTable) (r : Ty) (w : World) (seq : List I
                 mergeTC acc (assertVerdict sigs r rest σ' w a)) vacOk)
             rw [hfr', hc]
             exact hcov
-  case case28 =>
-    rename_i sigs r w c body rest hσ ps hsome hbool ih2 ih1
-    intro w' h
-    obtain ⟨hη, hΓ, hσle, hcovΓ, hcovσ⟩ := h
-    have hworld : worldLe w' w := ⟨hη, hΓ, hσle, hcovΓ, hcovσ⟩
-    rw [hσ] at hσle
-    cases hσ' : w'.σ with
-    | nil =>
-        obtain ⟨ps', hsome', hslot, -⟩ :=
-          typeOfE_cov sigs w'.Γ w.Γ c hΓ hcovΓ ps hsome
-        have hbool' : tmoves ps' [.anyValue .bool] = Bool.true :=
-          tmoves_class_down hslot hbool
-        have hbody : specLe (checkSeq sigs r w' body) (checkSeq sigs r w body) :=
-          ih2 hsc w' hworld
-        have hk := fold_worlds_specLe sigs r rest
-          (fun u v huv => ih1 v hsc u huv)
-        simp only [checkSeq, hσ, hσ', hsome, hsome', ite_eq_left hbool, ite_eq_left hbool']
-        exact checkLoopBody_spec (.kRepeatWhile c body) []
-          (fun fs => fs.foldl (fun acc u => mergeTC acc (checkSeq sigs r u rest)) noFlows)
-          hbody hk
-    | cons t σ'' =>
-        rw [hσ'] at hσle
-        cases hσle
-  case case29 =>
-    intro w' h
-    simp [checkSeq, specLe, *]
-  case case30 =>
-    intro w' h
-    simp [checkSeq, specLe, *]
-  case case31 =>
-    rename_i sigs r w c body rest hσne
-    intro w' h
-    obtain ⟨hη, hΓ, hσle, hcovΓ, hcovσ⟩ := h
-    cases hσ' : w'.σ with
-    | nil =>
-        cases hstack : w.σ with
-        | nil => exact absurd hstack hσne
-        | cons t σ =>
-            exfalso
-            simp [hσ', hstack, stackLe] at hσle
-    | cons t' σ'' =>
-        cases hstack : w.σ with
-        | nil =>
-            exfalso
-            simp [hσ', hstack, stackLe] at hσle
-        | cons t σ =>
-            simp only [checkSeq, hσ', hstack]
-            exact trivial
-  case case32 =>
-    intro w' h
-    simp [checkSeq, specLe, *]
-  case case33 =>
-    rename_i sigs r w ex rest n1 n2 n3 n4 n5 n6 n7 n8 n9 n10 n11 n12 n13 n14 n15 n16 n17 n18 S hsome ih1
-    intro w' h
-    obtain ⟨hη, hΓ, hσle, hcovΓ, hcovσ⟩ := h
-    obtain ⟨S', hsome', hslot, hscov⟩ :=
-      typeOfE_cov sigs w'.Γ w.Γ ex hΓ hcovΓ S hsome
-    have hpush : worldLe { w' with σ := normalizeTy w'.η S' :: w'.σ }
-        { w with σ := normalizeTy w.η S :: w.σ } := by
-      have hnorm : normalizeTy w'.η S = normalizeTy w.η S :=
-        congrArg (fun ξ => normalizeTy ξ S) hη
-      rw [← hnorm]
-      exact ⟨hη, hΓ,
-        stackLe_cons_intro (normalizeTy_slotLe hslot hscov) hσle, hcovΓ,
-        stackCov_cons_intro (normalizeTy_cov hscov) hcovσ⟩
-    simp only [checkSeq, hsome, hsome']
-    exact markThrow_specLe sigs ex (ih1 hsc _ hpush)
-  case case46 =>
-    intro w' h
-    simp [checkSeq, specLe, *]
-  case case47 =>
-    rename_i sigs r w c body rest hpop ih2 ih1
-    intro w' h
-    obtain ⟨hη, hΓ, hσle, hcovΓ, hcovσ⟩ := h
-    cases hσ : w.σ with
-    | nil => simp [hσ, popTy] at hpop
-    | cons t σ =>
-        cases hσ' : w'.σ with
-        | nil =>
-            exfalso
-            simp [hσ, hσ', stackLe] at hσle
-        | cons t' σ' =>
-            rw [hσ] at hpop
-            rw [hσ, hσ'] at hσle
-            rw [hσ, hσ'] at hcovσ
-            obtain ⟨hslot, hrest⟩ := hσle
-            obtain ⟨-, hcovσ'⟩ := hcovσ
-            obtain ⟨hnil, hpop'⟩ := popTy_some_nil_cov hslot hrest hpop
-            subst σ'
-            have hw0 : worldLe { w' with σ := [] } { w with σ := [] } :=
-              ⟨hη, hΓ, by simp [stackLe], hcovΓ, by simp [stackCov]⟩
-            have hbody := ih2 hsc ({ w' with σ := [] }) hw0
-            have hk := fold_worlds_specLe sigs r rest
-              (fun u v huv => ih1 v hsc u huv)
-            simp only [checkSeq, hσ, hσ', hpop, hpop']
-            exact checkLoopBody_spec (.kRepeatTest c body) []
-              (fun fs => fs.foldl (fun acc u => mergeTC acc (checkSeq sigs r u rest)) noFlows)
-              hbody hk
-  case case48 =>
-    intro w' h
-    simp [checkSeq, specLe, *]
-  case case49 =>
-    intro w' h
-    simp [checkSeq, specLe, *]
-  case case50 =>
-    rename_i sigs r w x body rest hpop ih2 ih1
-    intro w' h
-    obtain ⟨hη, hΓ, hσle, hcovΓ, hcovσ⟩ := h
-    cases hσ : w.σ with
-    | nil => simp [hσ, popA, popTy] at hpop
-    | cons t σ =>
-        cases hσ' : w'.σ with
-        | nil =>
-            exfalso
-            simp [hσ, hσ', stackLe] at hσle
-        | cons t' σ' =>
-            rw [hσ] at hpop
-            rw [hσ, hσ'] at hσle
-            obtain ⟨hslot, hrest⟩ := hσle
-            have hp : popTy [.anyValue .list] (t :: σ) = some [] := by
-              simpa [popA] using hpop
-            obtain ⟨hnil, hpop'⟩ := popTy_some_nil_cov hslot hrest hp
-            have hpopA' : popA (.anyValue .list) (t' :: σ') = some [] := by
-              simpa [popA] using hpop'
-            subst σ'
-            have hw0 : worldLe
-                { w' with Γ := (x, langT) :: w'.Γ, σ := [] }
-                { w with Γ := (x, langT) :: w.Γ, σ := [] } :=
-              ⟨hη, envLe_cons hΓ (slotLe_refl _), by simp [stackLe],
-                envCov_cons hcovΓ (tyCov_refl _ _), by simp [stackCov]⟩
-            have hbody := ih2 hsc _ hw0
-            have hk := fold_worlds_specLe sigs r rest
-              (fun u v huv => ih1 v hsc u huv)
-            simp only [checkSeq, hσ, hσ', hpop, hpopA']
-            exact checkLoopBody_spec (.kForStart x body) []
-              (fun fs => fs.foldl (fun acc u => mergeTC acc (checkSeq sigs r u rest)) noFlows)
-              hbody hk
-  case case51 =>
-    intro w' h
-    simp [checkSeq, specLe, *]
-  case case52 =>
-    rename_i sigs r w x elems body rest hσ ih2 ih1
-    intro w' h
-    obtain ⟨hη, hΓ, hσle, hcovΓ, hcovσ⟩ := h
-    cases hσ' : w'.σ with
-    | nil =>
-        have hw0 : worldLe
-            { w' with Γ := (x, langT) :: w'.Γ, σ := w'.σ }
-            { w with Γ := (x, langT) :: w.Γ, σ := w.σ } :=
-          ⟨hη, envLe_cons hΓ (slotLe_refl _), hσle,
-            envCov_cons hcovΓ (tyCov_refl _ _), hcovσ⟩
-        have hbody := ih2 hsc _ hw0
-        have hbody' : specLe
-            (checkSeq sigs r { w' with Γ := (x, langT) :: w'.Γ, σ := [] } body)
-            (checkSeq sigs r { w with Γ := (x, langT) :: w.Γ, σ := [] } body) := by
-          rw [hσ', hσ] at hbody
-          exact hbody
-        have hk := fold_worlds_specLe sigs r rest
-          (fun u v huv => ih1 v hsc u huv)
-        simp only [checkSeq, hσ, hσ']
-        exact checkLoopBody_spec (.kForBody x [] body) []
-          (fun fs => fs.foldl (fun acc u => mergeTC acc (checkSeq sigs r u rest)) noFlows)
-          hbody' hk
-    | cons t' σ'' =>
-        exfalso
-        simp [hσ, hσ', stackLe] at hσle
-  case case53 =>
-    rename_i sigs r w x elems body rest hσne
-    intro w' h
-    obtain ⟨hη, hΓ, hσle, hcovΓ, hcovσ⟩ := h
-    cases hσ' : w'.σ with
-    | nil =>
-        cases hstack : w.σ with
-        | nil => exact absurd hstack hσne
-        | cons t σ =>
-            exfalso
-            simp [hσ', hstack, stackLe] at hσle
-    | cons t' σ'' =>
-        cases hstack : w.σ with
-        | nil =>
-            exfalso
-            simp [hσ', hstack, stackLe] at hσle
-        | cons t σ =>
-            simp only [checkSeq, hσ', hstack]
-            exact trivial
-  case case56 =>
-    intro w' h
-    simp [checkSeq, specLe, *]
   case case57 =>
+    rename_i sigs r w i rest hdisj hstep
+    intro w' h
+    simp only [checkSeq, hstep]
+    exact trivial
+  case case58 =>
     rename_i sigs r w i rest n1 n2 n3 n4 n5 n6 n7 n8 n9 n10 n11 n12 n13 n14 n15 n16 n17 n18 n19 n20 n21 n22 n23 n24 n25 n26 n27 ws hstep ih1
     intro w' h
     obtain ⟨ws', hstep', hcov⟩ := step1_cov sigs i w' w h ws hstep
