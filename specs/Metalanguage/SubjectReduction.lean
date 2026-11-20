@@ -2216,19 +2216,6 @@ theorem normalizeTy_cov {η : HeapCallableTy} {t' t : Ty}
   exact ⟨normalizeAtom η a,
     List.mem_map.mpr ⟨a, ha, rfl⟩, normalizeAtom_cov hac⟩
 
-theorem checkSeq_kRepeatTest {sigs : SigTable} {r : Ty}
-    {c : Expr} {body rest : List Instr} {W : World} {t : Ty}
-    (hσ : W.σ = [t])
-    (ht : tmoves t [.anyValue .bool] = Bool.true) :
-    checkSeq sigs r W (.kRepeatTest c body :: rest)
-      = checkLoopBody
-          (checkSeq sigs r { W with σ := ([] : List Ty) } body)
-          (.kRepeatTest c body) []
-          (fun wsf => wsf.foldl
-            (fun acc u => mergeTC acc (checkSeq sigs r u rest)) noFlows) := by
-  rw [checkSeq, hσ, popTy, ht]
-  simp only [reduceIte]
-
 theorem terminal_markThrow (sigs : SigTable) (ex : Expr) (res : TCResult) :
     (match markThrow sigs ex res with
       | .flows fb => terminal fb = Bool.true
@@ -4880,6 +4867,32 @@ theorem step1_cov (sigs : SigTable) (i : Instr) :
                                             (stackCov_cons_intro
                                               (tyCov_refl _ _) hcovσ.2)⟩
                                       · cases h2
+theorem boolBranchTC_exits {site : Instr} {ts : Ty}
+    {trueResult falseResult : TCResult} {fb : Flows}
+    (h : boolBranchTC site ts trueResult falseResult = TCResult.flows fb) :
+    fb.exits = Bool.true := by
+  unfold boolBranchTC at h
+  have hnr : ∀ s w, ts.foldl
+      (fun acc a => mergeTC acc
+        (match a with
+         | .isValue (.boolean Bool.true) => trueResult
+         | .isValue (.boolean Bool.false) => falseResult
+         | .anyValue .bool => mergeTC trueResult falseResult
+         | _ => .reject site "loop verdict is not boolean"))
+      vacOk ≠ TCResult.reject s w := by
+    intro s w hsw
+    exact TCResult.noConfusion (h.symm.trans hsw)
+  obtain ⟨-, heq⟩ := fold_merge_flows
+    (fun a => match a with
+      | .isValue (.boolean Bool.true) => trueResult
+      | .isValue (.boolean Bool.false) => falseResult
+      | .anyValue .bool => mergeTC trueResult falseResult
+      | _ => .reject site "loop verdict is not boolean")
+    ts vacOk hnr
+  have hinj := TCResult.flows.inj (h.symm.trans heq)
+  subst hinj
+  simp [exitsT, vacOk]
+
 /- ## THE NO-SILENT-FALLS INVARIANT: every checkSeq result that is
     flows with empty falls EXITED (re-derived on the flat
     completion universe). -/
@@ -5042,60 +5055,29 @@ theorem checkSeq_exits (sigs : SigTable) (r : Ty) (w : World) (seq : List Instr)
       dsimp only at h
       exact markThrow_exits h hf ih1
   case case28 =>
-    rename_i sigs r w c body rest hempty ps hty hbool ih2 ih1
+    rename_i _body _rest hempty condTy hbool ihbody ihrestu ihrest _
     intro fb h hf
-    simp only [checkSeq, hempty, hty] at h
+    rw [checkSeq, hempty] at h
     split at h
-    · cases hbody : checkSeq sigs r w body with
-      | reject s w' =>
-          rw [hbody] at h
-          simp only [checkLoopBody] at h
-          exact TCResult.noConfusion h
-      | flows fb₁ =>
-          rw [hbody] at h
-          simp only [checkLoopBody] at h
-          split at h
-          · cases hkf : fb₁.falls.foldl
-                (fun acc u => mergeTC acc (checkSeq sigs r u rest)) noFlows with
-            | reject s w' =>
-                rw [hkf] at h
-                dsimp only at h
-                exact TCResult.noConfusion h
-            | flows fr =>
-                rw [hkf] at h
-                dsimp only at h
-                have hinj := TCResult.flows.inj h
-                subst hinj
-                match hfalls : fb₁.falls with
-                | [] =>
-                    rw [ih2 fb₁ hbody hfalls]
-                    simp
-                | u :: us =>
-                    have hfr : fr.falls = [] := hf
-                    rw [fold_noFlows_exits ih1 _ fr hkf hfr (by simp [hfalls])]
-                    simp
-          · exact TCResult.noConfusion h
-    · exact absurd hbool (by assumption)
+    · exact boolBranchTC_exits h
+    · exact TCResult.noConfusion h
   case case29 =>
-    rename_i sigs r w c body rest hempty ps hty hnt
+    rename_i _body _rest hempty condTy hnt
     intro fb h hf
-    simp only [checkSeq, hempty, hty] at h
+    simp only [checkSeq, hempty] at h
     split at h
     · next hcond => exact absurd hcond hnt
     · exact TCResult.noConfusion h
   case case30 =>
-    rename_i sigs r w c body rest hempty hty
+    rename_i _body _rest hempty hnone
     intro fb h hf
-    simp only [checkSeq, hempty, hty] at h
+    simp only [checkSeq, hempty, hnone] at h
     exact TCResult.noConfusion h
   case case31 =>
-    rename_i sigs r w c body rest hne
+    rename_i cond loopBody loopRest hne
     intro fb h hf
-    cases hσ : w.σ with
-    | nil => exact absurd hσ hne
-    | cons a as =>
-        simp only [checkSeq, hσ] at h
-        exact TCResult.noConfusion h
+    simp only [checkSeq] at h
+    exact TCResult.noConfusion h
   case case32 =>
     rename_i sigs r w ex rest hdisj hty
     intro fb h hf
