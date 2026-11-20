@@ -12758,3 +12758,31 @@ theorem SR_kIMeth_getPrototypeOf (sigs : SigTable) (reg : AOReg)
                           exact ⟨η, stateTyped_getProto_push hvloc hpre
                             (frameTyped_kIMeth_getProto_obj
                               (hsc := hsc) hs.2.2.2.1.1)⟩
+theorem frameTyped_kIMeth_badArity {sigs : SigTable} {r : Ty}
+    {nm : «String»} {n : Nat} {rest : List Instr}
+    {env : Env} {eval : List JSValue} {ret : «String»}
+    (har : (mopArity nm == some n) = Bool.false) :
+    frameTyped sigs η r
+      ⟨.kIMeth nm n :: rest, env, eval, ret⟩ = False := by
+  simp [frameTyped, frameWorld, checkSeq, step1, har]
+
+theorem SR_kIMeth_badArity (sigs : SigTable) (reg : AOReg)
+    (η : HeapCallableTy) (nm : «String») (n : Nat) (s : FM) (r : Ty)
+    (har : (mopArity nm == some n) = Bool.false) :
+    SR_arm sigs reg η (.kIMeth nm n) s r := by
+  intro _ _ _ hpre
+  cases s with
+  | fdone => exact ⟨η, hpre⟩
+  | fell => exact ⟨η, hpre⟩
+  | frames fs heap nl =>
+      cases fs with
+      | nil => exact ⟨η, hpre⟩
+      | cons f fs' =>
+          obtain ⟨stmts, env, eval, ret⟩ := f
+          simp only [withHead, stateTyped, framesTypedFrom] at hpre
+          exfalso
+          have h1 : frameTyped sigs η (sigRetTy sigs ret)
+              ⟨.kIMeth nm n :: stmts, env, eval, ret⟩ :=
+            hpre.2.2.2.1.1
+          rw [frameTyped_kIMeth_badArity har] at h1
+          exact h1.elim
