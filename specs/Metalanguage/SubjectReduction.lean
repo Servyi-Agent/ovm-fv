@@ -307,6 +307,9 @@ def instrsLocs : List Instr → List Nat
   decreasing_by all_goals simp_wf <;> omega
 end
 
+def exprWf (heap : Heap) (nl : Nat) (e : Expr) : Prop :=
+  ∀ l ∈ exprLocs e, l < nl ∧ (heap l).isSome = Bool.true
+
 def instrWf (heap : Heap) (nl : Nat) (i : Instr) : Prop :=
   ∀ l ∈ instrLocs i, l < nl ∧ (heap l).isSome = Bool.true
 
@@ -366,6 +369,92 @@ theorem instrWf_kIte_elim {heap : Heap} {nl : Nat} {t e : List Instr}
     exact h l (by
       simp only [instrLocs, instrsLocs_append, List.mem_append]
       exact Or.inr hl)
+
+theorem instrWf_kEval_elim {heap : Heap} {nl : Nat} {e : Expr}
+    (h : instrWf heap nl (.kEval e)) : exprWf heap nl e := by
+  intro l hl
+  exact h l (by simp [instrLocs, hl])
+
+theorem instrWf_kRepeatWhile_elim {heap : Heap} {nl : Nat}
+    {c : Expr} {body : List Instr}
+    (h : instrWf heap nl (.kRepeatWhile c body)) :
+    exprWf heap nl c ∧ instrsWf heap nl body := by
+  constructor
+  · intro l hl; exact h l (by
+      simp only [instrLocs, List.mem_append]; exact Or.inl hl)
+  · rw [instrsWf_iff_locs]
+    intro l hl; exact h l (by
+      simp only [instrLocs, List.mem_append]; exact Or.inr hl)
+
+theorem instrWf_kRepeatTest_elim {heap : Heap} {nl : Nat}
+    {c : Expr} {body : List Instr}
+    (h : instrWf heap nl (.kRepeatTest c body)) :
+    exprWf heap nl c ∧ instrsWf heap nl body := by
+  constructor
+  · intro l hl; exact h l (by
+      simp only [instrLocs, List.mem_append]; exact Or.inl hl)
+  · rw [instrsWf_iff_locs]
+    intro l hl; exact h l (by
+      simp only [instrLocs, List.mem_append]; exact Or.inr hl)
+
+theorem instrWf_kForStart_elim {heap : Heap} {nl : Nat}
+    {x : «String»} {body : List Instr}
+    (h : instrWf heap nl (.kForStart x body)) :
+    instrsWf heap nl body := by
+  rw [instrsWf_iff_locs]
+  intro l hl; exact h l (by simp [instrLocs, hl])
+
+theorem instrWf_kForBody_elim {heap : Heap} {nl : Nat}
+    {x : «String»} {vs : List JSValue} {body : List Instr}
+    (h : instrWf heap nl (.kForBody x vs body)) :
+    (∀ l ∈ vs.flatMap locsOf, l < nl ∧ (heap l).isSome = Bool.true)
+      ∧ instrsWf heap nl body := by
+  constructor
+  · intro l hl; exact h l (by
+      simp only [instrLocs, List.mem_append]; exact Or.inl hl)
+  · rw [instrsWf_iff_locs]
+    intro l hl; exact h l (by
+      simp only [instrLocs, List.mem_append]; exact Or.inr hl)
+
+theorem instrWf_kRepeatWhile_intro {heap : Heap} {nl : Nat}
+    {c : Expr} {body : List Instr}
+    (hc : exprWf heap nl c) (hb : instrsWf heap nl body) :
+    instrWf heap nl (.kRepeatWhile c body) := by
+  intro l hl
+  simp only [instrLocs, List.mem_append] at hl
+  rcases hl with hl | hl
+  · exact hc l hl
+  · exact (instrsWf_iff_locs body).mp hb l hl
+
+theorem instrWf_kRepeatTest_intro {heap : Heap} {nl : Nat}
+    {c : Expr} {body : List Instr}
+    (hc : exprWf heap nl c) (hb : instrsWf heap nl body) :
+    instrWf heap nl (.kRepeatTest c body) := by
+  intro l hl
+  simp only [instrLocs, List.mem_append] at hl
+  rcases hl with hl | hl
+  · exact hc l hl
+  · exact (instrsWf_iff_locs body).mp hb l hl
+
+theorem instrWf_kForStart_intro {heap : Heap} {nl : Nat}
+    {x : «String»} {body : List Instr}
+    (hb : instrsWf heap nl body) :
+    instrWf heap nl (.kForStart x body) := by
+  intro l hl
+  simp only [instrLocs] at hl
+  exact (instrsWf_iff_locs body).mp hb l hl
+
+theorem instrWf_kForBody_intro {heap : Heap} {nl : Nat}
+    {x : «String»} {vs : List JSValue} {body : List Instr}
+    (hvs : ∀ l ∈ vs.flatMap locsOf,
+      l < nl ∧ (heap l).isSome = Bool.true)
+    (hb : instrsWf heap nl body) :
+    instrWf heap nl (.kForBody x vs body) := by
+  intro l hl
+  simp only [instrLocs, List.mem_append] at hl
+  rcases hl with hl | hl
+  · exact hvs l hl
+  · exact (instrsWf_iff_locs body).mp hb l hl
 
 theorem instrsWf_tail {heap : Heap} {nl : Nat} {i : Instr} {rest : List Instr}
     (h : instrsWf heap nl (i :: rest)) : instrsWf heap nl rest := h.2
