@@ -1075,9 +1075,12 @@ def checkRepeatTestAux (sigs : SigTable) (r : Ty) (w : World)
     (bodyEntry bodyInvariant : TCResult)
     (tailEntry tailInvariant : Unit → TCResult) : TCResult :=
   boolBranchTC (.kRepeatTest c body) ts
-    (checkRepeatWhileCore sigs r w c body rest
-      (typeOfE sigs w.Γ c) bodyEntry bodyInvariant
-      tailEntry tailInvariant)
+    (match typeOfE sigs w.Γ c with
+     | none => checkRepeatWhileCore sigs r w c body rest none
+         bodyEntry bodyInvariant tailEntry tailInvariant
+     | some t => checkRepeatWhileCore sigs r w c body rest
+         (some (normalizeTy w.η t)) bodyEntry bodyInvariant
+         tailEntry tailInvariant)
     (tailEntry ())
 
 def checkSeq : SigTable → Ty → World → List Instr → TCResult

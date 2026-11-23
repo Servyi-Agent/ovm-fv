@@ -8311,22 +8311,35 @@ theorem checkRepeatTestAux_specLe {sigs : SigTable} {r : Ty}
     specLe (checkRepeatTestAux sigs r w' c body rest ts'
       bodyEntry' bodyInvariant' tailEntry' tailInvariant')
       (checkRepeatTestAux sigs r w c body rest ts
-      bodyEntry bodyInvariant tailEntry tailInvariant) :=
-  boolBranchTC_specLe hmate
-    (checkRepeatWhileCore_specLe (w' := w') (w := w) (c := c) (body := body)
-      (rest := rest) (entryTy' := typeOfE sigs w'.Γ c)
-      (entryTy := typeOfE sigs w.Γ c)
-      (bodyEntry' := bodyEntry') (bodyEntry := bodyEntry)
-      (bodyInvariant' := bodyInvariant') (bodyInvariant := bodyInvariant)
-      (tailEntry' := tailEntry') (tailEntry := tailEntry)
-      (tailInvariant' := tailInvariant') (tailInvariant := tailInvariant)
-      hw
-      (fun t ht => by
-        obtain ⟨t', ht', hslot, -⟩ :=
-          typeOfE_cov sigs w'.Γ w.Γ c hw.2.1 hw.2.2.2.1 t ht
-        exact ⟨t', ht', hslot⟩)
-      hbodyEntry hbodyInvariant htailEntry htailInvariant)
-    htailEntry
+      bodyEntry bodyInvariant tailEntry tailInvariant) := by
+  obtain ⟨hη, hΓ, hσle, hcovΓ, hcovσ⟩ := hw
+  have hworld : worldLe w' w := ⟨hη, hΓ, hσle, hcovΓ, hcovσ⟩
+  cases ht : typeOfE sigs w.Γ c with
+  | none =>
+      simp only [checkRepeatTestAux, ht, checkRepeatWhileCore]
+      exact boolBranchTC_specLe hmate
+        (by
+          cases w.σ <;> exact trivial)
+        htailEntry
+  | some t =>
+      obtain ⟨t', ht', hslot, hscov⟩ :=
+        typeOfE_cov sigs w'.Γ w.Γ c hΓ hcovΓ t ht
+      have hnormslot : slotLe (normalizeTy w'.η t') (normalizeTy w.η t) := by
+        have hnorm := normalizeTy_slotLe hslot hscov
+        have hty : normalizeTy w'.η t = normalizeTy w.η t := by rw [hη]
+        rw [hty] at hnorm
+        exact hnorm
+      simp only [checkRepeatTestAux, ht, ht']
+      exact boolBranchTC_specLe hmate
+        (checkRepeatWhileCore_specLe
+          (entryTy' := some (normalizeTy w'.η t'))
+          (entryTy := some (normalizeTy w.η t)) hworld
+          (fun tq htq => by
+            have htq : normalizeTy w.η t = tq := Option.some.inj htq
+            subst htq
+            exact ⟨normalizeTy w'.η t', rfl, hnormslot⟩)
+          hbodyEntry hbodyInvariant htailEntry htailInvariant)
+        htailEntry
 
 theorem checkSeq_kRepeatTest_specLe {sigs : SigTable} {r : Ty}
     {w : World} {c : Expr} {body rest : List Instr}
