@@ -990,7 +990,7 @@ def boolBranchTC (site : Instr) (ts : Ty)
        | _ => .reject site "loop verdict is not boolean"))
     vacOk
 
-def checkRepeatWhileAux (sigs : SigTable) (r : Ty) (w : World)
+def checkRepeatWhileCore (sigs : SigTable) (r : Ty) (w : World)
     (c : Expr) (body rest : List Instr)
     (entryTy : Option Ty) (bodyEntry bodyInvariant : TCResult)
     (tailEntry tailInvariant : Unit → TCResult) : TCResult :=
@@ -1052,12 +1052,30 @@ def checkRepeatWhileAux (sigs : SigTable) (r : Ty) (w : World)
           else .reject (.kRepeatWhile c body) "loop condition is not boolean"
   | _ => .reject (.kRepeatWhile c body) "loop entry stack is not empty"
 
+def checkRepeatWhileAux (sigs : SigTable) (r : Ty) (w : World)
+    (c : Expr) (body rest : List Instr)
+    (entryTy : Option Ty) (bodyEntry bodyInvariant : TCResult)
+    (tailEntry tailInvariant : Unit → TCResult) : TCResult :=
+  match w.σ with
+  | [] =>
+      match entryTy with
+      | none => .reject (.kRepeatWhile c body) "loop condition is not boolean"
+      | some t =>
+          let tn := normalizeTy w.η t
+          if tmoves tn [.anyValue .bool] then
+            boolBranchTC (.kRepeatWhile c body) tn
+              (checkRepeatWhileCore sigs r w c body rest (some tn)
+                bodyEntry bodyInvariant tailEntry tailInvariant)
+              (tailEntry ())
+          else .reject (.kRepeatWhile c body) "loop condition is not boolean"
+  | _ => .reject (.kRepeatWhile c body) "loop entry stack is not empty"
+
 def checkRepeatTestAux (sigs : SigTable) (r : Ty) (w : World)
     (c : Expr) (body rest : List Instr) (ts : Ty)
     (bodyEntry bodyInvariant : TCResult)
     (tailEntry tailInvariant : Unit → TCResult) : TCResult :=
   boolBranchTC (.kRepeatTest c body) ts
-    (checkRepeatWhileAux sigs r w c body rest
+    (checkRepeatWhileCore sigs r w c body rest
       (typeOfE sigs w.Γ c) bodyEntry bodyInvariant
       tailEntry tailInvariant)
     (tailEntry ())
@@ -1154,7 +1172,8 @@ def checkSeq : SigTable → Ty → World → List Instr → TCResult
             markThrow sigs (.isBoolVal b (.call f [.nv x]))
               (checkSeq sigs r { w with σ := normalizeTy w.η t :: w.σ } rest)
   | sigs, r, w, .kRepeatWhile c body :: rest =>
-      checkRepeatWhileAux sigs r w c body rest
+      markThrow sigs c <|
+        checkRepeatWhileAux sigs r w c body rest
         (typeOfE sigs w.Γ c)
         (checkSeq sigs r w body)
         (checkSeq sigs r
