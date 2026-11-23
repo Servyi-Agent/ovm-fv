@@ -1059,16 +1059,16 @@ def checkRepeatWhileAux (sigs : SigTable) (r : Ty) (w : World)
   match w.σ with
   | [] =>
       match entryTy with
-      | none => .reject (.kRepeatWhile c body) "loop condition is not boolean"
+      | none => .reject (.kRepeatTest c body) "loop condition is not boolean"
       | some t =>
           let tn := normalizeTy w.η t
           if tmoves tn [.anyValue .bool] then
-            boolBranchTC (.kRepeatWhile c body) tn
+            boolBranchTC (.kRepeatTest c body) tn
               (checkRepeatWhileCore sigs r w c body rest (some tn)
                 bodyEntry bodyInvariant tailEntry tailInvariant)
               (tailEntry ())
-          else .reject (.kRepeatWhile c body) "loop condition is not boolean"
-  | _ => .reject (.kRepeatWhile c body) "loop entry stack is not empty"
+          else .reject (.kRepeatTest c body) "loop condition is not boolean"
+  | _ => .reject (.kRepeatTest c body) "loop entry stack is not empty"
 
 def checkRepeatTestAux (sigs : SigTable) (r : Ty) (w : World)
     (c : Expr) (body rest : List Instr) (ts : Ty)
