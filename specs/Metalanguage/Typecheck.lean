@@ -160,19 +160,14 @@ theorem mem_eraseDups {α : Type} [BEq α] [LawfulBEq α] (a : α) :
             · exact List.mem_cons.mpr (Or.inr ((ih).mpr h))
 
 def generalizeAtom (η : HeapCallableTy) : VTy → VTy
-  | .isValue (.obj _) => .anyValue (.obj Bool.false)
+  | .isValue (.obj loc) => .anyValue (.obj (η loc))
   | .isValue v => .anyValue (tagOf v)
   | .desc _ => .anyValue .desc
   | .complN p => .complN (generalizeAtom η p)
   | a => a
 
-def generalizeAtoms (η : HeapCallableTy) (a : VTy) : Ty :=
-  match a with
-  | .isValue (.obj _) | .anyValue (.obj _) => objT
-  | _ => [generalizeAtom η a]
-
 def generalizeTy (η : HeapCallableTy) : Ty → Ty :=
-  fun t => eraseDups (t.flatMap (generalizeAtoms η))
+  fun t => eraseDups (t.map (generalizeAtom η))
 
 /- ## Subtyping: a finite grid on atoms; forall-exists on flat types -/
 
@@ -343,15 +338,16 @@ def genericJoinTy (η : HeapCallableTy) (t u : Ty) : Ty :=
 def lookupTyOrAbsent (Γ : TyEnv) (x : «String») : Ty :=
   (tyLookup Γ x).getD [.notPresent]
 
+/-- Generic loop invariant binding: every body-written variable is
+    widened to the finite top of bare values. This deliberately trades
+    precision for monotonicity under world refinement. -/
 def genericJoinBinding (η : HeapCallableTy) (Γ : TyEnv)
     (ws : Worlds) (xs : List «String») (x : «String») : Ty :=
-  ws.foldl (fun acc w =>
-    genericJoinTy η acc (lookupTyOrAbsent w.Γ x))
-    (lookupTyOrAbsent Γ x)
+  anyT
 
 def genericJoinEnv (η : HeapCallableTy) (Γ : TyEnv)
     (ws : Worlds) (xs : List «String») : TyEnv :=
-  (xs.map fun x => (x, genericJoinBinding η Γ ws xs x)).reverse ++ Γ
+  (xs.map fun x => (x, genericJoinBinding η Γ ws xs x)) ++ Γ
 
 def envGenericStable (η : HeapCallableTy) (Γ : TyEnv)
     (ws : Worlds) (xs : List «String») : Bool :=
@@ -978,12 +974,10 @@ def markDebt (why : «String») : TCResult → TCResult :=
   | r => r
 
 def boolOnlyTrue (t : Ty) : Bool :=
-  tmoves t [.isValue (.boolean Bool.true)] &&
-    !tmoves t [.isValue (.boolean Bool.false)]
+  t.any (isBoolSing Bool.true) && t.all (isBoolSing Bool.true)
 
 def boolOnlyFalse (t : Ty) : Bool :=
-  tmoves t [.isValue (.boolean Bool.false)] &&
-    !tmoves t [.isValue (.boolean Bool.true)]
+  t.any (isBoolSing Bool.false) && t.all (isBoolSing Bool.false)
 
 def boolBranchTC (site : Instr) (ts : Ty)
     (trueResult falseResult : TCResult) : TCResult :=
@@ -1006,58 +1000,55 @@ def checkRepeatWhileAux (sigs : SigTable) (r : Ty) (w : World)
       | none => .reject (.kRepeatWhile c body) "loop condition is not boolean"
       | some t =>
           if tmoves t [.anyValue .bool] then
-            if boolOnlyFalse t then
-              tailEntry ()
-            else
-              let writes := instrsWrites body
-              match bodyEntry with
-              | .reject site why => .reject site why
-              | .flows fb =>
-                  if worldsStacksEmpty fb.falls then
-                    let J :=
-                      { w with Γ := genericJoinEnv w.η w.Γ fb.falls writes }
-                    match typeOfE sigs J.Γ c with
-                    | none =>
+            let writes := instrsWrites body
+            match bodyEntry with
+            | .reject site why => .reject site why
+            | .flows fb =>
+                if worldsStacksEmpty fb.falls then
+                  let J :=
+                    { w with Γ := genericJoinEnv w.η w.Γ fb.falls writes }
+                  match typeOfE sigs J.Γ c with
+                  | none =>
+                      .reject (.kRepeatWhile c body)
+                        "loop condition is not boolean at invariant"
+                  | some tj =>
+                      if tmoves tj [.anyValue .bool] then
+                        match bodyInvariant with
+                        | .reject site why => .reject site why
+                        | .flows fj =>
+                            if worldsStacksEmpty fj.falls &&
+                                envGenericStable w.η J.Γ fj.falls writes then
+                              let mayReenter := !boolOnlyFalse tj
+                              let falseResult :=
+                                if boolOnlyTrue tj then
+                                  .flows { exits := Bool.false
+                                         , throws := Bool.false
+                                         , falls := []
+                                         , diverges := Bool.false
+                                         , assumes := [] }
+                                else tailInvariant ()
+                              match falseResult with
+                              | .reject site why => .reject site why
+                              | .flows fr =>
+                                  .flows
+                                    { exits := Bool.true
+                                    , throws := fj.throws || fr.throws
+                                    , falls :=
+                                        if boolOnlyTrue tj then []
+                                        else fr.falls
+                                    , diverges :=
+                                        fj.diverges || fr.diverges ||
+                                          (mayReenter && !fj.falls.isEmpty)
+                                    , assumes := fj.assumes ++ fr.assumes }
+                            else
+                              .reject (.kRepeatWhile c body)
+                                "loop invariant is not stable"
+                      else
                         .reject (.kRepeatWhile c body)
                           "loop condition is not boolean at invariant"
-                    | some tj =>
-                        if tmoves tj [.anyValue .bool] then
-                          match bodyInvariant with
-                          | .reject site why => .reject site why
-                          | .flows fj =>
-                              if worldsStacksEmpty fj.falls &&
-                                  envGenericStable w.η J.Γ fj.falls writes then
-                                let mayReenter := !boolOnlyFalse tj
-                                let falseResult :=
-                                  if boolOnlyTrue tj then
-                                    .flows { exits := Bool.false
-                                           , throws := Bool.false
-                                           , falls := []
-                                           , diverges := Bool.false
-                                           , assumes := [] }
-                                  else tailInvariant ()
-                                match falseResult with
-                                | .reject site why => .reject site why
-                                | .flows fr =>
-                                    .flows
-                                      { exits := Bool.true
-                                      , throws := fj.throws || fr.throws
-                                      , falls :=
-                                          if boolOnlyTrue tj then []
-                                          else fr.falls
-                                      , diverges :=
-                                          fj.diverges || fr.diverges ||
-                                            (mayReenter && !fj.falls.isEmpty)
-                                      , assumes := fj.assumes ++ fr.assumes }
-                              else
-                                .reject (.kRepeatWhile c body)
-                                  "loop invariant is not stable"
-                        else
-                          .reject (.kRepeatWhile c body)
-                            "loop condition is not boolean at invariant"
-                  else
-                    .reject (.kRepeatWhile c body)
-                      "loop body is not stack-neutral"
+                else
+                  .reject (.kRepeatWhile c body)
+                    "loop body is not stack-neutral"
           else .reject (.kRepeatWhile c body) "loop condition is not boolean"
   | _ => .reject (.kRepeatWhile c body) "loop entry stack is not empty"
 

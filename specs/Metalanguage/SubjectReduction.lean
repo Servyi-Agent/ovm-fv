@@ -7973,6 +7973,450 @@ theorem boolBranchTC_specLe {site : Instr} {ts' ts : Ty}
           rw [hfr2]
           exact hcov
 
+theorem genericJoinEnv_lookup_mem (η : HeapCallableTy) (Γ : TyEnv)
+    (ws : Worlds) : ∀ (xs : List String) (x : String), x ∈ xs ->
+    tyLookup (genericJoinEnv η Γ ws xs) x = some (genericJoinBinding η Γ ws xs x) := by
+  intro xs
+  induction xs with
+  | nil => intro x hx; cases hx
+  | cons y ys ih =>
+      intro x hx
+      by_cases hxy : x = y
+      · subst hxy
+        simp only [genericJoinEnv, List.map_cons, List.cons_append, tyLookup,
+          beq_self_eq_true, if_true]
+      · simp only [genericJoinEnv, List.map_cons, List.cons_append, tyLookup,
+          beq_iff_eq]
+        rw [if_neg (by
+          have hyx : ¬(y = x) := fun he => hxy he.symm
+          simp [hyx])]
+        exact ih x (by
+          rcases List.mem_cons.mp hx with h | h
+          · exact absurd h hxy
+          · exact h)
+
+theorem envGenericStable_genericJoinEnv (η : HeapCallableTy) (Γ : TyEnv)
+    (ws : Worlds) (xs : List String) :
+    envGenericStable η (genericJoinEnv η Γ ws xs) ws xs = Bool.true := by
+  unfold envGenericStable
+  simp only [List.all_eq_true]
+  intro x hx
+  simp only [lookupTyOrAbsent]
+  rw [genericJoinEnv_lookup_mem η Γ ws xs x hx]
+  rfl
+
+theorem genericJoinEnv_envLe {η : HeapCallableTy} {Γ' Γ : TyEnv}
+    {ws' ws : Worlds} {xs : List String}
+    (h : envLe Γ' Γ) :
+    envLe (genericJoinEnv η Γ' ws' xs) (genericJoinEnv η Γ ws xs) := by
+  induction xs with
+  | nil => simpa [genericJoinEnv] using h
+  | cons x ys ih =>
+      simp only [genericJoinEnv, List.map_cons, List.cons_append]
+      exact envLe_cons ih (slotLe_refl _)
+
+theorem genericJoinEnv_envCov {η : HeapCallableTy} {Γ' Γ : TyEnv}
+    {ws' ws : Worlds} {xs : List String}
+    (h : envCov η Γ' Γ) :
+    envCov η (genericJoinEnv η Γ' ws' xs) (genericJoinEnv η Γ ws xs) := by
+  induction xs with
+  | nil => simpa [genericJoinEnv] using h
+  | cons x ys ih =>
+      simp only [genericJoinEnv, List.map_cons, List.cons_append]
+      exact envCov_cons ih (tyCov_refl _ _)
+
+theorem worldsStacksEmpty_cov {ws' ws : Worlds}
+    (hcov : ∀ v' ∈ ws', ∃ v ∈ ws, worldLe v' v)
+    (h : worldsStacksEmpty ws = Bool.true) :
+    worldsStacksEmpty ws' = Bool.true := by
+  unfold worldsStacksEmpty
+  simp only [List.all_eq_true]
+  intro v' hv'
+  obtain ⟨v, hv, hle⟩ := hcov v' hv'
+  have hlen := (hle.2.2.1 : stackLe v'.σ v.σ)
+  rw [worldsStacksEmpty, List.all_eq_true] at h
+  have hvac := h v hv
+  cases hσ : v.σ with
+  | nil =>
+      cases hσ' : v'.σ with
+      | nil => rfl
+      | cons a as => simp [hσ, hσ', stackLe] at hlen
+  | cons a as =>
+      rw [hσ] at hvac
+      simp at hvac
+
+theorem isBoolSing_cover {η : HeapCallableTy} {b : Bool} {a' a : VTy}
+    (hac : atomCov η a' a) (ha : isBoolSing b a = Bool.true) :
+    isBoolSing b a' = Bool.true := by
+  simp only [isBoolSing] at ha ⊢
+  cases a' <;> cases a <;> simp_all [atomCov, tmovesV]
+
+theorem boolOnlyTrue_cov {t' t : Ty} {η : HeapCallableTy}
+    (hslot : slotLe t' t) (hcov : tyCov η t' t)
+    (hd : boolOnlyTrue t = Bool.true) :
+    boolOnlyTrue t' = Bool.true := by
+  obtain ⟨hany, hall⟩ := Bool.and_eq_true_iff.mp hd
+  rw [List.any_eq_true] at hany
+  rw [List.all_eq_true] at hall
+  have hne : t ≠ [] := by
+    intro hempty
+    simp [hempty] at hany
+  have htne' : t' ≠ [] := hslot.2 hne
+  cases htt : t' with
+  | nil => exact absurd htt htne'
+  | cons b bs =>
+      refine Bool.and_eq_true_iff.mpr ⟨?_, ?_⟩
+      · rw [List.any_eq_true]
+        refine ⟨b, by simp [htt], ?_⟩
+        obtain ⟨a, ha, hac⟩ := hcov b (by simp [htt])
+        exact isBoolSing_cover hac (hall a ha)
+      · rw [List.all_eq_true]
+        intro c hc
+        have hct : c ∈ t' := by rw [htt]; exact hc
+        obtain ⟨a, ha, hac⟩ := hcov c hct
+        exact isBoolSing_cover hac (hall a ha)
+
+theorem checkRepeatWhileAux_specLe {sigs : SigTable} {r : Ty}
+    {w' w : World} {c : Expr} {body rest : List Instr}
+    {entryTy' entryTy : Option Ty}
+    {bodyEntry' bodyEntry bodyInvariant' bodyInvariant : TCResult}
+    {tailEntry' tailEntry tailInvariant' tailInvariant : Unit → TCResult}
+    (hw : worldLe w' w)
+    (hentry : ∀ t, entryTy = some t →
+      ∃ t', entryTy' = some t' ∧ slotLe t' t)
+    (hbodyEntry : specLe bodyEntry' bodyEntry)
+    (hbodyInvariant : specLe bodyInvariant' bodyInvariant)
+    (htailEntry : specLe (tailEntry' ()) (tailEntry ()))
+    (htailInvariant : specLe (tailInvariant' ()) (tailInvariant ())) :
+    specLe (checkRepeatWhileAux sigs r w' c body rest entryTy'
+      bodyEntry' bodyInvariant' tailEntry' tailInvariant')
+      (checkRepeatWhileAux sigs r w c body rest entryTy
+      bodyEntry bodyInvariant tailEntry tailInvariant) := by
+  obtain ⟨hη, hΓ, hσle, hcovΓ, hcovσ⟩ := hw
+  cases hσ : w.σ with
+  | cons a σ =>
+      simp_all [checkRepeatWhileAux]
+      exact trivial
+  | nil =>
+      have hσ' : w'.σ = [] := by
+        cases hσs : w'.σ with
+        | nil => rfl
+        | cons a as => simp [hσs, hσ, stackLe] at hσle
+      cases he : entryTy with
+      | none =>
+          simp_all [checkRepeatWhileAux]
+          exact trivial
+      | some t =>
+          obtain ⟨t', he', hslot⟩ := hentry t he
+          cases hbool : tmoves t [.anyValue .bool] with
+          | false =>
+              simp_all [checkRepeatWhileAux]
+              exact trivial
+          | true =>
+              have hbool' : tmoves t' [.anyValue .bool] = Bool.true :=
+                tmoves_trans hslot.1 hbool
+              cases hb : bodyEntry with
+              | reject site why =>
+                  simp_all [checkRepeatWhileAux]
+                  exact trivial
+              | flows fb =>
+                  rw [hb] at hbodyEntry
+                  obtain ⟨fb', hbr, hbcov⟩ := specLe_flows_elim hbodyEntry
+                  cases hneu : worldsStacksEmpty fb.falls with
+                  | false =>
+                      simp_all [checkRepeatWhileAux]
+                      exact trivial
+                  | true =>
+                      have hneu' : worldsStacksEmpty fb'.falls = Bool.true :=
+                        worldsStacksEmpty_cov hbcov hneu
+                      have hJ : worldLe
+                          { w' with Γ := (genericJoinEnv w'.η w'.Γ fb'.falls
+                              (instrsWrites body)) }
+                          { w with Γ := (genericJoinEnv w.η w.Γ fb.falls
+                              (instrsWrites body)) } :=
+                        ⟨hη,
+                          genericJoinEnv_envLe (ws' := fb'.falls) (ws := fb.falls) hΓ,
+                          hσle,
+                          genericJoinEnv_envCov (ws' := fb'.falls) (ws := fb.falls) hcovΓ,
+                          hcovσ⟩
+                      cases hc : typeOfE sigs
+                          (genericJoinEnv w.η w.Γ fb.falls (instrsWrites body)) c with
+                      | none =>
+                          simp_all [checkRepeatWhileAux]
+                          exact trivial
+                      | some tj =>
+                          obtain ⟨tj', hc', hjslot, hjcovTy⟩ := typeOfE_cov sigs
+                            _ _ c hJ.2.1 hJ.2.2.2.1 tj hc
+                          cases hboolj : tmoves tj [.anyValue .bool] with
+                          | false =>
+                              simp_all [checkRepeatWhileAux]
+                              exact trivial
+                          | true =>
+                              have hboolj' : tmoves tj' [.anyValue .bool] = Bool.true :=
+                                tmoves_trans hjslot.1 hboolj
+                              cases hinv : bodyInvariant with
+                              | reject site why =>
+                                  simp_all [checkRepeatWhileAux]
+                                  exact trivial
+                              | flows fj =>
+                                  rw [hinv] at hbodyInvariant
+                                  obtain ⟨fj', hinvr, hjcov⟩ :=
+                                    specLe_flows_elim hbodyInvariant
+                                  cases hstable : worldsStacksEmpty fj.falls &&
+                                      envGenericStable w.η
+                                        (genericJoinEnv w.η w.Γ fb.falls
+                                          (instrsWrites body)) fj.falls
+                                        (instrsWrites body) with
+                                  | false =>
+                                      simp only [checkRepeatWhileAux, hσ, hσ', he,
+                                        he', hbool, hbool', hb, hbr, hneu, hneu', hc,
+                                        hc', hboolj, hboolj', hinv, hinvr, hstable,
+                                        specLe]
+                                      exact trivial
+                                  | true =>
+                                      have hneuj' : worldsStacksEmpty fj'.falls = Bool.true :=
+                                        worldsStacksEmpty_cov hjcov
+                                          (by
+                                            have := Bool.and_eq_true_iff.mp hstable
+                                            exact this.1)
+                                      have hstable' : worldsStacksEmpty fj'.falls &&
+                                          envGenericStable w'.η
+                                            (genericJoinEnv w'.η w'.Γ fb'.falls
+                                              (instrsWrites body)) fj'.falls
+                                            (instrsWrites body) = Bool.true :=
+                                        Bool.and_eq_true_iff.mpr ⟨hneuj',
+                                          envGenericStable_genericJoinEnv w'.η w'.Γ
+                                            fb'.falls (instrsWrites body)⟩
+                                      cases hbt : boolOnlyTrue tj with
+                                      | true =>
+                                          have hbt' : boolOnlyTrue tj' = Bool.true :=
+                                            boolOnlyTrue_cov hjslot hjcovTy hbt
+                                          simp_all [checkRepeatWhileAux]
+                                          exact specLe_flows_intro
+                                            (fun v hv => by cases hv)
+                                      | false =>
+                                          cases ht : tailInvariant () with
+                                          | reject site why =>
+                                              simp_all [checkRepeatWhileAux]
+                                              exact trivial
+                                          | flows fr =>
+                                              rw [ht] at htailInvariant
+                                              obtain ⟨fr', htr, htcov⟩ :=
+                                                specLe_flows_elim htailInvariant
+                                              cases hbt' : boolOnlyTrue tj' with
+                                              | true =>
+                                                  simp_all [checkRepeatWhileAux]
+                                                  exact specLe_flows_intro
+                                                    (fun v hv => by cases hv)
+                                              | false =>
+                                                  simp_all [checkRepeatWhileAux]
+                                                  exact specLe_flows_intro htcov
+
+
+theorem stackLe_cons_inv {σ' : List Ty} {t : Ty} {σ : List Ty}
+    (h : stackLe σ' (t :: σ)) :
+    ∃ a rest, σ' = a :: rest ∧ slotLe a t ∧ stackLe rest σ := by
+  cases σ' with
+  | nil => simp [stackLe] at h
+  | cons a rest => exact ⟨a, rest, rfl, h.1, h.2⟩
+
+theorem stackCov_cons_inv {η : HeapCallableTy} {σ' : List Ty} {t : Ty} {σ : List Ty}
+    (h : stackCov η σ' (t :: σ)) :
+    ∃ a rest, σ' = a :: rest ∧ tyCov η a t ∧ stackCov η rest σ := by
+  cases σ' with
+  | nil => simp [stackCov] at h
+  | cons a rest => exact ⟨a, rest, rfl, h.1, h.2⟩
+
+theorem checkRepeatTestAux_specLe {sigs : SigTable} {r : Ty}
+    {w' w : World} {c : Expr} {body rest : List Instr}
+    {ts' ts : Ty}
+    {bodyEntry' bodyEntry bodyInvariant' bodyInvariant : TCResult}
+    {tailEntry' tailEntry tailInvariant' tailInvariant : Unit → TCResult}
+    (hw : worldLe w' w)
+    (hmate : ∀ b ∈ ts', ∃ a ∈ ts, tmovesV b a = Bool.true)
+    (hbodyEntry : specLe bodyEntry' bodyEntry)
+    (hbodyInvariant : specLe bodyInvariant' bodyInvariant)
+    (htailEntry : specLe (tailEntry' ()) (tailEntry ()))
+    (htailInvariant : specLe (tailInvariant' ()) (tailInvariant ())) :
+    specLe (checkRepeatTestAux sigs r w' c body rest ts'
+      bodyEntry' bodyInvariant' tailEntry' tailInvariant')
+      (checkRepeatTestAux sigs r w c body rest ts
+      bodyEntry bodyInvariant tailEntry tailInvariant) :=
+  boolBranchTC_specLe hmate
+    (checkRepeatWhileAux_specLe (w' := w') (w := w) (c := c) (body := body)
+      (rest := rest) (entryTy' := typeOfE sigs w'.Γ c)
+      (entryTy := typeOfE sigs w.Γ c)
+      (bodyEntry' := bodyEntry') (bodyEntry := bodyEntry)
+      (bodyInvariant' := bodyInvariant') (bodyInvariant := bodyInvariant)
+      (tailEntry' := tailEntry') (tailEntry := tailEntry)
+      (tailInvariant' := tailInvariant') (tailInvariant := tailInvariant)
+      hw
+      (fun t ht => by
+        obtain ⟨t', ht', hslot, -⟩ :=
+          typeOfE_cov sigs w'.Γ w.Γ c hw.2.1 hw.2.2.2.1 t ht
+        exact ⟨t', ht', hslot⟩)
+      hbodyEntry hbodyInvariant htailEntry htailInvariant)
+    htailEntry
+
+theorem checkSeq_kRepeatTest_specLe {sigs : SigTable} {r : Ty}
+    {w : World} {c : Expr} {body rest : List Instr}
+    {ts : Ty} {σ : List Ty} (hsc : sigParamsClosed sigs)
+    (hstack : w.σ = ts :: σ)
+    (hbodyEntry : sigParamsClosed sigs → ∀ u : World,
+      worldLe u { w with σ := σ } →
+        specLe (checkSeq sigs r u body) (checkSeq sigs r { w with σ := σ } body))
+    (hbodyInvariant : sigParamsClosed sigs → ∀ u : World,
+      worldLe u
+        { w with Γ := (genericJoinEnv w.η w.Γ
+            (match checkSeq sigs r { w with σ := σ } body with
+             | .flows fb => fb.falls
+             | .reject _ _ => []) (instrsWrites body)), σ := σ } →
+        specLe (checkSeq sigs r u body)
+          (checkSeq sigs r
+            { w with Γ := (genericJoinEnv w.η w.Γ
+              (match checkSeq sigs r { w with σ := σ } body with
+               | .flows fb => fb.falls
+               | .reject _ _ => []) (instrsWrites body)), σ := σ } body))
+    (hrestEntry : sigParamsClosed sigs → ∀ u : World,
+      worldLe u { w with σ := σ } →
+        specLe (checkSeq sigs r u rest) (checkSeq sigs r { w with σ := σ } rest))
+    (hrestInvariant : sigParamsClosed sigs → ∀ u : World,
+      worldLe u
+        { w with Γ := (genericJoinEnv w.η w.Γ
+            (match checkSeq sigs r { w with σ := σ } body with
+             | .flows fb => fb.falls
+             | .reject _ _ => []) (instrsWrites body)), σ := σ } →
+        specLe (checkSeq sigs r u rest)
+          (checkSeq sigs r
+            { w with Γ := (genericJoinEnv w.η w.Γ
+              (match checkSeq sigs r { w with σ := σ } body with
+               | .flows fb => fb.falls
+                | .reject _ _ => []) (instrsWrites body)), σ := σ } rest))
+    : ∀ (w' : World), worldLe w' w →
+      specLe (checkSeq sigs r w' (.kRepeatTest c body :: rest))
+        (checkSeq sigs r w (.kRepeatTest c body :: rest)) := by
+  intro w' h
+  obtain ⟨hη, hΓ, hσle, hcovΓ, hcovσ⟩ := h
+  rw [hstack] at hσle
+  rw [hstack] at hcovσ
+  cases hpop : popTy [.anyValue .bool] (ts :: σ) with
+  | none =>
+      simp only [checkSeq, hstack, hpop]
+      exact trivial
+  | some successor =>
+      cases successor with
+      | nil =>
+          have hcoarseNil : σ = [] := by
+            simp only [popTy] at hpop
+            split at hpop
+            · injection hpop with _
+            · contradiction
+          subst hcoarseNil
+          obtain ⟨ts', tailR, hσeq, hslot, hrest⟩ :=
+            stackLe_cons_inv hσle
+          obtain ⟨hnil, hpop'⟩ :=
+            popTy_some_nil_cov hslot hrest hpop
+          subst hnil
+          have hworld0 : worldLe
+              { w' with σ := [] } { w with σ := [] } :=
+            ⟨hη, hΓ, by simp [stackLe], hcovΓ, by simp [stackCov]⟩
+          have wr : World := { w' with σ := [] }
+          have wc : World := { w with σ := [] }
+          have hentry : ∀ t, typeOfE sigs
+              ({ w with σ := [] } : World).Γ c = some t →
+            ∃ t', typeOfE sigs ({ w' with σ := [] } : World).Γ c = some t' ∧
+              slotLe t' t := by
+            intro t ht
+            obtain ⟨t', ht', hslotc, -⟩ :=
+              typeOfE_cov sigs _ _ c hworld0.2.1 hworld0.2.2.2.1 t ht
+            exact ⟨t', ht', hslotc⟩
+          have hJ : worldLe
+              (⟨w'.η, genericJoinEnv w'.η w'.Γ
+                  (match checkSeq sigs r wr body with
+                   | .flows fb => fb.falls
+                   | .reject _ _ => []) (instrsWrites body),
+                []⟩ : World)
+              (⟨w.η, genericJoinEnv w.η w.Γ
+                  (match checkSeq sigs r wc body with
+                   | .flows fb => fb.falls
+                   | .reject _ _ => []) (instrsWrites body),
+                []⟩ : World) :=
+            ⟨hη,
+              genericJoinEnv_envLe
+                (ws' := match checkSeq sigs r wr body with
+                  | .flows fb => fb.falls
+                  | .reject _ _ => [])
+                (ws := match checkSeq sigs r wc body with
+                  | .flows fb => fb.falls
+                  | .reject _ _ => []) hΓ,
+              hrest,
+              genericJoinEnv_envCov
+                (ws' := match checkSeq sigs r wr body with
+                  | .flows fb => fb.falls
+                  | .reject _ _ => [])
+                (ws := match checkSeq sigs r wc body with
+                  | .flows fb => fb.falls
+                  | .reject _ _ => []) hcovΓ,
+              by simp [stackCov]⟩
+          simp only [checkSeq, hstack, hσeq, hpop, hpop']
+          exact checkRepeatTestAux_specLe hworld0
+            (tyLe_cov_atoms hslot.1)
+            (hbodyEntry hsc _ hworld0) (hbodyInvariant hsc _ hJ)
+            (hrestEntry hsc _ hworld0) (hrestInvariant hsc _ hJ)
+      | cons one more =>
+          simp only [checkSeq, hstack, hpop]
+          exact trivial
+
+
+theorem checkSeq_kRepeatTest_pop_specLe {sigs : SigTable} {r : Ty}
+    {w w0 : World} {c : Expr} {body rest : List Instr}
+    (hsc : sigParamsClosed sigs)
+    (hpop : popTy [.anyValue .bool] w.σ = some [])
+    (hw0 : w0 = { w with σ := [] })
+    (hbodyEntry : sigParamsClosed sigs → ∀ u : World,
+      worldLe u w0 → specLe (checkSeq sigs r u body) (checkSeq sigs r w0 body))
+    (hbodyInvariant : sigParamsClosed sigs → ∀ u : World,
+      worldLe u { w0 with Γ := (genericJoinEnv w0.η w0.Γ
+          (match checkSeq sigs r w0 body with
+           | .flows fb => fb.falls
+           | .reject _ _ => []) (instrsWrites body)) } →
+        specLe (checkSeq sigs r u body)
+          (checkSeq sigs r { w0 with Γ := (genericJoinEnv w0.η w0.Γ
+            (match checkSeq sigs r w0 body with
+             | .flows fb => fb.falls
+             | .reject _ _ => []) (instrsWrites body)) } body))
+    (hrestEntry : sigParamsClosed sigs → ∀ u : World,
+      worldLe u w0 → specLe (checkSeq sigs r u rest) (checkSeq sigs r w0 rest))
+    (hrestInvariant : sigParamsClosed sigs → ∀ u : World,
+      worldLe u { w0 with Γ := (genericJoinEnv w0.η w0.Γ
+          (match checkSeq sigs r w0 body with
+           | .flows fb => fb.falls
+           | .reject _ _ => []) (instrsWrites body)) } →
+        specLe (checkSeq sigs r u rest)
+          (checkSeq sigs r { w0 with Γ := (genericJoinEnv w0.η w0.Γ
+            (match checkSeq sigs r w0 body with
+             | .flows fb => fb.falls
+             | .reject _ _ => []) (instrsWrites body)) } rest))
+    : ∀ (w' : World), worldLe w' w →
+      specLe (checkSeq sigs r w' (.kRepeatTest c body :: rest))
+        (checkSeq sigs r w (.kRepeatTest c body :: rest)) := by
+  intro w' h
+  cases hstack : w.σ with
+  | nil =>
+      rw [hstack] at hpop
+      simp [popTy] at hpop
+  | cons ts tail =>
+      rw [hstack] at hpop
+      have htail : tail = [] := by
+        simp only [popTy] at hpop
+        split at hpop
+        · injection hpop with _
+        · contradiction
+      subst htail
+      subst hw0
+      exact checkSeq_kRepeatTest_specLe hsc hstack
+        hbodyEntry hbodyInvariant hrestEntry hrestInvariant w' h
+
 theorem checkSeq_specialize (sigs : SigTable) (r : Ty) (w : World) (seq : List Instr)
     (hsc : sigParamsClosed sigs) :
     ∀ (w' : World), worldLe w' w →
@@ -8419,8 +8863,46 @@ theorem checkSeq_specialize (sigs : SigTable) (r : Ty) (w : World) (seq : List I
     | nil => simp only [checkSeq, hσ, hσ']; exact trivial
     | cons t' σ'' => rw [hσ'] at hσle; cases hσle
   case case28 =>
+    rename_i sigs r w c body rest ih_body ih_bodyJ ih_rest ih_restJ
     intro w' h
-    sorry
+    obtain ⟨hη, hΓ, hσle, hcovΓ, hcovσ⟩ := h
+    have hworld : worldLe w' w := ⟨hη, hΓ, hσle, hcovΓ, hcovσ⟩
+    have hentry : ∀ t, typeOfE sigs w.Γ c = some t →
+        ∃ t', typeOfE sigs w'.Γ c = some t' ∧ slotLe t' t := by
+      intro t ht
+      obtain ⟨t', ht', hslot, -⟩ :=
+        typeOfE_cov sigs w'.Γ w.Γ c hΓ hcovΓ t ht
+      exact ⟨t', ht', hslot⟩
+    have hJ : worldLe
+        { w' with Γ := (genericJoinEnv w'.η w'.Γ
+            (match checkSeq sigs r w' body with
+             | .flows fb => fb.falls
+             | .reject _ _ => []) (instrsWrites body)) }
+        { w with Γ := (genericJoinEnv w.η w.Γ
+            (match checkSeq sigs r w body with
+             | .flows fb => fb.falls
+             | .reject _ _ => []) (instrsWrites body)) } :=
+      ⟨hη,
+        genericJoinEnv_envLe
+          (ws' := match checkSeq sigs r w' body with
+            | .flows fb => fb.falls
+            | .reject _ _ => [])
+          (ws := match checkSeq sigs r w body with
+            | .flows fb => fb.falls
+            | .reject _ _ => []) hΓ,
+        hσle,
+        genericJoinEnv_envCov
+          (ws' := match checkSeq sigs r w' body with
+            | .flows fb => fb.falls
+            | .reject _ _ => [])
+          (ws := match checkSeq sigs r w body with
+            | .flows fb => fb.falls
+            | .reject _ _ => []) hcovΓ,
+        hcovσ⟩
+    simp only [checkSeq]
+    exact checkRepeatWhileAux_specLe hworld hentry
+      (ih_body hsc w' hworld) (ih_bodyJ hsc _ hJ)
+      (ih_rest hsc w' hworld) (ih_restJ hsc _ hJ)
   case case29 =>
     intro w' h
     simp [checkSeq, specLe, *]
@@ -8448,8 +8930,17 @@ theorem checkSeq_specialize (sigs : SigTable) (r : Ty) (w : World) (seq : List I
     intro w' h
     simp_all [checkSeq, popTy]
   case case45 =>
+    rename_i hpopEq head tail w0 ih_body ih_bodyJ ih_rest ih_restJ dummy1 dummy2
     intro w' h
-    sorry
+    have htail : tail = [] := by
+      rw [w0] at hpopEq
+      simp only [popTy] at hpopEq
+      split at hpopEq
+      · injection hpopEq with _
+      · contradiction
+    subst htail
+    exact checkSeq_kRepeatTest_pop_specLe (w0 := ih_body) hsc hpopEq rfl
+      ih_bodyJ ih_restJ dummy1 dummy2 w' h
   case case46 =>
     intro w' h
     simp [checkSeq, specLe, *]
