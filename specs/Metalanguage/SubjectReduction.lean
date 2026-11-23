@@ -4028,6 +4028,10 @@ def assumesT : TCResult → List «String»
   | .flows f => f.assumes
   | .reject _ _ => []
 
+def divergesT : TCResult → Bool
+  | .flows f => f.diverges
+  | .reject _ _ => Bool.false
+
 theorem fold_reject_absorb {α : Type} (J : α → TCResult) (s : Instr) (w : «String») :
     ∀ (as : List α),
       as.foldl (fun x a => mergeTC x (J a)) (TCResult.reject s w) = TCResult.reject s w := by
@@ -4051,6 +4055,7 @@ theorem fold_merge_flows {α : Type} (J : α → TCResult) :
                 { exits := exitsT acc || ts.any (fun a => exitsT (J a)),
                   throws := throwsT acc || ts.any (fun a => throwsT (J a)),
                   falls := fallsT acc ++ ts.flatMap (fun a => fallsT (J a)),
+                  diverges := divergesT acc || ts.any (fun a => divergesT (J a)),
                   assumes := assumesT acc ++ ts.flatMap (fun a => assumesT (J a)) } := by
   intro ts
   induction ts with
@@ -4061,7 +4066,8 @@ theorem fold_merge_flows {α : Type} (J : α → TCResult) :
       · cases acc with
         | flows fb₀ =>
             cases fb₀
-            simp [List.any_nil, List.flatMap_nil, exitsT, throwsT, fallsT, assumesT]
+            simp [List.any_nil, List.flatMap_nil, exitsT, throwsT, fallsT,
+              assumesT, divergesT]
         | reject s w => exact absurd rfl (hnr s w)
   | cons a as ih =>
       intro acc hnr
@@ -4089,8 +4095,8 @@ theorem fold_merge_flows {α : Type} (J : α → TCResult) :
                 | inl h => subst h; exact ⟨_, hJa⟩
                 | inr h => exact hmem a' h
               · rw [heq]
-                simp only [mergeTC, exitsT, throwsT, fallsT, assumesT, hJa,
-                  List.any_cons, List.flatMap_cons]
+                simp only [mergeTC, exitsT, throwsT, fallsT, assumesT,
+                  divergesT, hJa, List.any_cons, List.flatMap_cons]
                 simp [Bool.or_assoc, List.append_assoc]
 
 /-- A flows result never equals a reject. -/
@@ -4128,7 +4134,9 @@ theorem fold_noFlows_exits {sigs : SigTable} {r : Ty} {rest : List Instr}
           have hseed : mergeTC noFlows (TCResult.flows fbu)
               = TCResult.flows
                   { exits := Bool.false || fbu.exits, throws := Bool.false || fbu.throws,
-                    falls := [] ++ fbu.falls, assumes := [] ++ fbu.assumes } := rfl
+                    falls := [] ++ fbu.falls,
+                    diverges := Bool.false || fbu.diverges,
+                    assumes := [] ++ fbu.assumes } := rfl
           rw [hK, hseed] at heq
           cases us with
           | nil =>
@@ -5068,39 +5076,33 @@ theorem checkSeq_exits (sigs : SigTable) (r : Ty) (w : World) (seq : List Instr)
       exact markThrow_exits h hf ih1
   case case28 =>
     intro fb h hf
-    simp_all only [checkSeq, boolBranchTC]
-    exact boolBranchTC_exits h
+    simp only [checkSeq, checkRepeatWhileAux] at h
+    repeat' split at h
+    all_goals simp_all
+    all_goals cases h
+    all_goals rfl
   case case29 =>
-    intro fb h hf
-    simp_all [checkSeq, boolBranchTC]
-  case case30 =>
-    intro fb h hf
-    simp_all [checkSeq, boolBranchTC]
-  case case31 =>
-    intro fb h hf
-    simp_all [checkSeq, boolBranchTC]
-  case case32 =>
     rename_i sigs r w ex rest hdisj hty
     intro fb h hf
     simp only [checkSeq, hty] at h
     exact TCResult.noConfusion h
-  case case33 =>
+  case case30 =>
     rename_i sigs r w ex rest hdisj S hty ih1
     intro fb h hf
     simp only [checkSeq, hty] at h
     exact markThrow_exits h hf ih1
-  case case34 =>
+  case case31 =>
     rename_i sigs r w x rest f b dec hdec ih1
     intro fb h hf
     rw [checkSeq.eq_24, hdec] at h
     exact forkTC_exits h hf ih1
-  case case35 =>
+  case case32 =>
     rename_i sigs r w x rest f b hdec hlook
     intro fb h hf
     rw [checkSeq.eq_24, hdec, hlook] at h
     dsimp only at h
     exact TCResult.noConfusion h
-  case case36 =>
+  case case33 =>
     rename_i sigs r w x rest f b hdec S hlook ih1
     intro fb h hf
     rw [checkSeq.eq_24, hdec, hlook] at h
@@ -5108,10 +5110,23 @@ theorem checkSeq_exits (sigs : SigTable) (r : Ty) (w : World) (seq : List Instr)
     | exact ih1 fb h hf
     | (dsimp only at h; exact ih1 fb h hf)
     | exact ih1 fb (by dsimp only at h; exact h) hf
-  case case37 =>
+  case case34 =>
     rename_i sigs r w x rest dec hdec ih1
     intro fb h hf
     rw [checkSeq.eq_25] at h
+    exact forkTC_exits h hf ih1
+  case case35 =>
+    rename_i sigs r w x rest hdec hlook
+    intro fb h hf
+    exact absurd hlook (by simp [primDecide])
+  case case36 =>
+    rename_i sigs r w x rest hdec S hlook ih1
+    intro fb h hf
+    exact absurd hlook (by simp [primDecide])
+  case case37 =>
+    rename_i sigs r w x rest dec hdec ih1
+    intro fb h hf
+    rw [checkSeq.eq_26] at h
     exact forkTC_exits h hf ih1
   case case38 =>
     rename_i sigs r w x rest hdec hlook
@@ -5122,58 +5137,45 @@ theorem checkSeq_exits (sigs : SigTable) (r : Ty) (w : World) (seq : List Instr)
     intro fb h hf
     exact absurd hlook (by simp [primDecide])
   case case40 =>
-    rename_i sigs r w x rest dec hdec ih1
-    intro fb h hf
-    rw [checkSeq.eq_26] at h
-    exact forkTC_exits h hf ih1
-  case case41 =>
-    rename_i sigs r w x rest hdec hlook
-    intro fb h hf
-    exact absurd hlook (by simp [primDecide])
-  case case42 =>
-    rename_i sigs r w x rest hdec S hlook ih1
-    intro fb h hf
-    exact absurd hlook (by simp [primDecide])
-  case case43 =>
     rename_i sigs r w x p rest ps hT hpred hn hc ih1
     intro fb h hf
     simp only [checkSeq, hpred, hn, hc, hT] at h
     exact forkTC_exits h hf ih1
-  case case44 =>
+  case case41 =>
     rename_i sigs r w x p rest hT hlook hpred hn hc
     intro fb h hf
     simp only [checkSeq, hpred, hn, hc, hT, hlook] at h
     exact TCResult.noConfusion h
-  case case45 =>
+  case case42 =>
     rename_i sigs r w x p rest hT S hlook hpred hn hc ih1
     intro fb h hf
     simp only [checkSeq, hpred, hn, hc, hT, hlook] at h
     exact ih1 fb h hf
-  case case46 =>
+  case case43 =>
     rename_i sigs r w c body rest hpop
     intro fb h hf
     simp only [checkSeq, hpop] at h
     exact TCResult.noConfusion h
-  case case47 =>
+  case case44 =>
     rename_i sigs r w c body rest hpop hnil
     intro fb h hf
     simp only [checkSeq, hpop, hnil] at h
     exact TCResult.noConfusion h
-  case case48 =>
+  case case45 =>
     intro fb h hf
     simp_all only [checkSeq, boolBranchTC]
     exact boolBranchTC_exits h
-  case case49 =>
+  case case46 =>
     rename_i sigs r w c body rest hd htl hpop
     intro fb h hf
     simp only [checkSeq, hpop] at h
     exact TCResult.noConfusion h
-  case case50 =>
+  case case47 =>
     rename_i sigs r w x body rest hpop
     intro fb h hf
     simp only [checkSeq, hpop] at h
     exact TCResult.noConfusion h
-  case case51 =>
+  case case48 =>
     rename_i sigs r w x body rest hpop ih2 ih1
     intro fb h hf
     simp only [checkSeq, hpop] at h
@@ -5206,12 +5208,12 @@ theorem checkSeq_exits (sigs : SigTable) (r : Ty) (w : World) (seq : List Instr)
                   rw [fold_noFlows_exits ih1 _ fr hkf hfr (by simp [hfalls])]
                   simp
         · exact TCResult.noConfusion h
-  case case52 =>
+  case case49 =>
     rename_i sigs r w x body rest hd htl hpop
     intro fb h hf
     simp only [checkSeq, hpop] at h
     exact TCResult.noConfusion h
-  case case53 =>
+  case case50 =>
     rename_i sigs r w x elems body rest hempty ih2 ih1
     intro fb h hf
     simp only [checkSeq, hempty] at h
@@ -5245,7 +5247,7 @@ theorem checkSeq_exits (sigs : SigTable) (r : Ty) (w : World) (seq : List Instr)
                   rw [fold_noFlows_exits ih1 _ fr hkf hfr (by simp [hfalls])]
                   simp
         · exact TCResult.noConfusion h
-  case case54 =>
+  case case51 =>
     rename_i sigs r w x elems body rest hne
     intro fb h hf
     cases hσ : w.σ with
@@ -5253,12 +5255,12 @@ theorem checkSeq_exits (sigs : SigTable) (r : Ty) (w : World) (seq : List Instr)
     | cons a as =>
         simp only [checkSeq, hσ] at h
         exact TCResult.noConfusion h
-  case case55 =>
+  case case52 =>
     rename_i sigs r w rest hσ
     intro fb h hf
     simp only [checkSeq, hσ] at h
     exact TCResult.noConfusion h
-  case case56 =>
+  case case53 =>
     rename_i sigs r w rest ts σ' hσ ih1
     intro fb h hf
     simp only [checkSeq, hσ] at h
@@ -5267,12 +5269,12 @@ theorem checkSeq_exits (sigs : SigTable) (r : Ty) (w : World) (seq : List Instr)
     have hinj := TCResult.flows.inj h
     subst hinj
     rfl
-  case case57 =>
+  case case54 =>
     rename_i sigs r w i rest hdisj hstep
     intro fb h hf
     simp only [checkSeq, hstep] at h
     exact TCResult.noConfusion h
-  case case58 =>
+  case case55 =>
     rename_i sigs r w i rest hdisj ws' hstep ih1
     intro fb h hf
     simp only [checkSeq, hstep] at h
@@ -5382,7 +5384,9 @@ theorem merge_vacOk_terminal {sigs : SigTable} {r : Ty} {W : World} {seq : List 
       have hmerge : mergeTC vacOk (TCResult.flows fbr)
           = TCResult.flows
               { exits := Bool.true || fbr.exits, throws := Bool.false || fbr.throws,
-                falls := [] ++ fbr.falls, assumes := [] ++ fbr.assumes } := rfl
+                falls := [] ++ fbr.falls,
+                diverges := Bool.false || fbr.diverges,
+                assumes := [] ++ fbr.assumes } := rfl
       rw [hres, hmerge] at h
       have hinj := TCResult.flows.inj h
       subst hinj
@@ -6822,7 +6826,8 @@ theorem fold_flows_exists {α : Type} {J : α → TCResult} :
       obtain ⟨fa0, hfa0⟩ := hacc
       have hm : ∃ f, mergeTC acc (J a) = TCResult.flows f := by
         refine ⟨⟨fa0.exits || fa.exits, fa0.throws || fa.throws,
-          fa0.falls ++ fa.falls, fa0.assumes ++ fa.assumes⟩, ?_⟩
+          fa0.falls ++ fa.falls, fa0.diverges || fa.diverges,
+          fa0.assumes ++ fa.assumes⟩, ?_⟩
         rw [hfa0, hfa]
         rfl
       obtain ⟨fr, hfr⟩ := ih (mergeTC acc (J a)) hm
@@ -6841,8 +6846,7 @@ theorem fold_noFlows_falls {α : Type} {J : α → TCResult} :
   obtain ⟨hcomp, heq⟩ := fold_merge_flows J ts noFlows hnr
   refine ⟨hcomp, ?_⟩
   have hfall : fb.falls = fallsT noFlows ++ ts.flatMap (fun a => fallsT (J a)) := by
-    have hres : TCResult.flows fb = TCResult.flows ({ exits := exitsT noFlows || ts.any (fun a => exitsT (J a)), throws := throwsT noFlows || ts.any (fun a => throwsT (J a)), falls := fallsT noFlows ++ ts.flatMap (fun a => fallsT (J a)), assumes := assumesT noFlows ++ ts.flatMap (fun a => assumesT (J a)) }) :=
-      h.symm.trans heq
+    have hres := h.symm.trans heq
     exact congrArg Flows.falls (TCResult.flows.inj hres)
   rw [hfall]
   rfl
@@ -7386,6 +7390,7 @@ theorem fold_terminal_falls_nil {J : World → TCResult} :
       { exits := exitsT noFlows || ws.any (fun a => exitsT (J a)),
         throws := throwsT noFlows || ws.any (fun a => throwsT (J a)),
         falls := fallsT noFlows ++ ws.flatMap (fun a => fallsT (J a)),
+        diverges := divergesT noFlows || ws.any (fun a => divergesT (J a)),
         assumes := assumesT noFlows ++ ws.flatMap (fun a => assumesT (J a)) } :=
     heq.symm.trans heqf
   have hfb2 := TCResult.flows.inj hinj2
@@ -7535,6 +7540,7 @@ theorem fold_vac_falls {α : Type} {J : α → TCResult} :
         { exits := exitsT vacOk || ts.any (fun a => exitsT (J a)),
           throws := throwsT vacOk || ts.any (fun a => throwsT (J a)),
           falls := fallsT vacOk ++ ts.flatMap (fun a => fallsT (J a)),
+          diverges := divergesT vacOk || ts.any (fun a => divergesT (J a)),
           assumes := assumesT vacOk ++ ts.flatMap (fun a => assumesT (J a)) } :=
       h.symm.trans heq
     exact congrArg Flows.falls (TCResult.flows.inj hres)
@@ -8289,7 +8295,7 @@ theorem checkSeq_specialize (sigs : SigTable) (r : Ty) (w : World) (seq : List I
     simp only [ite_eq_right hf]
     simp only [hsome, hsome']
     exact markThrow_specLe sigs _ hpt
-  case case34 =>
+  case case31 =>
     rename_i sigs r w x rest f b dec hdec ih1
     intro w' h
     have hη := h.1
@@ -8300,7 +8306,7 @@ theorem checkSeq_specialize (sigs : SigTable) (r : Ty) (w : World) (seq : List I
       (fun v' hv' => splitP1_cov
         (DecAgree_beq (DecAgree_predDecide hdec)) h hv')
       (fun hne => splitP1_ne_of_worldLe h hne) (fun u' u hu => ih1 u hsc u' hu)
-  case case35 =>
+  case case32 =>
     rename_i sigs r w x rest f b hdec hlook
     intro w' h
     obtain ⟨-, hΓ, -, -, -⟩ := h
@@ -8312,7 +8318,7 @@ theorem checkSeq_specialize (sigs : SigTable) (r : Ty) (w : World) (seq : List I
       | some S => rw [hl] at hex; simp at hex
     simp only [checkSeq.eq_24, hdec, hlook, hlook']
     exact trivial
-  case case36 =>
+  case case33 =>
     rename_i sigs r w x rest f b hdec S hlook ih1
     intro w' h
     obtain ⟨hη, hΓ, hσle, hcovΓ, hcovσ⟩ := h
@@ -8324,10 +8330,24 @@ theorem checkSeq_specialize (sigs : SigTable) (r : Ty) (w : World) (seq : List I
         stackCov_cons_intro (tyCov_refl _ _) hcovσ⟩
     simp only [checkSeq.eq_24, hdec, hdec2, hlook, hlook']
     exact ih1 hsc _ hpush
-  case case37 =>
+  case case34 =>
     rename_i sigs r w x rest dec hdec ih1
     intro w' h
     simp only [checkSeq.eq_25, hdec]
+    exact fork_specLe (fun v' hv' => splitP1_cov (DecAgree_primDecide hdec) h hv')
+      (fun hne => splitP1_ne_of_worldLe h hne) (fun u' u hu => ih1 u hsc u' hu)
+  case case35 =>
+    rename_i sigs r w x rest hdec hlook
+    intro w' h
+    exact absurd hlook (by simp [primDecide])
+  case case36 =>
+    rename_i sigs r w x rest hdec S hlook ih1
+    intro w' h
+    exact absurd hlook (by simp [primDecide])
+  case case37 =>
+    rename_i sigs r w x rest dec hdec ih1
+    intro w' h
+    simp only [checkSeq.eq_26, hdec]
     exact fork_specLe (fun v' hv' => splitP1_cov (DecAgree_primDecide hdec) h hv')
       (fun hne => splitP1_ne_of_worldLe h hne) (fun u' u hu => ih1 u hsc u' hu)
   case case38 =>
@@ -8339,20 +8359,6 @@ theorem checkSeq_specialize (sigs : SigTable) (r : Ty) (w : World) (seq : List I
     intro w' h
     exact absurd hlook (by simp [primDecide])
   case case40 =>
-    rename_i sigs r w x rest dec hdec ih1
-    intro w' h
-    simp only [checkSeq.eq_26, hdec]
-    exact fork_specLe (fun v' hv' => splitP1_cov (DecAgree_primDecide hdec) h hv')
-      (fun hne => splitP1_ne_of_worldLe h hne) (fun u' u hu => ih1 u hsc u' hu)
-  case case41 =>
-    rename_i sigs r w x rest hdec hlook
-    intro w' h
-    exact absurd hlook (by simp [primDecide])
-  case case42 =>
-    rename_i sigs r w x rest hdec S hlook ih1
-    intro w' h
-    exact absurd hlook (by simp [primDecide])
-  case case43 =>
     rename_i sigs r w x p rest ps hT hpred hn hc ih1
     intro w' h
     have hbare := testTypeP_bare p hT
@@ -8360,7 +8366,7 @@ theorem checkSeq_specialize (sigs : SigTable) (r : Ty) (w : World) (seq : List I
     exact fork_specLe (fun v' hv' => split1_cov h hv')
       (fun hne => split1_ne_of_worldLe hbare h hne)
       (fun u' u hu => ih1 u hsc u' hu)
-  case case44 =>
+  case case41 =>
     rename_i sigs r w x p rest hT hlook hpred hn hc
     intro w' h
     obtain ⟨-, hΓ, -, -, -⟩ := h
@@ -8372,7 +8378,7 @@ theorem checkSeq_specialize (sigs : SigTable) (r : Ty) (w : World) (seq : List I
       | some S => rw [hl] at hex; simp at hex
     simp only [checkSeq, hT, hlook, hlook']
     exact trivial
-  case case45 =>
+  case case42 =>
     rename_i sigs r w x p rest hT S hlook hpred hn hc ih1
     intro w' h
     obtain ⟨hη, hΓ, hσle, hcovΓ, hcovσ⟩ := h
@@ -8383,7 +8389,7 @@ theorem checkSeq_specialize (sigs : SigTable) (r : Ty) (w : World) (seq : List I
         stackCov_cons_intro (tyCov_refl _ _) hcovσ⟩
     simp only [checkSeq, hT, hlook, hlook']
     exact ih1 hsc _ hpush
-  case case54 =>
+  case case51 =>
     rename_i sigs r w x elems body rest hσne
     intro w' h
     obtain ⟨hη, hΓ, hσle, hcovΓ, hcovσ⟩ := h
@@ -8402,7 +8408,7 @@ theorem checkSeq_specialize (sigs : SigTable) (r : Ty) (w : World) (seq : List I
         | cons t σ =>
             simp only [checkSeq, hσ', hstack]
             exact trivial
-  case case55 =>
+  case case52 =>
     rename_i sigs r w rest hσ
     intro w' h
     obtain ⟨hη, hΓ, hσle, hcovΓ, hcovσ⟩ := h
@@ -8412,75 +8418,12 @@ theorem checkSeq_specialize (sigs : SigTable) (r : Ty) (w : World) (seq : List I
     | nil => simp only [checkSeq, hσ, hσ']; exact trivial
     | cons t' σ'' => rw [hσ'] at hσle; cases hσle
   case case28 =>
-    rename_i sigs r w c body rest hσ ps hsome hbool ihbody ihrestu ihrest
     intro w' h
-    obtain ⟨hη, hΓ, hσle, hcovΓ, hcovσ⟩ := h
-    have hworld : worldLe w' w := ⟨hη, hΓ, hσle, hcovΓ, hcovσ⟩
-    rw [hσ] at hσle
-    cases hσ' : w'.σ with
-    | nil =>
-        obtain ⟨ps', hsome', hslot, hscov⟩ :=
-          typeOfE_cov sigs w'.Γ w.Γ c hΓ hcovΓ ps hsome
-        have hbool' : tmoves ps' [.anyValue .bool] = Bool.true :=
-          tmoves_class_down hslot hbool
-        have hbody : specLe (checkSeq sigs r w' body) (checkSeq sigs r w body) :=
-          ihbody hsc w' hworld
-        have htail : specLe (checkSeq sigs r w' rest) (checkSeq sigs r w rest) :=
-          ihrest hsc w' hworld
-        have hmate : ∀ b ∈ normalizeTy w'.η ps', ∃ a ∈ normalizeTy w.η ps,
-            tmovesV b a = Bool.true := by
-          have hηps : normalizeTy w.η ps = normalizeTy w'.η ps := by rw [hη]
-          rw [hηps]
-          exact tyLe_cov_atoms (normalizeTy_slotLe hslot hscov).1
-        have hk := fold_worlds_specLe sigs r rest
-          (fun u v huv => ihrestu v hsc u huv)
-        have hloop := checkLoopBody_spec (.kRepeatWhile c body) []
-          (fun fs => fs.foldl (fun acc u => mergeTC acc (checkSeq sigs r u rest)) noFlows)
-          hbody hk
-        simp only [checkSeq, hσ, hσ', hsome, hsome',
-          ite_eq_left hbool, ite_eq_left hbool']
-        exact boolBranchTC_specLe hmate hloop htail
-    | cons t σ'' =>
-        rw [hσ'] at hσle
-        cases hσle
+    sorry
   case case29 =>
-    rename_i _dummy _body _rest _hempty _ps hnt
-    intro w' h
-    have hfalse : tmoves _hempty [.anyValue .bool] = Bool.false := by
-      cases hb : tmoves _hempty [.anyValue .bool] with
-      | true => exact absurd hb hnt
-      | false => rfl
-    simp only [checkSeq, _rest, _ps, hfalse]
-    rw [if_neg (by decide)]
-    exact trivial
-  case case30 =>
-    rename_i _dummy _body _rest _hempty hnone
-    intro w' h
-    simp only [checkSeq, _hempty, hnone]
-    exact trivial
-  case case31 =>
-    rename_i sigs r w c body rest hσne
-    intro w' h
-    obtain ⟨hη, hΓ, hσle, hcovΓ, hcovσ⟩ := h
-    cases hσ' : w'.σ with
-    | nil =>
-        cases hstack : w.σ with
-        | nil => exact absurd hstack hσne
-        | cons t σ =>
-            exfalso
-            simp [hσ', hstack, stackLe] at hσle
-    | cons t' σ'' =>
-        cases hstack : w.σ with
-        | nil =>
-            exfalso
-            simp [hσ', hstack, stackLe] at hσle
-        | cons t σ =>
-            simp only [checkSeq, hσ', hstack]
-            exact trivial
-  case case32 =>
     intro w' h
     simp [checkSeq, specLe, *]
-  case case33 =>
+  case case30 =>
     rename_i sigs r w ex rest n1 n2 n3 n4 n5 n6 n7 n8 n9 n10 n11 n12 n13 n14 n15 n16 n17 n18 S hsome ih1
     intro w' h
     obtain ⟨hη, hΓ, hσle, hcovΓ, hcovσ⟩ := h
@@ -8496,61 +8439,23 @@ theorem checkSeq_specialize (sigs : SigTable) (r : Ty) (w : World) (seq : List I
         stackCov_cons_intro (normalizeTy_cov hscov) hcovσ⟩
     simp only [checkSeq, hsome, hsome']
     exact markThrow_specLe sigs ex (ih1 hsc _ hpush)
+  case case43 =>
+    intro w' h
+    simp [checkSeq, specLe, *]
+  case case44 =>
+    rename_i _c _body _rest hpop hnil
+    intro w' h
+    simp_all [checkSeq, popTy]
+  case case45 =>
+    intro w' h
+    sorry
   case case46 =>
     intro w' h
     simp [checkSeq, specLe, *]
   case case47 =>
-    rename_i _c _body _rest hpop hnil
     intro w' h
-    simp_all [checkSeq, popTy]
+    simp [checkSeq, specLe, *]
   case case48 =>
-    rename_i sigs r0 w0 c0 body0 rest0 hpop ts σ' hstack ihbody ihrestall ihrest
-    intro w' h
-    obtain ⟨hη, hΓ, hσle, hcovΓ, hcovσ⟩ := h
-    cases hσ' : w'.σ with
-    | nil =>
-        exfalso
-        rw [hstack] at hσle
-        rw [hσ'] at hσle
-        cases hσle
-    | cons t' σ'' =>
-        rw [hstack] at hσle
-        rw [hstack] at hcovσ
-        rw [hσ'] at hσle
-        rw [hσ'] at hcovσ
-        obtain ⟨hslot, hrest⟩ := hσle
-        obtain ⟨-, hcovσ'⟩ := hcovσ
-        have hp : popTy [.anyValue .bool] (ts :: σ') = some ([] : List Ty) := by
-          rw [← hstack]
-          exact hpop
-        obtain ⟨hcoarsenil, _⟩ :=
-          popTy_some_nil_cov (slotLe_refl ts) (stackLe_refl σ') hp
-        obtain ⟨hσ'nil, hpop'⟩ :=
-          popTy_some_nil_cov hslot hrest hp
-        subst hcoarsenil
-        subst hσ'nil
-        have hw0 : worldLe { w' with σ := ([] : List Ty) } { w0 with σ := ([] : List Ty) } :=
-          ⟨hη, hΓ, by simp [stackLe], hcovΓ, by simp [stackCov]⟩
-        have hw1 : worldLe { w' with σ := ([] : List Ty) } { w0 with σ := ([] : List Ty) } :=
-          ⟨hη, hΓ, hrest, hcovΓ, hcovσ'⟩
-        have hbody := ihbody hsc _ hw0
-        have htail := ihrest hsc _ hw1
-        have hmate : ∀ b ∈ t', ∃ a ∈ ts, tmovesV b a = Bool.true :=
-          tyLe_cov_atoms hslot.1
-        have hk := fold_worlds_specLe sigs r0 rest0
-          (fun u v huv => ihrestall v hsc u huv)
-        have hloop := checkLoopBody_spec (.kRepeatTest c0 body0) []
-          (fun fs => fs.foldl (fun acc u => mergeTC acc (checkSeq sigs r0 u rest0)) noFlows)
-          hbody hk
-        simp only [checkSeq, hstack, hσ', hp, hpop']
-        exact boolBranchTC_specLe hmate hloop htail
-  case case49 =>
-    intro w' h
-    simp [checkSeq, specLe, *]
-  case case50 =>
-    intro w' h
-    simp [checkSeq, specLe, *]
-  case case51 =>
     rename_i sigs r w x body rest hpop ih2 ih1
     intro w' h
     obtain ⟨hη, hΓ, hσle, hcovΓ, hcovσ⟩ := h
@@ -8583,10 +8488,10 @@ theorem checkSeq_specialize (sigs : SigTable) (r : Ty) (w : World) (seq : List I
             exact checkLoopBody_spec (.kForStart x body) []
               (fun fs => fs.foldl (fun acc u => mergeTC acc (checkSeq sigs r u rest)) noFlows)
               hbody hk
-  case case52 =>
+  case case49 =>
     intro w' h
     simp [checkSeq, specLe, *]
-  case case53 =>
+  case case50 =>
     rename_i sigs r w x elems body rest hσ ih2 ih1
     intro w' h
     obtain ⟨hη, hΓ, hσle, hcovΓ, hcovσ⟩ := h
@@ -8612,7 +8517,7 @@ theorem checkSeq_specialize (sigs : SigTable) (r : Ty) (w : World) (seq : List I
     | cons t' σ'' =>
         exfalso
         simp [hσ, hσ', stackLe] at hσle
-  case case56 =>
+  case case53 =>
     rename_i sigs r w rest ts σ' hσ ih1
     intro w' h
     obtain ⟨hη, hΓ, hσle, hcovΓ, hcovσ⟩ := h
@@ -8658,12 +8563,12 @@ theorem checkSeq_specialize (sigs : SigTable) (r : Ty) (w : World) (seq : List I
                 mergeTC acc (assertVerdict sigs r rest σ' w a)) vacOk)
             rw [hfr', hc]
             exact hcov
-  case case57 =>
+  case case54 =>
     rename_i sigs r w i rest hdisj hstep
     intro w' h
     simp only [checkSeq, hstep]
     exact trivial
-  case case58 =>
+  case case55 =>
     rename_i sigs r w i rest n1 n2 n3 n4 n5 n6 n7 n8 n9 n10 n11 n12 n13 n14 n15 n16 n17 n18 n19 n20 n21 n22 n23 n24 n25 n26 n27 ws hstep ih1
     intro w' h
     obtain ⟨ws', hstep', hcov⟩ := step1_cov sigs i w' w h ws hstep

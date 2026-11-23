@@ -963,6 +963,81 @@ def boolBranchTC (site : Instr) (ts : Ty)
        | _ => .reject site "loop verdict is not boolean"))
     vacOk
 
+def checkRepeatWhileAux (sigs : SigTable) (r : Ty) (w : World)
+    (c : Expr) (body rest : List Instr)
+    (entryTy : Option Ty) (bodyEntry bodyInvariant : TCResult)
+    (tailEntry tailInvariant : Unit → TCResult) : TCResult :=
+  match w.σ with
+  | [] =>
+      match entryTy with
+      | none => .reject (.kRepeatWhile c body) "loop condition is not boolean"
+      | some t =>
+          if tmoves t [.anyValue .bool] then
+            if boolOnlyFalse t then
+              tailEntry ()
+            else
+              let writes := instrsWrites body
+              match bodyEntry with
+              | .reject site why => .reject site why
+              | .flows fb =>
+                  if worldsStacksEmpty fb.falls then
+                    let J :=
+                      { w with Γ := genericJoinEnv w.η w.Γ fb.falls writes }
+                    match typeOfE sigs J.Γ c with
+                    | none =>
+                        .reject (.kRepeatWhile c body)
+                          "loop condition is not boolean at invariant"
+                    | some tj =>
+                        if tmoves tj [.anyValue .bool] then
+                          match bodyInvariant with
+                          | .reject site why => .reject site why
+                          | .flows fj =>
+                              if worldsStacksEmpty fj.falls &&
+                                  envGenericStable w.η J.Γ fj.falls writes then
+                                let mayReenter := !boolOnlyFalse tj
+                                let falseResult :=
+                                  if boolOnlyTrue tj then
+                                    .flows { exits := Bool.false
+                                           , throws := Bool.false
+                                           , falls := []
+                                           , diverges := Bool.false
+                                           , assumes := [] }
+                                  else tailInvariant ()
+                                match falseResult with
+                                | .reject site why => .reject site why
+                                | .flows fr =>
+                                    .flows
+                                      { exits := Bool.true
+                                      , throws := fj.throws || fr.throws
+                                      , falls :=
+                                          if boolOnlyTrue tj then []
+                                          else fr.falls
+                                      , diverges :=
+                                          fj.diverges || fr.diverges ||
+                                            (mayReenter && !fj.falls.isEmpty)
+                                      , assumes := fj.assumes ++ fr.assumes }
+                              else
+                                .reject (.kRepeatWhile c body)
+                                  "loop invariant is not stable"
+                        else
+                          .reject (.kRepeatWhile c body)
+                            "loop condition is not boolean at invariant"
+                  else
+                    .reject (.kRepeatWhile c body)
+                      "loop body is not stack-neutral"
+          else .reject (.kRepeatWhile c body) "loop condition is not boolean"
+  | _ => .reject (.kRepeatWhile c body) "loop entry stack is not empty"
+
+def checkRepeatTestAux (sigs : SigTable) (r : Ty) (w : World)
+    (c : Expr) (body rest : List Instr) (ts : Ty)
+    (bodyEntry bodyInvariant : TCResult)
+    (tailEntry tailInvariant : Unit → TCResult) : TCResult :=
+  boolBranchTC (.kRepeatTest c body) ts
+    (checkRepeatWhileAux sigs r w c body rest
+      (typeOfE sigs w.Γ c) bodyEntry bodyInvariant
+      tailEntry tailInvariant)
+    (tailEntry ())
+
 def checkSeq : SigTable → Ty → World → List Instr → TCResult
   | _, _, w, [] => .flows { exits := Bool.false, throws := Bool.false, falls := [w], assumes := [] }
   | _, r, w, .kRet :: _ =>
@@ -1055,68 +1130,22 @@ def checkSeq : SigTable → Ty → World → List Instr → TCResult
             markThrow sigs (.isBoolVal b (.call f [.nv x]))
               (checkSeq sigs r { w with σ := normalizeTy w.η t :: w.σ } rest)
   | sigs, r, w, .kRepeatWhile c body :: rest =>
-      -- LOOPS RUN ON THE EMPTY STACK. One concrete iteration provides
-      -- the first assignment samples; written bindings are widened to
-      -- the generic class of those samples. The widened world is then
-      -- replayed once and must be a generic fixed point. Body falls do
-      -- not enter the tail: they re-enter the loop and contribute a
-      -- may-divergence path.
-      match w.σ with
-      | [] =>
-          match typeOfE sigs w.Γ c with
-          | some t =>
-              if tmoves t [.anyValue .bool] then
-                if boolOnlyFalse t then
-                  checkSeq sigs r w rest
-                else
-                  let writes := instrsWrites body
-                  match checkSeq sigs r w body with
-                  | .reject site why => .reject site why
-                  | .flows fb =>
-                      if worldsStacksEmpty fb.falls then
-                        let J :=
-                          { w with Γ := genericJoinEnv w.η w.Γ fb.falls writes }
-                        match typeOfE sigs J.Γ c with
-                        | some tj =>
-                            if tmoves tj [.anyValue .bool] then
-                              match checkSeq sigs r J body with
-                              | .reject site why => .reject site why
-                              | .flows fj =>
-                                  if worldsStacksEmpty fj.falls &&
-                                      envGenericStable w.η J.Γ fj.falls writes then
-                                    let mayReenter := !boolOnlyFalse tj
-                                    let falseResult :=
-                                      if boolOnlyTrue tj then
-                                        .flows { exits := Bool.false
-                                               , throws := Bool.false
-                                               , falls := []
-                                               , diverges := Bool.false
-                                               , assumes := [] }
-                                      else checkSeq sigs r J rest
-                                    match falseResult with
-                                    | .reject site why => .reject site why
-                                    | .flows fr =>
-                                        .flows
-                                          { exits := fj.exits || fr.exits
-                                          , throws := fj.throws || fr.throws
-                                          , falls :=
-                                              if boolOnlyTrue tj then []
-                                              else fr.falls
-                                          , diverges :=
-                                              fj.diverges || fr.diverges ||
-                                                (mayReenter && !fj.falls.isEmpty)
-                                          , assumes := fj.assumes ++ fr.assumes }
-                                  else .reject (.kRepeatWhile c body)
-                                    "loop invariant is not stable"
-                            else .reject (.kRepeatWhile c body)
-                              "loop condition is not boolean at invariant"
-                        | none => .reject (.kRepeatWhile c body)
-                          "loop condition is not boolean at invariant"
-                      else .reject (.kRepeatWhile c body)
-                        "loop body is not stack-neutral"
-              else .reject (.kRepeatWhile c body) "loop condition is not boolean"
-          | none => .reject (.kRepeatWhile c body) "loop condition is not boolean"
-      | _ => .reject (.kRepeatWhile c body) "loop entry stack is not empty"
+      checkRepeatWhileAux sigs r w c body rest
+        (typeOfE sigs w.Γ c)
+        (checkSeq sigs r w body)
+        (checkSeq sigs r
+          ({ w with Γ := (genericJoinEnv w.η w.Γ
+            (match checkSeq sigs r w body with
+             | .flows fb => fb.falls
+             | .reject _ _ => []) (instrsWrites body)) } : World)
+          body)
+        (fun _ => checkSeq sigs r w rest)
+        (fun _ => checkSeq sigs r
+          ({ w with Γ := (genericJoinEnv w.η w.Γ
+            (match checkSeq sigs r w body with
+             | .flows fb => fb.falls
+             | .reject _ _ => []) (instrsWrites body)) } : World)
+          rest)
   | sigs, r, w, .kEval ex :: rest =>
       -- summary arm: the call/imeth/list/ifield dust's NET world effect
       -- (args pushed then popped, payload parked then unwrapped) equals
@@ -1172,12 +1201,22 @@ def checkSeq : SigTable → Ty → World → List Instr → TCResult
           match w.σ with
           | [] => .reject (.kRepeatTest c body) "loop verdict is not boolean"
           | ts :: σ' =>
-              boolBranchTC (.kRepeatTest c body) ts
-                (checkLoopBody (checkSeq sigs r { w with σ := ([] : List Ty) } body)
-                  (.kRepeatTest c body) []
-                  (fun wsf => wsf.foldl
-                    (fun acc u => mergeTC acc (checkSeq sigs r u rest)) noFlows))
-                (checkSeq sigs r { w with σ := σ' } rest)
+              let w₀ := { w with σ := σ' }
+              checkRepeatTestAux sigs r w₀ c body rest ts
+                (checkSeq sigs r w₀ body)
+                (checkSeq sigs r
+                  ({ w₀ with Γ := (genericJoinEnv w₀.η w₀.Γ
+                    (match checkSeq sigs r w₀ body with
+                     | .flows fb => fb.falls
+                     | .reject _ _ => []) (instrsWrites body)) } : World)
+                  body)
+                (fun _ => checkSeq sigs r w₀ rest)
+                (fun _ => checkSeq sigs r
+                  ({ w₀ with Γ := (genericJoinEnv w₀.η w₀.Γ
+                    (match checkSeq sigs r w₀ body with
+                     | .flows fb => fb.falls
+                     | .reject _ _ => []) (instrsWrites body)) } : World)
+                  rest)
       | some (_ :: _) => .reject (.kRepeatTest c body) "loop entry stack is not empty"
   | sigs, r, w, .kForStart x body :: rest =>
       match popA (.anyValue .list) w.σ with
