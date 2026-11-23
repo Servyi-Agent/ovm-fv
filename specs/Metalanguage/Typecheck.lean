@@ -27,7 +27,7 @@ theorem sizeOf_append_le {α : Type} [SizeOf α] :
 
 inductive Ctor where
   | undef | null | bool | num | str | obj (callable : Bool) | list | desc
-  deriving Repr, DecidableEq, BEq
+  deriving Repr, DecidableEq, BEq, ReflBEq, LawfulBEq
 
 def objTags : List Ctor := [.obj Bool.true, .obj Bool.false]
 def Ctor.isObj : Ctor → Bool
@@ -40,7 +40,7 @@ def anyTags : List Ctor := langTags ++ [.list, .desc]
 
 inductive Field where
   | value | writable | getter | setter | enumerable | configurable
-  deriving Repr, DecidableEq, BEq
+  deriving Repr, DecidableEq, BEq, ReflBEq, LawfulBEq
 
 def fData : List Field := [.value, .writable]
 def fAcc : List Field := [.getter, .setter]
@@ -74,7 +74,7 @@ inductive VTy where
   | isValue (v : JSValue)        -- exactly this bare value (singleton)
   | desc (fs : List Field)      -- bare descriptor with exactly this field-set
   | notPresent                   -- the bare binding is absent (optional arg)
-  deriving Repr, BEq
+  deriving Repr, BEq, ReflBEq, LawfulBEq
 
 /-- The classification: bare value vs completion. -/
 def isBareVTy : VTy → Bool
@@ -125,21 +125,54 @@ def normalizeAtom (η : HeapCallableTy) : VTy → VTy
 def normalizeTy (η : HeapCallableTy) : Ty → Ty :=
   fun t => t.map (normalizeAtom η)
 
-def eraseDups {α : Type} [BEq α] : List α → List α
+def eraseDups {α : Type} [BEq α] [LawfulBEq α] : List α → List α
   | [] => []
   | a :: as =>
       let rest := eraseDups as
       if rest.contains a then rest else a :: rest
 
+theorem mem_eraseDups {α : Type} [BEq α] [LawfulBEq α] (a : α) :
+    ∀ as : List α, a ∈ eraseDups as ↔ a ∈ as := by
+  intro as
+  induction as with
+  | nil => simp [eraseDups]
+  | cons b bs ih =>
+      simp only [eraseDups]
+      split
+      · next hcontains =>
+          constructor
+          · intro h
+            rw [ih] at h
+            exact List.mem_cons.mpr (Or.inr h)
+          · intro h
+            rcases List.mem_cons.mp h with rfl | h
+            · exact List.contains_iff_mem.mp hcontains
+            · exact (ih).mpr h
+      · next hcontains =>
+          constructor
+          · intro h
+            rcases List.mem_cons.mp h with rfl | h
+            · exact List.mem_cons.mpr (Or.inl rfl)
+            · exact List.mem_cons.mpr (Or.inr ((ih).mp h))
+          · intro h
+            rcases List.mem_cons.mp h with rfl | h
+            · exact List.mem_cons.mpr (Or.inl rfl)
+            · exact List.mem_cons.mpr (Or.inr ((ih).mpr h))
+
 def generalizeAtom (η : HeapCallableTy) : VTy → VTy
-  | .isValue (.obj loc) => .anyValue (.obj (η loc))
+  | .isValue (.obj _) => .anyValue (.obj Bool.false)
   | .isValue v => .anyValue (tagOf v)
   | .desc _ => .anyValue .desc
   | .complN p => .complN (generalizeAtom η p)
   | a => a
 
+def generalizeAtoms (η : HeapCallableTy) (a : VTy) : Ty :=
+  match a with
+  | .isValue (.obj _) | .anyValue (.obj _) => objT
+  | _ => [generalizeAtom η a]
+
 def generalizeTy (η : HeapCallableTy) : Ty → Ty :=
-  fun t => eraseDups (t.map (generalizeAtom η))
+  fun t => eraseDups (t.flatMap (generalizeAtoms η))
 
 /- ## Subtyping: a finite grid on atoms; forall-exists on flat types -/
 

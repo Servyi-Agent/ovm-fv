@@ -254,9 +254,10 @@ def heapTyOk (heap : Heap) (ht : HeapTy) (n : Nat) : Prop :=
   ∀ l < n, ∀ o, heap l = some o →
     objConsistent (ht l).kind o = Bool.true
       ∧ (ht l).callable = kindCallable o.kind
-      ∧ ∀ p, o.proto = some p →
+      ∧ (∀ p, o.proto = some p →
           p < n ∧ (heap p).isSome = Bool.true
-            ∧ (ht p).kind = .ordinary
+            ∧ (ht p).kind = .ordinary)
+      ∧ ∀ d ∈ o.props.map Prod.snd, descriptorComplete d
 
 def heapCallabilityOk (heap : Heap) (η : HeapCallableTy) : Prop :=
   ∀ l, η l = runtimeCallable heap l
@@ -12093,8 +12094,9 @@ theorem splitP1_pPred_data_machine (b : Bool) {Γ : TyEnv} {x : «String»}
             dataPredResult, normalizeAtom]
           have hd := fieldsOf_data_eq value writable enumerable configurable
             getter setter
-          simp [List.flatMap, splitP1At, hd]
-          cases value <;> cases writable <;> cases b <;> simp
+          simp [fieldsOf, fData, fAcc, List.flatMap, splitP1At, hd]
+          cases value <;> cases writable <;> cases getter <;> cases setter <;>
+            cases enumerable <;> cases configurable <;> cases b <;> simp
 
 theorem SR_kTestVar_pPred_data (sigs : SigTable) (reg : AOReg) (η : HeapCallableTy)
     (b : Bool) (x : «String») (s : FM) (r : Ty) :
@@ -12191,8 +12193,8 @@ theorem splitP1_pPred_acc_machine (b : Bool) {Γ : TyEnv} {x : «String»}
             accPredResult, normalizeAtom]
           have hd := fieldsOf_acc_eq value writable enumerable configurable
             getter setter
-          simp [List.flatMap, splitP1At, hd]
-          cases getter <;> cases setter <;> cases b <;> simp
+          simp [fieldsOf, fData, fAcc, List.flatMap, splitP1At, hd]
+          cases getter <;> cases setter <;> cases enumerable <;> cases configurable <;> cases b <;> simp
 
 theorem SR_kTestVar_pPred_acc (sigs : SigTable) (reg : AOReg) (η : HeapCallableTy)
     (b : Bool) (x : «String») (s : FM) (r : Ty) :
