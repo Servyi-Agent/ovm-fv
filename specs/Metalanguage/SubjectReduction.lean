@@ -5416,6 +5416,21 @@ theorem checkSeq_kIte_false {sigs : SigTable} {r : Ty} {W : World} {t e : List I
       = mergeTC vacOk (checkSeq sigs r { W with σ := σ' } (e ++ rest)) := by
   simp only [checkSeq, hσ, List.foldl]
 
+theorem checkSeq_kRepeatTest_false {sigs : SigTable} {r : Ty} {W : World}
+    {c : Expr} {body rest : List Instr} {σ' : List Ty}
+    (hσ : W.σ = [.isValue (.boolean Bool.false)] :: σ')
+    (hnil : σ' = []) :
+    checkSeq sigs r W (.kRepeatTest c body :: rest)
+      = mergeTC vacOk (checkSeq sigs r { W with σ := σ' } rest) := by
+  simp only [checkSeq, hσ, popTy, tmoves, tmovesV,
+    List.all_cons, List.all_nil, List.any_cons, List.any_nil, reduceIte,
+    checkRepeatTestAux, boolBranchTC, List.foldl_cons, List.foldl_nil,
+    mergeTC, vacOk]
+  simp only [tagOf, Bool.or_false, Bool.true_and, reduceIte]
+  simp
+  subst hnil
+  rfl
+
 /-- sr_kIte: one machine step through a decided verdict commutes
     with the checker's dispatch. -/
 theorem sr_kIte_loud {sigs : SigTable} {η : HeapCallableTy} {t e : List Instr}
@@ -5525,6 +5540,92 @@ theorem frameTyped_kIte {sigs : SigTable} {η : HeapCallableTy} {b : Bool}
               have hbr' : fbr' = fbr := TCResult.flows.inj (hfb.symm.trans hres)
               subst hbr'
               exact htr
+
+set_option maxHeartbeats 1000000 in
+/-- kRepeatWhile transfer for a condition handled by the generic
+    expression-summary arm: the checker's fused loop summary is exactly
+    the macro-expansion `kEval c; kRepeatTest c body`. -/
+theorem frameTyped_kRepeatWhile_generic
+    {sigs : SigTable} {η : HeapCallableTy} {r : Ty}
+    {c : Expr} {body rest : List Instr}
+    {env : Env} {eval : List JSValue} {ret : «String»}
+    (h1 : ∀ x, c = Expr.varNotPresent x → False)
+    (h2 : ∀ x, c = (Expr.nv x).isObject → False)
+    (h3 : ∀ x, c = (Expr.nv x).isNotObject → False)
+    (h4 : ∀ x, c = (Expr.nv x).isNotUndefined → False)
+    (h5 : ∀ x, c = (Expr.nv x).isU → False)
+    (h6 : ∀ x, c = (Expr.nv x).hasCall → False)
+    (h7 : ∀ x, c = (Expr.nv x).hasCtor → False)
+    (h8 : ∀ x, c = (Expr.nv x).isNull → False)
+    (h9 : ∀ x, c = (Expr.nv x).isNullOrUnd → False)
+    (h10 : ∀ x, c = Expr.isBoolVal true (Expr.nv x) → False)
+    (h11 : ∀ x, c = Expr.isBoolVal false (Expr.nv x) → False)
+    (h12 : ∀ s x, c = Expr.isStrVal s (Expr.nv x) → False)
+    (h13 : ∀ x, c = (Expr.nv x).isNormalC → False)
+    (h14 : ∀ x, c = (Expr.nv x).isThrowC → False)
+    (h15 : ∀ x, c = (Expr.nv x).isCompletion → False)
+    (h16 : ∀ ty x, c = Expr.isType ty (Expr.nv x) → False)
+    (h17 : ∀ nm x, c = Expr.hasField nm (Expr.nv x) → False)
+    (h18 : ∀ b f x, c = Expr.isBoolVal b (Expr.call f [Expr.nv x]) → False)
+    (h : frameTyped sigs η r ⟨.kRepeatWhile c body :: rest, env, eval, ret⟩) :
+    frameTyped sigs η r ⟨.kEval c :: .kRepeatTest c body :: rest, env, eval, ret⟩ := by
+  simp only [frameTyped, frameWorld, Fr.stmts, Fr.env, Fr.eval] at h ⊢
+  simp only [checkSeq.eq_22] at h
+  simp only [checkSeq.eq_23 sigs r
+      ({ η := η, Γ := envTyOf η env,
+         σ := List.map (fun v => [normalizeAtom η (typeOfV v)]) eval } : World) c
+      (.kRepeatTest c body :: rest)
+      h1 h2 h3 h4 h5 h6 h7 h8 h9 h10 h11 h12 h13 h14 h15 h16 h17 h18]
+  cases hev : eval with
+  | nil =>
+      subst hev
+      simp only [List.map_nil] at h ⊢
+      simp only [checkRepeatWhileAux] at h
+      cases ht : typeOfE sigs (envTyOf η env) c with
+      | none => simp [ht, markThrow] at h
+      | some t =>
+          simp only [ht] at h ⊢
+          cases hb : tmoves (normalizeTy η t) [.anyValue .bool] with
+          | false => simp [hb, markThrow] at h
+          | true =>
+              rw [hb] at h
+              simp only [checkSeq.eq_28] at ⊢
+              simp only [popTy, hb, reduceIte, List.cons_append, List.nil_append,
+                checkRepeatTestAux, ht]
+              exact h
+  | cons v eval' =>
+      subst hev
+      simp only [List.map_cons, checkRepeatWhileAux] at h
+      exact h.elim
+
+/-- kRepeatTest transfer on the concrete false verdict: the loop
+    leaves the tail exactly as the machine does. -/
+theorem frameTyped_kRepeatTest_false {sigs : SigTable} {η : HeapCallableTy}
+    {r : Ty} {c : Expr} {body rest : List Instr}
+    {env : Env} {eval' : List JSValue} {ret : «String»}
+    (h : frameTyped sigs η r ⟨.kRepeatTest c body :: rest, env,
+      .boolean Bool.false :: eval', ret⟩) :
+    frameTyped sigs η r ⟨rest, env, eval', ret⟩ := by
+  simp only [frameTyped, frameWorld, Fr.stmts, Fr.env, Fr.eval, List.map_cons] at h ⊢
+  cases hev : eval' with
+  | nil =>
+      subst hev
+      simp only [normalizeAtom, typeOfV, List.map_nil] at h ⊢
+      rw [checkSeq_kRepeatTest_false rfl rfl] at h
+      cases hm : mergeTC vacOk
+          (checkSeq sigs r { η := η, Γ := envTyOf η env, σ := [] } rest) with
+      | reject s w => rw [hm] at h; exact h.elim
+      | flows fb =>
+          obtain ⟨fbr, hres, hterm⟩ := merge_vacOk_terminal hm
+            (by rw [hm] at h; exact h)
+          rw [hres]
+          exact hterm
+  | cons v eval'' =>
+      rw [hev] at h
+      simp only [checkSeq, List.map_cons, popTy, tmoves, tmovesV,
+        List.all_cons, List.all_nil, List.any_cons, List.any_nil, tagOf,
+        normalizeAtom, typeOfV, Bool.or_false, Bool.true_and] at h
+      simp at h
 
 /-- The loud kIte states: the type machine rejects an empty or
     non-boolean verdict slot. -/
