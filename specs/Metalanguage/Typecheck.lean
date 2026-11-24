@@ -463,7 +463,13 @@ def typeOfE (sigs : SigTable) (Γ : TyEnv) : Expr → Option Ty
       else
         if (typeOfE sigs Γ x).isSome then some (mopPayload nm) else none
   | .listE es =>
-      if (typesOf sigs Γ es).isSome then some [.anyValue .list] else none
+      -- list elements must be completion-free: the list's slot
+      -- type forgets them, so a completion element could never be
+      -- abstracted by the element world of a for-each (kMkList's
+      -- popTyN anyT enforces the same on the expansion path)
+      if (typesOf sigs Γ es).isSome &&
+          ((typesOf sigs Γ es).getD []).all (fun t => tmoves t anyT) then
+        some [.anyValue .list] else none
   | .isObject x =>
       -- refinement: an obj-only receiver makes the test decidable
       -- (IteratorClose's step-1 assert discharges)
@@ -721,8 +727,8 @@ def instrWrites : Instr → List «String»
   | .kIte t e => eraseDups (instrsWrites t ++ instrsWrites e)
   | .kRepeatWhile _ body => instrsWrites body
   | .kRepeatTest _ body => instrsWrites body
-  | .kForStart _ body => instrsWrites body
-  | .kForBody _ _ body => instrsWrites body
+  | .kForStart x body => x :: instrsWrites body
+  | .kForBody x _ body => x :: instrsWrites body
   | _ => []
 termination_by i => sizeOf i
 end
@@ -917,6 +923,37 @@ def splitP1 (x : «String») (dec : VTy → Bool) (w : World) : Worlds :=
   match tyLookup w.Γ x with
   | none => []
   | some S => S.flatMap (splitP1At x dec w)
+
+/-- The fused-predicate split with undecided atoms: an any-desc atom
+    can refine to a value on which the descriptor predicates decide
+    either way (a data or an accessor descriptor), so it spawns BOTH
+    verdict worlds instead of guessing. Forking both verdicts for the
+    other predicates on any-desc is merely conservative: they genuinely
+    decide false there. -/
+def splitP1Und (x : «String») (b : Bool) (dec : VTy → Bool)
+    (w : World) : Worlds :=
+  match tyLookup w.Γ x with
+  | none => []
+  | some S => S.flatMap (fun a =>
+      match a with
+      | .anyValue .desc =>
+          [{ w with Γ := (x, [a]) :: w.Γ, σ := [.isValue (.boolean b)] :: w.σ },
+           { w with Γ := (x, [a]) :: w.Γ, σ := [.isValue (.boolean !b)] :: w.σ }]
+      | _ => splitP1At x (fun t => dec t == b) w a)
+
+/-- The element binding of one for-each iteration: the value's own
+    (normalized) type, except that data/accessor descriptors widen to
+    the any-desc class (their predicate verdicts are ambiguous and
+    must be forked, not guessed) and completion elements reject (no
+    class abstracts them — the same policy as list construction). -/
+def forElemTy (η : HeapCallableTy) (v : JSValue) : Option Ty :=
+  match normalizeAtom η (typeOfV v) with
+  | .desc fs =>
+      if fs.any (fun fld => fData.contains fld)
+          || fs.any (fun fld => fAcc.contains fld) then
+        some [.anyValue .desc] else some [.desc fs]
+  | .complN _ | .complT => none
+  | a => some [a]
 
 /- Loop join: every falls-world must come back to a REFINEMENT of
     the loop-entry stack with no parked completion (neutrality). -/
@@ -1205,7 +1242,7 @@ def checkSeq : SigTable → Ty → World → List Instr → TCResult
       -- FUSED variable test: the Γ-correlated split site
       match p with
       | .pPred f b =>
-          -- the machine's kTestVar pushes (b == verdict); the split's
+          -- the machine's kTestVar pushes (p(env x) == b); the split's
           -- verdicts must be B-ADJUSTED to stay machine-aligned (an
           -- `is false` guard refines the SURVIVING branch to the
           -- predicate's true atoms - e.g. IsCallable(func) is false,
@@ -1213,7 +1250,7 @@ def checkSeq : SigTable → Ty → World → List Instr → TCResult
           match predDecide w.η f with
           | some dec =>
               forkTC (.kTestVar x p)
-                (splitP1 x (fun a => dec a == b) w)
+                (splitP1Und x b dec w)
                 (fun u => checkSeq sigs r u rest)
           | none =>
               match tyLookup w.Γ x with
@@ -1265,19 +1302,57 @@ def checkSeq : SigTable → Ty → World → List Instr → TCResult
                   rest)
       | some (_ :: _) => .reject (.kRepeatTest c body) "loop entry stack is not empty"
   | sigs, r, w, .kForStart x body :: rest =>
+      -- per VERDICT ATOM of the popped list slot: an exact singleton
+      -- list forks one world per element (the loop variable typed
+      -- exactly, the empty one being only the zero-iteration world);
+      -- the any-list class spawns the zero world plus one element
+      -- world with the variable at the bare top; anything else is a
+      -- non-list and rejects.
       match popA (.anyValue .list) w.σ with
       | none => .reject (.kForStart x body) "for-each over a non-list"
       | some [] =>
-          checkLoopBody (checkSeq sigs r
-            { w with Γ := (x, langT) :: w.Γ, σ := [] } body) (.kForStart x body)
-            [] (fun wsf => wsf.foldl (fun acc u => mergeTC acc (checkSeq sigs r u rest)) noFlows)
+          match w.σ with
+          | t :: _ =>
+              let w₀ := { w with σ := [] }
+              t.foldl (fun accA a => mergeTC accA
+                (match a with
+                 | .isValue (.listV vs) =>
+                     match vs with
+                     | [] => checkSeq sigs r w₀ rest
+                     | _ => vs.foldl (fun accE v => mergeTC accE
+                         (match forElemTy w₀.η v with
+                          | none => .reject (.kForStart x body) "for-each over a list with a completion element"
+                          | some tx => checkLoopBody (checkSeq sigs r
+                              { w₀ with Γ := (x, tx) :: w₀.Γ } body)
+                            (.kForStart x body) []
+                            (fun wsf => wsf.foldl (fun accF u =>
+                               mergeTC accF (checkSeq sigs r u rest)) noFlows))) noFlows
+                 | .anyValue .list =>
+                     mergeTC (checkSeq sigs r w₀ rest)
+                       (checkLoopBody (checkSeq sigs r
+                           { w₀ with Γ := (x, anyT) :: w₀.Γ } body)
+                         (.kForStart x body) []
+                         (fun wsf => wsf.foldl (fun accE u =>
+                            mergeTC accE (checkSeq sigs r u rest)) noFlows))
+                 | _ => .reject (.kForStart x body) "for-each over a non-list")) vacOk
+          | [] => .reject (.kForStart x body) "for-each over a non-list"
       | some (_ :: _) => .reject (.kForStart x body) "loop entry stack is not empty"
-  | sigs, r, w, .kForBody x _ body :: rest =>
+  | sigs, r, w, .kForBody x elems body :: rest =>
+      -- the re-arm: the remaining elements are CONCRETE values, so the
+      -- element worlds are exact; no elements left means the loop is
+      -- finished and the tail runs with the variable as it stands.
       match w.σ with
       | [] =>
-          checkLoopBody (checkSeq sigs r { w with Γ := (x, langT) :: w.Γ } body)
-            (.kForBody x [] body)
-            [] (fun wsf => wsf.foldl (fun acc u => mergeTC acc (checkSeq sigs r u rest)) noFlows)
+          match elems with
+          | [] => checkSeq sigs r w rest
+          | _ => elems.foldl (fun accE v => mergeTC accE
+              (match forElemTy w.η v with
+               | none => .reject (.kForBody x [] body) "for-each over a list with a completion element"
+               | some tx => checkLoopBody (checkSeq sigs r
+                   { w with Γ := (x, tx) :: w.Γ } body)
+                 (.kForBody x [] body) []
+                 (fun wsf => wsf.foldl (fun accF u =>
+                    mergeTC accF (checkSeq sigs r u rest)) noFlows))) noFlows
       | _ => .reject (.kForBody x [] body) "loop entry stack is not empty"
   | sigs, r, w, .kAssert :: rest =>
       -- assert, per VERDICT ATOM. The machine continues ONLY on
