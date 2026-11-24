@@ -176,7 +176,10 @@ def corpusSigs : SigTable := [
   ("IteratorStep",        ([objT], [.normal (objT ++ [.isValue (.boolean Bool.true)]), .throw])),
   ("IteratorClose",       ([objT, complTy [.normal langT, .throw]], [.normal langT, .throw])),
   -- registry-backed (7.3.2): the one-step [[Get]] wrapper
-  ("Get",                 ([objT, langT], [.normal langT, .throw])),
+  -- propertyKey widened to the bare top: a for-each over a list
+  -- binds its loop variable at anyT (unknown elements), and OTP
+  -- forwards that variable straight into Get.
+  ("Get",                 ([objT, anyT], [.normal langT, .throw])),
   -- deviation: the spec's « argList » is written bare (list
   -- brackets are Lean identifier delimiters) in IteratorNext but
   -- compiled as a list literal in ToPrimitive — the third Call
