@@ -1156,6 +1156,24 @@ def slotsLe : List Ty → List Ty → Prop
 theorem slotLe_refl (t : Ty) : slotLe t t :=
   ⟨tmoves_refl t, fun h => h⟩
 
+theorem slotsLe_mem {ts' ts : List Ty} (h : slotsLe ts' ts) :
+    ∀ t' ∈ ts', ∃ t ∈ ts, tyLe t' t := by
+  induction ts generalizing ts' with
+  | nil =>
+      cases ts' with
+      | nil => intro t' ht'; cases ht'
+      | cons a as => simp [slotsLe] at h
+  | cons t ts ih =>
+      cases ts' with
+      | nil => simp [slotsLe] at h
+      | cons t'' ts'' =>
+          obtain ⟨hslot, hrest⟩ := h
+          intro t' ht'
+          rcases List.mem_cons.mp ht' with rfl | hm
+          · exact ⟨t, List.mem_cons.mpr (Or.inl rfl), hslot.1⟩
+          · obtain ⟨u, hu, hle⟩ := ih hrest t' hm
+            exact ⟨u, List.mem_cons.mpr (Or.inr hu), hle⟩
+
 theorem slotLe_tyLe {t' t : Ty} (h : slotLe t' t) : tyLe t' t := h.1
 
 /-- The atom-cover form of tyLe. -/
@@ -2299,17 +2317,20 @@ theorem typeOfE_cov (sigs : SigTable) (Γ' Γ : TyEnv) {η : HeapCallableTy} :
       simp only [typeOfE] at ht ⊢
       exact ht
 
-  | case6 =>
+    | case6 =>
+      rename_i vs hall
       intro _ _ t ht
       refine ⟨t, ?_, slotLe_refl t, tyCov_refl _ t⟩
-      simp only [typeOfE] at ht ⊢
+      simp only [typeOfE, hall, if_pos rfl] at ht ⊢
       exact ht
 
   | case7 =>
+      rename_i vs hball
       intro _ _ t ht
-      refine ⟨t, ?_, slotLe_refl t, tyCov_refl _ t⟩
-      simp only [typeOfE] at ht ⊢
-      exact ht
+      have hnone : typeOfE sigs Γ (Expr.const (JSValue.listV vs)) = none := by
+        rw [typeOfE, if_neg hball]
+      rw [hnone] at ht
+      exact absurd ht (by simp)
 
   | case8 =>
       intro _ _ t ht
@@ -2330,6 +2351,18 @@ theorem typeOfE_cov (sigs : SigTable) (Γ' Γ : TyEnv) {η : HeapCallableTy} :
       exact ht
 
   | case11 =>
+      intro _ _ t ht
+      refine ⟨t, ?_, slotLe_refl t, tyCov_refl _ t⟩
+      simp only [typeOfE] at ht ⊢
+      exact ht
+
+  | case12 =>
+      intro _ _ t ht
+      refine ⟨t, ?_, slotLe_refl t, tyCov_refl _ t⟩
+      simp only [typeOfE] at ht ⊢
+      exact ht
+
+  | case13 =>
       rename_i e ps hps ih
       intro hle hcov t ht
       simp only [typeOfE, hps] at ht
@@ -2346,13 +2379,13 @@ theorem typeOfE_cov (sigs : SigTable) (Γ' Γ : TyEnv) {η : HeapCallableTy} :
             (Option.some.inj (ht2.symm.trans ht')) ▸ htcov'
           exact ⟨t', by simp only [typeOfE, hps', ht'], hslot', htcov''⟩
 
-  | case12 =>
+  | case14 =>
       rename_i e hnone ih
       intro _ _ t ht
       simp only [typeOfE, hnone] at ht
       exact absurd ht (by simp)
 
-  | case13 =>
+  | case15 =>
       rename_i e ps hps ih
       intro hle hcov t ht
       simp only [typeOfE, hps] at ht
@@ -2369,13 +2402,13 @@ theorem typeOfE_cov (sigs : SigTable) (Γ' Γ : TyEnv) {η : HeapCallableTy} :
             simp only [typeOfE, hps', hb', Option.map_some],
             complN_map_cov hbs', hbcov⟩
 
-  | case14 =>
+  | case16 =>
       rename_i e hnone ih
       intro _ _ t ht
       simp only [typeOfE, hnone] at ht
       exact absurd ht (by simp)
 
-  | case15 =>
+  | case17 =>
       rename_i f as ps snd hsig ts hts hguard ih1
       intro hle hcov t ht
       simp only [typeOfE, hsig, hts] at ht
@@ -2399,27 +2432,27 @@ theorem typeOfE_cov (sigs : SigTable) (Γ' Γ : TyEnv) {η : HeapCallableTy} :
         simp only [typeOfE, hsig, hts', if_pos hguard'], slotLe_refl _,
         tyCov_refl _ _⟩
 
-  | case16 =>
+  | case18 =>
       rename_i f as ps snd hsig ts hts hguard ih1
       intro _ _ t ht
       rw [show typeOfE sigs Γ (.call f as) = none from by
         simp only [typeOfE, hsig, hts, if_neg hguard]] at ht
       exact absurd ht (by simp)
 
-  | case17 =>
+  | case19 =>
       rename_i f as ps snd hsig hnone ih1
       intro _ _ t ht
       rw [show typeOfE sigs Γ (.call f as) = none from by
         simp only [typeOfE, hsig, hnone]] at ht
       exact absurd ht (by simp)
 
-  | case18 =>
+  | case20 =>
       rename_i f as hsig
       intro _ _ t ht
       simp only [typeOfE, hsig] at ht
       exact absurd ht (by simp)
 
-  | case19 =>
+  | case21 =>
       rename_i nm recv args k harity hguard ih2 ih1
       intro hle hcov t ht
       rw [Bool.and_eq_true] at hguard
@@ -2464,20 +2497,20 @@ theorem typeOfE_cov (sigs : SigTable) (Γ' Γ : TyEnv) {η : HeapCallableTy} :
             simp only [typeOfE, harity, htr', htr'move, h1, h3',
               Bool.true_and, Bool.and_true, if_true]]
 
-  | case20 =>
+  | case22 =>
       rename_i nm recv args k harity hguard ih2 ih1
       intro _ _ t ht
       simp only [typeOfE, harity] at ht
       rw [if_neg hguard] at ht
       exact absurd ht (by simp)
 
-  | case21 =>
+  | case23 =>
       rename_i nm recv args hnone
       intro _ _ t ht
       simp only [typeOfE, hnone] at ht
       exact absurd ht (by simp)
 
-  | case22 =>
+  | case24 =>
       rename_i nm x hval ps1 hx1 ps hpay ih
       intro hle hcov t ht
       simp only [typeOfE, if_pos hval, hx1, hpay] at ht
@@ -2491,7 +2524,7 @@ theorem typeOfE_cov (sigs : SigTable) (Γ' Γ : TyEnv) {η : HeapCallableTy} :
       exact ⟨ps', by
         simp only [typeOfE, if_pos hval, hx1', hpay'], hslot', hpc''⟩
 
-  | case23 =>
+  | case25 =>
       rename_i nm x hval ps1 hx1 hpnone ih
       intro hle hcov t ht
       simp only [typeOfE, if_pos hval, hx1, hpnone] at ht
@@ -2548,13 +2581,13 @@ theorem typeOfE_cov (sigs : SigTable) (Γ' Γ : TyEnv) {η : HeapCallableTy} :
                   exact hmopne hnil
           · exact tyCov_append (payloadsOf_tyCov hps1cov) (tyCov_refl _ _)
 
-  | case24 =>
+  | case26 =>
       rename_i nm x hval hnone ih
       intro _ _ t ht
       simp only [typeOfE, if_pos hval, hnone] at ht
       exact absurd ht (by simp)
 
-  | case25 =>
+  | case27 =>
       rename_i nm x hnv hsame ih
       intro hle hcov t ht
       simp only [typeOfE, if_neg hnv, if_pos hsame] at ht
@@ -2570,37 +2603,47 @@ theorem typeOfE_cov (sigs : SigTable) (Γ' Γ : TyEnv) {η : HeapCallableTy} :
       exact ⟨mopPayload nm, by
         simp only [typeOfE, if_neg hnv, if_pos hx'], slotLe_refl _, tyCov_refl _ _⟩
 
-  | case26 =>
+  | case28 =>
       rename_i nm x hnv hnone ih
       intro _ _ t ht
       simp only [typeOfE, if_neg hnv] at ht
       rw [if_neg hnone] at ht
       exact absurd ht (by simp)
 
-  | case27 =>
+  | case29 =>
       rename_i es hsame ih1
       intro hle hcov t ht
       simp only [typeOfE, if_pos hsame] at ht
       simp only [Option.some.injEq] at ht
       subst ht
-      have hx' : (typesOf sigs Γ' es).isSome = Bool.true := by
+      obtain ⟨ts, hts⟩ : ∃ ts, typesOf sigs Γ es = some ts := by
         cases hc : typesOf sigs Γ es with
         | none => rw [hc] at hsame; simp at hsame
-        | some sv =>
-            obtain ⟨sv', hsv', _⟩ := ih1 hle hcov sv hc
-            rw [hsv']
-            rfl
-      exact ⟨[.anyValue .list], by
-        simp only [typeOfE, if_pos hx'], slotLe_refl _, tyCov_refl _ _⟩
+        | some ts => exact ⟨ts, rfl⟩
+      have hall : ts.all (fun t => tmoves t anyT) = Bool.true := by
+        have := (Bool.and_eq_true_iff.mp hsame).2
+        simpa [hts] using this
+      obtain ⟨ts', hts', hslots, -⟩ := ih1 hle hcov ts hts
+      have hissome' : (typesOf sigs Γ' es).isSome = Bool.true := by
+        rw [hts']; rfl
+      have hall' : ts'.all (fun t => tmoves t anyT) = Bool.true := by
+        rw [List.all_eq_true]
+        intro t' ht'
+        obtain ⟨t, htm, hle'⟩ := slotsLe_mem hslots t' ht'
+        rw [List.all_eq_true] at hall
+        exact tmoves_trans hle' (hall t htm)
+      refine ⟨[.anyValue .list], ?_, slotLe_refl _, tyCov_refl _ _⟩
+      simp only [typeOfE, hts']
+      exact if_pos (Bool.and_eq_true_iff.mpr ⟨rfl, hall'⟩)
 
-  | case28 =>
+  | case30 =>
       rename_i es hnone ih1
       intro _ _ t ht
       simp only [typeOfE] at ht
       rw [if_neg hnone] at ht
       exact absurd ht (by simp)
 
-  | case29 =>
+  | case31 =>
       rename_i x ps hx hobj ih
       intro hle hcov t ht
       simp only [typeOfE, hx, if_pos hobj] at ht
@@ -2613,7 +2656,7 @@ theorem typeOfE_cov (sigs : SigTable) (Γ' Γ : TyEnv) {η : HeapCallableTy} :
       rw [if_pos (show tmoves ps' objT = Bool.true
         from tmoves_trans hslot.1 hobj)]
 
-  | case30 =>
+  | case32 =>
       rename_i x ps hx hnobj hf ih
       exfalso
       rw [Bool.and_eq_true] at hf
@@ -2630,7 +2673,7 @@ theorem typeOfE_cov (sigs : SigTable) (Γ' Γ : TyEnv) {η : HeapCallableTy} :
           | _ => simp_all)
         hnil) hnobj
 
-  | case31 =>
+  | case33 =>
       rename_i x ps hx hnobj hnf ih
       intro hle hcov t ht
       simp only [typeOfE, hx, if_neg hnobj, if_neg hnf] at ht
@@ -2654,33 +2697,10 @@ theorem typeOfE_cov (sigs : SigTable) (Γ' Γ : TyEnv) {η : HeapCallableTy} :
           simp only [typeOfE, hx']
           rw [if_neg h1, if_neg h2]
 
-  | case32 =>
-      rename_i x hnone ih
-      intro _ _ t ht
-      simp only [typeOfE, hnone] at ht
-      exact absurd ht (by simp)
-
-  | case33 =>
-      rename_i x hsame ih
-      intro hle hcov t ht
-      simp only [typeOfE, if_pos hsame] at ht
-      simp only [Option.some.injEq] at ht
-      subst ht
-      have hx' : (typeOfE sigs Γ' x).isSome = Bool.true := by
-        cases hc : typeOfE sigs Γ x with
-        | none => rw [hc] at hsame; simp at hsame
-        | some sv =>
-            obtain ⟨sv', hsv', _⟩ := ih hle hcov sv hc
-            rw [hsv']
-            rfl
-      exact ⟨[.anyValue .bool], by
-        simp only [typeOfE, if_pos hx'], slotLe_refl _, tyCov_refl _ _⟩
-
   | case34 =>
       rename_i x hnone ih
       intro _ _ t ht
-      simp only [typeOfE] at ht
-      rw [if_neg hnone] at ht
+      simp only [typeOfE, hnone] at ht
       exact absurd ht (by simp)
 
   | case35 =>
@@ -2776,52 +2796,6 @@ theorem typeOfE_cov (sigs : SigTable) (Γ' Γ : TyEnv) {η : HeapCallableTy} :
       exact absurd ht (by simp)
 
   | case43 =>
-      rename_i b x hsame ih
-      intro hle hcov t ht
-      simp only [typeOfE, if_pos hsame] at ht
-      simp only [Option.some.injEq] at ht
-      subst ht
-      have hx' : (typeOfE sigs Γ' x).isSome = Bool.true := by
-        cases hc : typeOfE sigs Γ x with
-        | none => rw [hc] at hsame; simp at hsame
-        | some sv =>
-            obtain ⟨sv', hsv', _⟩ := ih hle hcov sv hc
-            rw [hsv']
-            rfl
-      exact ⟨[.anyValue .bool], by
-        simp only [typeOfE, if_pos hx'], slotLe_refl _, tyCov_refl _ _⟩
-
-  | case44 =>
-      rename_i b x hnone ih
-      intro _ _ t ht
-      simp only [typeOfE] at ht
-      rw [if_neg hnone] at ht
-      exact absurd ht (by simp)
-
-  | case45 =>
-      rename_i s x hsame ih
-      intro hle hcov t ht
-      simp only [typeOfE, if_pos hsame] at ht
-      simp only [Option.some.injEq] at ht
-      subst ht
-      have hx' : (typeOfE sigs Γ' x).isSome = Bool.true := by
-        cases hc : typeOfE sigs Γ x with
-        | none => rw [hc] at hsame; simp at hsame
-        | some sv =>
-            obtain ⟨sv', hsv', _⟩ := ih hle hcov sv hc
-            rw [hsv']
-            rfl
-      exact ⟨[.anyValue .bool], by
-        simp only [typeOfE, if_pos hx'], slotLe_refl _, tyCov_refl _ _⟩
-
-  | case46 =>
-      rename_i s x hnone ih
-      intro _ _ t ht
-      simp only [typeOfE] at ht
-      rw [if_neg hnone] at ht
-      exact absurd ht (by simp)
-
-  | case47 =>
       rename_i x hsame ih
       intro hle hcov t ht
       simp only [typeOfE, if_pos hsame] at ht
@@ -2837,8 +2811,54 @@ theorem typeOfE_cov (sigs : SigTable) (Γ' Γ : TyEnv) {η : HeapCallableTy} :
       exact ⟨[.anyValue .bool], by
         simp only [typeOfE, if_pos hx'], slotLe_refl _, tyCov_refl _ _⟩
 
-  | case48 =>
+  | case44 =>
       rename_i x hnone ih
+      intro _ _ t ht
+      simp only [typeOfE] at ht
+      rw [if_neg hnone] at ht
+      exact absurd ht (by simp)
+
+  | case45 =>
+      rename_i b x hsame ih
+      intro hle hcov t ht
+      simp only [typeOfE, if_pos hsame] at ht
+      simp only [Option.some.injEq] at ht
+      subst ht
+      have hx' : (typeOfE sigs Γ' x).isSome = Bool.true := by
+        cases hc : typeOfE sigs Γ x with
+        | none => rw [hc] at hsame; simp at hsame
+        | some sv =>
+            obtain ⟨sv', hsv', _⟩ := ih hle hcov sv hc
+            rw [hsv']
+            rfl
+      exact ⟨[.anyValue .bool], by
+        simp only [typeOfE, if_pos hx'], slotLe_refl _, tyCov_refl _ _⟩
+
+  | case46 =>
+      rename_i b x hnone ih
+      intro _ _ t ht
+      simp only [typeOfE] at ht
+      rw [if_neg hnone] at ht
+      exact absurd ht (by simp)
+
+  | case47 =>
+      rename_i s x hsame ih
+      intro hle hcov t ht
+      simp only [typeOfE, if_pos hsame] at ht
+      simp only [Option.some.injEq] at ht
+      subst ht
+      have hx' : (typeOfE sigs Γ' x).isSome = Bool.true := by
+        cases hc : typeOfE sigs Γ x with
+        | none => rw [hc] at hsame; simp at hsame
+        | some sv =>
+            obtain ⟨sv', hsv', _⟩ := ih hle hcov sv hc
+            rw [hsv']
+            rfl
+      exact ⟨[.anyValue .bool], by
+        simp only [typeOfE, if_pos hx'], slotLe_refl _, tyCov_refl _ _⟩
+
+  | case48 =>
+      rename_i s x hnone ih
       intro _ _ t ht
       simp only [typeOfE] at ht
       rw [if_neg hnone] at ht
@@ -2868,7 +2888,7 @@ theorem typeOfE_cov (sigs : SigTable) (Γ' Γ : TyEnv) {η : HeapCallableTy} :
       exact absurd ht (by simp)
 
   | case51 =>
-      rename_i ty x hsame ih
+      rename_i x hsame ih
       intro hle hcov t ht
       simp only [typeOfE, if_pos hsame] at ht
       simp only [Option.some.injEq] at ht
@@ -2884,14 +2904,14 @@ theorem typeOfE_cov (sigs : SigTable) (Γ' Γ : TyEnv) {η : HeapCallableTy} :
         simp only [typeOfE, if_pos hx'], slotLe_refl _, tyCov_refl _ _⟩
 
   | case52 =>
-      rename_i ty x hnone ih
+      rename_i x hnone ih
       intro _ _ t ht
       simp only [typeOfE] at ht
       rw [if_neg hnone] at ht
       exact absurd ht (by simp)
 
   | case53 =>
-      rename_i name x hsame ih
+      rename_i ty x hsame ih
       intro hle hcov t ht
       simp only [typeOfE, if_pos hsame] at ht
       simp only [Option.some.injEq] at ht
@@ -2907,6 +2927,29 @@ theorem typeOfE_cov (sigs : SigTable) (Γ' Γ : TyEnv) {η : HeapCallableTy} :
         simp only [typeOfE, if_pos hx'], slotLe_refl _, tyCov_refl _ _⟩
 
   | case54 =>
+      rename_i ty x hnone ih
+      intro _ _ t ht
+      simp only [typeOfE] at ht
+      rw [if_neg hnone] at ht
+      exact absurd ht (by simp)
+
+  | case55 =>
+      rename_i name x hsame ih
+      intro hle hcov t ht
+      simp only [typeOfE, if_pos hsame] at ht
+      simp only [Option.some.injEq] at ht
+      subst ht
+      have hx' : (typeOfE sigs Γ' x).isSome = Bool.true := by
+        cases hc : typeOfE sigs Γ x with
+        | none => rw [hc] at hsame; simp at hsame
+        | some sv =>
+            obtain ⟨sv', hsv', _⟩ := ih hle hcov sv hc
+            rw [hsv']
+            rfl
+      exact ⟨[.anyValue .bool], by
+        simp only [typeOfE, if_pos hx'], slotLe_refl _, tyCov_refl _ _⟩
+
+  | case56 =>
       rename_i name x hnone ih
       intro _ _ t ht
       simp only [typeOfE] at ht
@@ -3914,12 +3957,25 @@ theorem markThrow_const (sigs : SigTable) (v : JSValue) (res : TCResult) :
   | reject site why => rfl
 
 theorem checkSeq_kEval_const {sigs : SigTable} {r : Ty} {W : World} {v : JSValue}
-    {rest : List Instr} :
+    {rest : List Instr}
+    (hok : ∀ vs, v = JSValue.listV vs →
+      (vs.all (fun w => tmoves [typeOfV w] anyT)) = Bool.true) :
     checkSeq sigs r W (.kEval (.const v) :: rest)
       = checkSeq sigs r
           { W with σ := [normalizeAtom W.η (typeOfV v)] :: W.σ } rest := by
-  simp only [checkSeq, typeOfE, typeOfV, normalizeTy, List.map,
-    markThrow_const]
+  cases v with
+  | listV vs =>
+      have hball := hok vs rfl
+      have h1 : typeOfE sigs W.Γ (Expr.const (JSValue.listV vs))
+          = some [VTy.isValue (JSValue.listV vs)] := by
+        rw [typeOfE, if_pos hball]; rfl
+      simp only [checkSeq, h1, List.map, normalizeAtom, normalizeTy, typeOfV,
+        markThrow_const, List.cons_append, List.nil_append]
+  | undefined | null | boolean _ | number _ | str _ | obj _ | descV _
+  | compl _ _ =>
+      simp only [checkSeq, typeOfE, typeOfV, List.map, normalizeAtom,
+        normalizeTy, markThrow_const, List.cons_append, List.nil_append]
+
 
 
 /-- kEval of a nat literal: push the singleton number. -/
@@ -4914,6 +4970,92 @@ theorem boolBranchTC_exits {site : Instr} {ts : Ty}
   subst hinj
   simp [exitsT, vacOk]
 
+/- ## Generic fold/exit helpers for the verdict- and element-folds. -/
+
+/-- A fold from a flows seed with exits = true keeps exits = true
+    (merges OR it; a rejection absorbs and contradicts flows). -/
+theorem foldl_exits_true {α : Type} (J : α → TCResult) :
+    ∀ (l : List α) (seed : TCResult) (fb : Flows),
+      (∃ f0, seed = TCResult.flows f0 ∧ f0.exits = Bool.true) →
+      l.foldl (fun acc a => mergeTC acc (J a)) seed = TCResult.flows fb →
+        fb.exits = Bool.true := by
+  intro l
+  induction l with
+  | nil =>
+      intro seed fb hseed h
+      obtain ⟨f0, hf0, hex⟩ := hseed
+      rw [hf0] at h
+      have hinj := TCResult.flows.inj h
+      subst hinj
+      exact hex
+  | cons a as ih =>
+      intro seed fb hseed h
+      obtain ⟨f0, hf0, hex⟩ := hseed
+      rw [hf0] at h
+      have hstep : (a :: as).foldl (fun acc b => mergeTC acc (J b)) (TCResult.flows f0)
+          = as.foldl (fun acc b => mergeTC acc (J b)) (mergeTC (TCResult.flows f0) (J a)) := rfl
+      rw [hstep] at h
+      cases hJ : J a with
+      | reject s w =>
+          rw [hJ] at h
+          have hrej : mergeTC (TCResult.flows f0) (TCResult.reject s w)
+              = TCResult.reject s w := rfl
+          rw [hrej, fold_reject_absorb J s w as] at h
+          exact TCResult.noConfusion h
+      | flows fb2 =>
+          rw [hJ] at h
+          refine ih _ fb ⟨{ exits := f0.exits || fb2.exits,
+                             throws := f0.throws || fb2.throws,
+                             falls := f0.falls ++ fb2.falls,
+                             diverges := f0.diverges || fb2.diverges,
+                             assumes := f0.assumes ++ fb2.assumes }, rfl, ?_⟩ h
+          show (f0.exits || fb2.exits) = Bool.true
+          rw [hex]; simp
+
+/-- A nonempty fold whose elements' empty-falls results exit: the
+    final falls = [] forces every element's falls = [], so some
+    element contributes exits = true. -/
+theorem foldl_exits_gen {α : Type} (J : α → TCResult)
+    (hJ : ∀ (a : α) (fb : Flows), J a = TCResult.flows fb →
+      fb.falls = [] → fb.exits = Bool.true) :
+    ∀ (l : List α) (seed : TCResult) (fb : Flows),
+      (∃ f0, seed = TCResult.flows f0) → l ≠ [] →
+      l.foldl (fun acc a => mergeTC acc (J a)) seed = TCResult.flows fb →
+        fb.falls = [] → fb.exits = Bool.true := by
+  intro l
+  induction l with
+  | nil => intro seed fb _ hne; exact absurd rfl hne
+  | cons a as ih =>
+      intro seed fb hseed _ h hf
+      obtain ⟨f0, hf0⟩ := hseed
+      rw [hf0] at h
+      have hstep : (a :: as).foldl (fun acc b => mergeTC acc (J b)) (TCResult.flows f0)
+          = as.foldl (fun acc b => mergeTC acc (J b)) (mergeTC (TCResult.flows f0) (J a)) := rfl
+      rw [hstep] at h
+      cases hJ' : J a with
+      | reject s w =>
+          rw [hJ'] at h
+          have hrej : mergeTC (TCResult.flows f0) (TCResult.reject s w)
+              = TCResult.reject s w := rfl
+          rw [hrej, fold_reject_absorb J s w as] at h
+          exact TCResult.noConfusion h
+      | flows fb2 =>
+          rw [hJ'] at h
+          cases has : as with
+          | nil =>
+              rw [has, List.foldl_nil] at h
+              have hinj := TCResult.flows.inj h
+              subst hinj
+              have hf2 : fb2.falls = [] := by
+                cases hf0 : f0.falls with
+                | nil => rw [hf0] at hf; exact hf
+                | cons v vs => rw [hf0] at hf; simp at hf
+              have hex2 := hJ a fb2 hJ' hf2
+              show (f0.exits || fb2.exits) = Bool.true
+              rw [hex2]; simp
+          | cons b bs =>
+              refine ih _ fb ⟨_, rfl⟩ (by rw [has]; exact List.cons_ne_nil _ _) h hf
+
 /- ## THE NO-SILENT-FALLS INVARIANT: every checkSeq result that is
     flows with empty falls EXITED (re-derived on the flat
     completion universe). -/
@@ -5180,91 +5322,89 @@ theorem checkSeq_exits (sigs : SigTable) (r : Ty) (w : World) (seq : List Instr)
     simp only [checkSeq, hpop] at h
     exact TCResult.noConfusion h
   case case48 =>
-    rename_i sigs r w x body rest hpop ih2 ih1
     intro fb h hf
-    simp only [checkSeq, hpop] at h
-    cases hbody : checkSeq sigs r { η := w.η, Γ := (x, langT) :: w.Γ, σ := []} body with
-    | reject s w' =>
-        rw [hbody] at h
-        simp only [checkLoopBody] at h
-        exact TCResult.noConfusion h
-    | flows fb₁ =>
-        rw [hbody] at h
-        simp only [checkLoopBody] at h
-        split at h
-        · cases hkf : fb₁.falls.foldl
-              (fun acc u => mergeTC acc (checkSeq sigs r u rest)) noFlows with
-          | reject s w' =>
-              rw [hkf] at h
-              dsimp only at h
-              exact TCResult.noConfusion h
-          | flows fr =>
-              rw [hkf] at h
-              dsimp only at h
-              have hinj := TCResult.flows.inj h
-              subst hinj
-              match hfalls : fb₁.falls with
-              | [] =>
-                  rw [ih2 fb₁ hbody hfalls]
-                  simp
-              | u :: us =>
-                  have hfr : fr.falls = [] := hf
-                  rw [fold_noFlows_exits ih1 _ fr hkf hfr (by simp [hfalls])]
-                  simp
-        · exact TCResult.noConfusion h
+    simp_all only [checkSeq]
+    exact foldl_exits_true _ _ vacOk fb ⟨_, rfl, rfl⟩ h
   case case49 =>
-    rename_i sigs r w x body rest hd htl hpop
     intro fb h hf
-    simp only [checkSeq, hpop] at h
+    simp_all only [checkSeq]
     exact TCResult.noConfusion h
   case case50 =>
-    rename_i sigs r w x elems body rest hempty ih2 ih1
     intro fb h hf
-    simp only [checkSeq, hempty] at h
-    cases hbody : checkSeq sigs r { η := w.η, Γ := (x, langT) :: w.Γ, σ := [] } body with
-    | reject s w' =>
-        rw [hbody] at h
-        simp only [checkLoopBody] at h
-        exact TCResult.noConfusion h
-    | flows fb₁ =>
-        rw [hbody] at h
-        simp only [checkLoopBody] at h
-        split at h
-        · cases hkf : fb₁.falls.foldl
-              (fun acc u => mergeTC acc (checkSeq sigs r u rest)) noFlows with
-          | reject s w' =>
-              rw [hkf] at h
-              dsimp only at h
-              exact TCResult.noConfusion h
-          | flows fr =>
-              rw [hkf] at h
-              dsimp only at h
-              have hinj := TCResult.flows.inj h
-              subst hinj
-              rw [← hempty] at hbody
-              match hfalls : fb₁.falls with
-              | [] =>
-                  rw [ih2 fb₁ hbody hfalls]
-                  simp
-              | u :: us =>
-                  have hfr : fr.falls = [] := hf
-                  rw [fold_noFlows_exits ih1 _ fr hkf hfr (by simp [hfalls])]
-                  simp
-        · exact TCResult.noConfusion h
+    simp_all only [checkSeq]
+    exact TCResult.noConfusion h
   case case51 =>
-    rename_i sigs r w x elems body rest hne
+    rename_i sigs r w x body rest hσ ih1
+    intro fb h hf
+    simp only [checkSeq, hσ] at h
+    exact ih1 fb h hf
+  case case52 =>
+    rename_i sigs r w x elems body rest hσ hne ih1 ih2 ih3
+    intro fb h hf
+    cases hcons : elems with
+    | nil => exact (hne hcons).elim
+    | cons v0 vs0 =>
+        simp only [checkSeq, hσ] at h
+        cases hrest : checkSeq sigs r w rest with
+        | reject s w' =>
+            rw [hrest] at h
+            exact TCResult.noConfusion h
+        | flows fr1 =>
+            rw [hrest] at h
+            cases hbody : checkSeq sigs r { w with Γ := (x, anyT) :: w.Γ, σ := [] } body with
+            | reject s w' =>
+                rw [hbody] at h
+                simp only [checkLoopBody] at h
+                exact TCResult.noConfusion h
+            | flows fb1 =>
+                rw [hbody] at h
+                simp only [checkLoopBody] at h
+                split at h
+                · cases hkf : fb1.falls.foldl
+                      (fun acc u => mergeTC acc (checkSeq sigs r u rest)) noFlows with
+                  | reject s w' =>
+                      rw [hkf] at h
+                      dsimp only at h
+                      exact TCResult.noConfusion h
+                  | flows fr =>
+                      rw [hkf] at h
+                      dsimp only at h
+                      have hinj := TCResult.flows.inj h
+                      subst hinj
+                      match hfalls : fb1.falls with
+                      | [] =>
+                          have hfr1 : fr1.falls = [] := by
+                            have hall := hf
+                            cases hr1 : fr1.falls with
+                            | nil => rfl
+                            | cons a as => rw [hr1] at hall; simp at hall
+                          have hex1 := ih1 fr1 hrest hfr1
+                          show (fr1.exits || (fb1.exits || fr.exits)) = Bool.true
+                          rw [hex1]; simp
+                      | u :: us =>
+                          have hfr : fr.falls = [] := by
+                            have hall := hf
+                            cases hrr : fr.falls with
+                            | nil => rfl
+                            | cons a as => rw [hrr] at hall; simp at hall
+                          rw [fold_noFlows_exits ih3 _ fr hkf hfr (by simp [hfalls])]
+                          simp
+                · exact TCResult.noConfusion h
+  case case53 =>
+    rename_i sigs r w x elems body rest hσne
     intro fb h hf
     cases hσ : w.σ with
-    | nil => exact absurd hσ hne
+    | nil => exact (hσne hσ).elim
     | cons a as =>
-        simp only [checkSeq, hσ] at h
-        exact TCResult.noConfusion h
-  case case52 =>
+        cases elems with
+        | nil => simp only [checkSeq, hσ] at h; exact TCResult.noConfusion h
+        | cons v vs => simp only [checkSeq, hσ] at h; exact TCResult.noConfusion h
+  case case54 =>
     rename_i sigs r w rest hσ
     intro fb h hf
     simp only [checkSeq, hσ] at h
     exact TCResult.noConfusion h
-  case case53 =>
+  case case55 =>
     rename_i sigs r w rest ts σ' hσ ih1
     intro fb h hf
     simp only [checkSeq, hσ] at h
@@ -5273,12 +5413,12 @@ theorem checkSeq_exits (sigs : SigTable) (r : Ty) (w : World) (seq : List Instr)
     have hinj := TCResult.flows.inj h
     subst hinj
     rfl
-  case case54 =>
+  case case56 =>
     rename_i sigs r w i rest hdisj hstep
     intro fb h hf
     simp only [checkSeq, hstep] at h
     exact TCResult.noConfusion h
-  case case55 =>
+  case case57 =>
     rename_i sigs r w i rest hdisj ws' hstep ih1
     intro fb h hf
     simp only [checkSeq, hstep] at h
@@ -5416,6 +5556,21 @@ theorem checkSeq_kIte_false {sigs : SigTable} {r : Ty} {W : World} {t e : List I
       = mergeTC vacOk (checkSeq sigs r { W with σ := σ' } (e ++ rest)) := by
   simp only [checkSeq, hσ, List.foldl]
 
+theorem checkSeq_kRepeatTest_false {sigs : SigTable} {r : Ty} {W : World}
+    {c : Expr} {body rest : List Instr} {σ' : List Ty}
+    (hσ : W.σ = [.isValue (.boolean Bool.false)] :: σ')
+    (hnil : σ' = []) :
+    checkSeq sigs r W (.kRepeatTest c body :: rest)
+      = mergeTC vacOk (checkSeq sigs r { W with σ := σ' } rest) := by
+  simp only [checkSeq, hσ, popTy, tmoves, tmovesV,
+    List.all_cons, List.all_nil, List.any_cons, List.any_nil, reduceIte,
+    checkRepeatTestAux, boolBranchTC, List.foldl_cons, List.foldl_nil,
+    mergeTC, vacOk]
+  simp only [tagOf, Bool.or_false, Bool.true_and, reduceIte]
+  simp
+  subst hnil
+  rfl
+
 /-- sr_kIte: one machine step through a decided verdict commutes
     with the checker's dispatch. -/
 theorem sr_kIte_loud {sigs : SigTable} {η : HeapCallableTy} {t e : List Instr}
@@ -5426,8 +5581,7 @@ theorem sr_kIte_loud {sigs : SigTable} {η : HeapCallableTy} {t e : List Instr}
   rw [frameChecks] at hchk
   simp only [frameWorld, List.map_cons] at hchk
   have hrej : checkSeq sigs (sigRetTy sigs ret)
-      { η := η, Γ := envTyOf η env,
-        σ := [normalizeAtom η (typeOfV v)]
+      { η := η, Γ := envTyOf η env, σ := [normalizeAtom η (typeOfV v)]
           :: eval.map (fun v => [normalizeAtom η (typeOfV v)])} (.kIte t e :: rest)
       = TCResult.reject (.kIte t e) "kIte: verdict is not boolean" := by
     cases v with
@@ -5479,16 +5633,14 @@ theorem frameTyped_kIte {sigs : SigTable} {η : HeapCallableTy} {b : Bool}
       rw [checkSeq_kIte_true rfl] at h
       rw [if_pos rfl]
       cases hres : checkSeq sigs r
-          { η := η, Γ := envTyOf η env,
-            σ := eval.map (fun v => [normalizeAtom η (typeOfV v)]) } (t ++ rest) with
+          { η := η, Γ := envTyOf η env, σ := eval.map (fun v => [normalizeAtom η (typeOfV v)]) } (t ++ rest) with
       | reject s w =>
           have hrej : mergeTC vacOk (TCResult.reject s w) = TCResult.reject s w := rfl
           rw [hres, hrej] at h
           exact h.elim
       | flows fbr =>
           cases hm : mergeTC vacOk (checkSeq sigs r
-              { η := η, Γ := envTyOf η env,
-                σ := eval.map (fun v => [normalizeAtom η (typeOfV v)]) } (t ++ rest)) with
+              { η := η, Γ := envTyOf η env, σ := eval.map (fun v => [normalizeAtom η (typeOfV v)]) } (t ++ rest)) with
           | reject s w =>
               rw [hm] at h
               exact h.elim
@@ -5506,16 +5658,14 @@ theorem frameTyped_kIte {sigs : SigTable} {η : HeapCallableTy} {b : Bool}
       rw [checkSeq_kIte_false rfl] at h
       rw [if_neg (by decide)]
       cases hres : checkSeq sigs r
-          { η := η, Γ := envTyOf η env,
-            σ := eval.map (fun v => [normalizeAtom η (typeOfV v)]) } (e ++ rest) with
+          { η := η, Γ := envTyOf η env, σ := eval.map (fun v => [normalizeAtom η (typeOfV v)]) } (e ++ rest) with
       | reject s w =>
           have hrej : mergeTC vacOk (TCResult.reject s w) = TCResult.reject s w := rfl
           rw [hres, hrej] at h
           exact h.elim
       | flows fbr =>
           cases hm : mergeTC vacOk (checkSeq sigs r
-              { η := η, Γ := envTyOf η env,
-                σ := eval.map (fun v => [normalizeAtom η (typeOfV v)]) } (e ++ rest)) with
+              { η := η, Γ := envTyOf η env, σ := eval.map (fun v => [normalizeAtom η (typeOfV v)]) } (e ++ rest)) with
           | reject s w =>
               rw [hm] at h
               exact h.elim
@@ -5525,6 +5675,91 @@ theorem frameTyped_kIte {sigs : SigTable} {η : HeapCallableTy} {b : Bool}
               have hbr' : fbr' = fbr := TCResult.flows.inj (hfb.symm.trans hres)
               subst hbr'
               exact htr
+
+set_option maxHeartbeats 1000000 in
+/-- kRepeatWhile transfer for a condition handled by the generic
+    expression-summary arm: the checker's fused loop summary is exactly
+    the macro-expansion `kEval c; kRepeatTest c body`. -/
+theorem frameTyped_kRepeatWhile_generic
+    {sigs : SigTable} {η : HeapCallableTy} {r : Ty}
+    {c : Expr} {body rest : List Instr}
+    {env : Env} {eval : List JSValue} {ret : «String»}
+    (h1 : ∀ x, c = Expr.varNotPresent x → False)
+    (h2 : ∀ x, c = (Expr.nv x).isObject → False)
+    (h3 : ∀ x, c = (Expr.nv x).isNotObject → False)
+    (h4 : ∀ x, c = (Expr.nv x).isNotUndefined → False)
+    (h5 : ∀ x, c = (Expr.nv x).isU → False)
+    (h6 : ∀ x, c = (Expr.nv x).hasCall → False)
+    (h7 : ∀ x, c = (Expr.nv x).hasCtor → False)
+    (h8 : ∀ x, c = (Expr.nv x).isNull → False)
+    (h9 : ∀ x, c = (Expr.nv x).isNullOrUnd → False)
+    (h10 : ∀ x, c = Expr.isBoolVal true (Expr.nv x) → False)
+    (h11 : ∀ x, c = Expr.isBoolVal false (Expr.nv x) → False)
+    (h12 : ∀ s x, c = Expr.isStrVal s (Expr.nv x) → False)
+    (h13 : ∀ x, c = (Expr.nv x).isNormalC → False)
+    (h14 : ∀ x, c = (Expr.nv x).isThrowC → False)
+    (h15 : ∀ x, c = (Expr.nv x).isCompletion → False)
+    (h16 : ∀ ty x, c = Expr.isType ty (Expr.nv x) → False)
+    (h17 : ∀ nm x, c = Expr.hasField nm (Expr.nv x) → False)
+    (h18 : ∀ b f x, c = Expr.isBoolVal b (Expr.call f [Expr.nv x]) → False)
+    (h : frameTyped sigs η r ⟨.kRepeatWhile c body :: rest, env, eval, ret⟩) :
+    frameTyped sigs η r ⟨.kEval c :: .kRepeatTest c body :: rest, env, eval, ret⟩ := by
+  simp only [frameTyped, frameWorld, Fr.stmts, Fr.env, Fr.eval] at h ⊢
+  simp only [checkSeq.eq_22] at h
+  simp only [checkSeq.eq_23 sigs r
+      ({ η := η, Γ := envTyOf η env, σ := List.map (fun v => [normalizeAtom η (typeOfV v)]) eval } : World) c
+      (.kRepeatTest c body :: rest)
+      h1 h2 h3 h4 h5 h6 h7 h8 h9 h10 h11 h12 h13 h14 h15 h16 h17 h18]
+  cases hev : eval with
+  | nil =>
+      subst hev
+      simp only [List.map_nil] at h ⊢
+      simp only [checkRepeatWhileAux] at h
+      cases ht : typeOfE sigs (envTyOf η env) c with
+      | none => simp [ht, markThrow] at h
+      | some t =>
+          simp only [ht] at h ⊢
+          cases hb : tmoves (normalizeTy η t) [.anyValue .bool] with
+          | false => simp [hb, markThrow] at h
+          | true =>
+              rw [hb] at h
+              simp only [checkSeq.eq_28] at ⊢
+              simp only [popTy, hb, reduceIte, List.cons_append, List.nil_append,
+                checkRepeatTestAux, ht]
+              exact h
+  | cons v eval' =>
+      subst hev
+      simp only [List.map_cons, checkRepeatWhileAux] at h
+      exact h.elim
+
+/-- kRepeatTest transfer on the concrete false verdict: the loop
+    leaves the tail exactly as the machine does. -/
+theorem frameTyped_kRepeatTest_false {sigs : SigTable} {η : HeapCallableTy}
+    {r : Ty} {c : Expr} {body rest : List Instr}
+    {env : Env} {eval' : List JSValue} {ret : «String»}
+    (h : frameTyped sigs η r ⟨.kRepeatTest c body :: rest, env,
+      .boolean Bool.false :: eval', ret⟩) :
+    frameTyped sigs η r ⟨rest, env, eval', ret⟩ := by
+  simp only [frameTyped, frameWorld, Fr.stmts, Fr.env, Fr.eval, List.map_cons] at h ⊢
+  cases hev : eval' with
+  | nil =>
+      subst hev
+      simp only [normalizeAtom, typeOfV, List.map_nil] at h ⊢
+      rw [checkSeq_kRepeatTest_false rfl rfl] at h
+      cases hm : mergeTC vacOk
+          (checkSeq sigs r { η := η, Γ := envTyOf η env, σ := [] } rest) with
+      | reject s w => rw [hm] at h; exact h.elim
+      | flows fb =>
+          obtain ⟨fbr, hres, hterm⟩ := merge_vacOk_terminal hm
+            (by rw [hm] at h; exact h)
+          rw [hres]
+          exact hterm
+  | cons v eval'' =>
+      rw [hev] at h
+      simp only [checkSeq, List.map_cons, popTy, tmoves, tmovesV,
+        List.all_cons, List.all_nil, List.any_cons, List.any_nil, tagOf,
+        normalizeAtom, typeOfV, Bool.or_false, Bool.true_and] at h
+      simp at h
 
 /-- The loud kIte states: the type machine rejects an empty or
     non-boolean verdict slot. -/
@@ -5594,7 +5829,18 @@ theorem frameTyped_kEval_const {sigs : SigTable} {η : HeapCallableTy} {v : JSVa
     (h : frameTyped sigs η r ⟨.kEval (.const v) :: rest, env, eval, ret⟩) :
     frameTyped sigs η r ⟨rest, env, v :: eval, ret⟩ := by
   simp only [frameTyped, frameWorld, Fr.stmts, Fr.env, Fr.eval, List.map_cons] at h ⊢
-  rw [checkSeq_kEval_const] at h
+  have hok : ∀ vs, v = JSValue.listV vs →
+      (vs.all (fun w => tmoves [typeOfV w] anyT)) = Bool.true := by
+    intro vs hvs
+    subst hvs
+    cases hbb : (vs.all (fun w => tmoves [typeOfV w] anyT)) with
+    | true => rfl
+    | false =>
+        have hn : typeOfE sigs (envTyOf η env)
+            (Expr.const (JSValue.listV vs)) = none := by
+          rw [typeOfE, if_neg (by rw [hbb]; simp)]
+        simp only [checkSeq, hn] at h
+  rw [checkSeq_kEval_const hok] at h
   exact h
 
 /- ## Proof layer XVIII: THE SR_arm PREDICATE and the arm theorems
@@ -5634,8 +5880,7 @@ def withHead (h : Instr) (m : FM) : FM :=
 def frameOkUnder (sigs : SigTable) (η : HeapCallableTy)
     (callee : «String») (f : Fr) : Prop :=
   match checkSeq sigs (sigRetTy sigs f.ret)
-    { η := η, Γ := envTyOf η f.env,
-      σ := complTy (sigCompls sigs callee)
+    { η := η, Γ := envTyOf η f.env, σ := complTy (sigCompls sigs callee)
           :: f.eval.map (fun v => [normalizeAtom η (typeOfV v)]) }
     f.stmts with
   | .flows fb => terminal fb = Bool.true
@@ -6636,13 +6881,11 @@ theorem frameOkUnder_elim {sigs : SigTable} {η : HeapCallableTy} {n : «String�
     {f : Fr}
     (h : frameOkUnder sigs η n f) :
     ∃ fb, checkSeq sigs (sigRetTy sigs f.ret)
-      { η := η, Γ := envTyOf η f.env,
-        σ := complTy (sigCompls sigs n)
+      { η := η, Γ := envTyOf η f.env, σ := complTy (sigCompls sigs n)
             :: f.eval.map (fun v => [normalizeAtom η (typeOfV v)]) }
       f.stmts = TCResult.flows fb ∧ terminal fb = Bool.true := by
   cases hch : checkSeq sigs (sigRetTy sigs f.ret)
-      { η := η, Γ := envTyOf η f.env,
-        σ := complTy (sigCompls sigs n)
+      { η := η, Γ := envTyOf η f.env, σ := complTy (sigCompls sigs n)
             :: f.eval.map (fun v => [normalizeAtom η (typeOfV v)]) }
       f.stmts with
   | flows fb => exact ⟨fb, rfl, by rw [frameOkUnder, hch] at h; exact h⟩
@@ -7024,10 +7267,8 @@ theorem splitP1_cov {x : «String»} {dec : VTy → Bool} {w' w : World}
           have mk_le : ∀ {a' a : VTy} (hac : atomCov w'.η a' a)
               (hdd : dec a' = dec a),
               worldLe
-                { w' with Γ := (x, [a']) :: w'.Γ,
-                            σ := [.isValue (.boolean (dec a'))] :: w'.σ }
-                { w with Γ := (x, [a]) :: w.Γ,
-                           σ := [.isValue (.boolean (dec a))] :: w.σ } := by
+                { w' with Γ := (x, [a']) :: w'.Γ, σ := [.isValue (.boolean (dec a'))] :: w'.σ }
+                { w with Γ := (x, [a]) :: w.Γ, σ := [.isValue (.boolean (dec a))] :: w.σ } := by
             intro a' a hac hdd
             rw [hdd]
             exact ⟨hη, envLe_cons hΓ
@@ -7043,8 +7284,7 @@ theorem splitP1_cov {x : «String»} {dec : VTy → Bool} {w' w : World}
           simp only [splitP1, hl, List.mem_flatMap, splitP1At,
             List.mem_singleton] at hv'a' ⊢
           subst hv'a'
-          refine ⟨{ w with Γ := (x, [a]) :: w.Γ,
-                                 σ := [.isValue (.boolean (dec a))] :: w.σ },
+          refine ⟨{ w with Γ := (x, [a]) :: w.Γ, σ := [.isValue (.boolean (dec a))] :: w.σ },
             ⟨a, ha, rfl⟩, ?_⟩
           exact mk_le hac hdd
 
@@ -7222,6 +7462,150 @@ theorem split1_ne_of_worldLe {x : «String»} {T : Ty} {w' w : World}
         | none => rw [hlook] at ht'; cases ht'
         | some U => rw [hlook] at ht'; simp_all
       exact split1_ne_of_bare hbare hl' hS'ne
+
+/-- Coverage for the undecided-predicate fork: an any-desc atom spawns
+    both verdicts on BOTH sides, so every refined world (whatever its
+    verdict bit) is covered by the coarse world with the same bit. -/
+theorem splitP1Und_cov {x : «String»} {b : Bool} {dec : VTy → Bool}
+    {w' w : World} {v' : World} (hdec : DecAgree w.η dec) (h : worldLe w' w)
+    (hv' : v' ∈ splitP1Und x b dec w') :
+    ∃ v ∈ splitP1Und x b dec w, worldLe v' v := by
+  obtain ⟨hη, hΓ, hσ, hcovΓ, hcovσ⟩ := h
+  rw [← hη] at hdec
+  cases hl' : tyLookup w'.Γ x with
+  | none => rw [splitP1Und, hl'] at hv'; cases hv'
+  | some S' =>
+      cases hl : tyLookup w.Γ x with
+      | none =>
+          have hsome := hΓ.1 x
+          rw [hl', hl] at hsome
+          exact absurd hsome (by simp)
+      | some S =>
+          have hcovA : ∀ a' ∈ S', ∃ a ∈ S, atomCov w'.η a' a := by
+            intro a' ha'
+            obtain ⟨t, ht, htc⟩ := hcovΓ x S' (by rw [hl'])
+            rw [hl] at ht
+            have hSe : t = S := by simpa using ht.symm
+            rw [hSe] at htc
+            exact htc a' ha'
+          have mkworldLe : ∀ (a' a : VTy) (hac : atomCov w'.η a' a) (c : Bool),
+              worldLe
+                { w' with Γ := (x, [a']) :: w'.Γ, σ := [.isValue (.boolean c)] :: w'.σ }
+                { w with Γ := (x, [a]) :: w.Γ, σ := [.isValue (.boolean c)] :: w.σ } := by
+            intro a' a hac c
+            exact ⟨hη, envLe_cons hΓ
+              ⟨by simp [tyLe, tmoves, atomCov_tmoves hac],
+                fun _ => List.cons_ne_nil _ _⟩,
+              ⟨⟨tmoves_refl _, fun h => h⟩, hσ⟩,
+              envCov_cons hcovΓ (atomCov_single hac),
+              stackCov_cons_intro (tyCov_refl _ _) hcovσ⟩
+          have hdescCover : ∀ {a' a : VTy}, a' = VTy.anyValue Ctor.desc →
+              atomCov w'.η a' a → a = VTy.anyValue Ctor.desc := by
+            intro a' a ha'D hac
+            rw [ha'D] at hac
+            have hmv := atomCov_tmoves hac
+            cases a with
+            | anyValue c =>
+                cases c with
+                | desc => rfl
+                | undef | null | bool | num | str | obj _ | list =>
+                    simp [tmovesV] at hmv
+            | complN _ | complT | isValue _ | desc _ | notPresent =>
+                simp [tmovesV] at hmv
+          have hmemB : ∀ (a : VTy), a ∈ S → a = VTy.anyValue Ctor.desc →
+              ∀ c : Bool,
+                { w with Γ := (x, [a]) :: w.Γ, σ := [.isValue (.boolean c)] :: w.σ }
+                  ∈ splitP1Und x b dec w := by
+            intro a ha haDesc c
+            rw [splitP1Und, hl, List.mem_flatMap]
+            refine ⟨a, ha, ?_⟩
+            rw [haDesc]
+            cases c <;> cases b <;>
+              first
+                | exact List.mem_cons.mpr (Or.inl rfl)
+                | exact List.mem_cons.mpr (Or.inr (List.mem_cons.mpr (Or.inl rfl)))
+          simp only [splitP1Und, hl', hl, List.mem_flatMap] at hv'
+          obtain ⟨a', ha', hv'⟩ := hv'
+          obtain ⟨a, ha, hac⟩ := hcovA a' ha'
+          have hdd : dec a' = dec a := hdec hac
+          by_cases ha'D : a' = VTy.anyValue Ctor.desc
+          · rw [ha'D] at hv' hac
+            rcases List.mem_cons.mp hv' with rfl | hm
+            · exact ⟨{ w with Γ := (x, [a]) :: w.Γ, σ := [.isValue (.boolean b)] :: w.σ },
+                hmemB a ha (hdescCover rfl hac) b, mkworldLe _ _ hac b⟩
+            · rcases List.mem_cons.mp hm with rfl | hlast
+              · exact ⟨{ w with Γ := (x, [a]) :: w.Γ, σ := [.isValue (.boolean !b)] :: w.σ },
+                  hmemB a ha (hdescCover rfl hac) !b, mkworldLe _ _ hac !b⟩
+              · cases hlast
+          · simp only [splitP1At, List.mem_singleton] at hv'
+            subst hv'
+            by_cases haC : a = VTy.anyValue Ctor.desc
+            · have hcb : (dec a' == b) = b ∨ (dec a' == b) = !b := by
+                cases dec a' <;> cases b <;> simp
+              rcases hcb with hcb | hcb
+              · rw [hcb]
+                exact ⟨{ w with Γ := (x, [a]) :: w.Γ, σ := [.isValue (.boolean b)] :: w.σ },
+                    hmemB a ha haC b, mkworldLe _ _ hac b⟩
+              · rw [hcb]
+                exact ⟨{ w with Γ := (x, [a]) :: w.Γ, σ := [.isValue (.boolean !b)] :: w.σ },
+                    hmemB a ha haC !b, mkworldLe _ _ hac !b⟩
+            · refine ⟨{ w with Γ := (x, [a]) :: w.Γ, σ := [.isValue (.boolean (dec a == b))] :: w.σ }, ?_, ?_⟩
+              · rw [splitP1Und, hl, List.mem_flatMap]
+                refine ⟨a, ha, ?_⟩
+                cases a with
+                | anyValue c =>
+                    cases c with
+                    | desc => exact absurd rfl haC
+                    | undef | null | bool | num | str | obj _ | list =>
+                        exact List.mem_singleton.mpr rfl
+                | complN _ | complT | isValue _ | desc _ | notPresent =>
+                    exact List.mem_singleton.mpr rfl
+              · rw [← hdd]
+                exact mkworldLe _ _ hac _
+
+theorem splitP1Und_ne_of_worldLe {x : «String»} {b : Bool}
+    {dec : VTy → Bool} {w' w : World} (h : worldLe w' w)
+    (hne : splitP1Und x b dec w ≠ []) : splitP1Und x b dec w' ≠ [] := by
+  obtain ⟨-, hΓ, -, -, -⟩ := h
+  cases hl : tyLookup w.Γ x with
+  | none => rw [splitP1Und, hl] at hne; exact absurd rfl hne
+  | some S =>
+      have hSne : S ≠ [] := by
+        intro hS
+        subst hS
+        apply hne
+        simp [splitP1Und, hl]
+      obtain ⟨S', ht', hS'ne, -⟩ := hΓ.2.2 x S (by rw [hl]; simp) hSne
+      have hl' : tyLookup w'.Γ x = some S' := by
+        cases hlook : tyLookup w'.Γ x with
+        | none => rw [hlook] at ht'; cases ht'
+        | some U => rw [hlook] at ht'; simp_all
+      obtain ⟨a', ha'⟩ := List.exists_mem_of_ne_nil S' hS'ne
+      intro hnil
+      have hsingle : ∀ (a : VTy), a ∈ S' → a ≠ VTy.anyValue Ctor.desc →
+          ({ w' with Γ := (x, [a]) :: w'.Γ, σ := [.isValue (.boolean ((fun t => dec t == b) a))] :: w'.σ } : World)
+            ∈ splitP1Und x b dec w' := by
+        intro a ha hne
+        simp only [splitP1Und, hl', List.mem_flatMap]
+        refine ⟨a, ha, ?_⟩
+        cases a with
+        | anyValue c2 =>
+            cases c2 with
+            | desc => exact absurd rfl hne
+            | undef | null | bool | num | str | obj _ | list =>
+                exact List.mem_singleton.mpr rfl
+        | complN _ | complT | isValue _ | desc _ | notPresent =>
+            exact List.mem_singleton.mpr rfl
+      have hbranch : ∃ u, u ∈ splitP1Und x b dec w' := by
+        by_cases hdc : a' = VTy.anyValue Ctor.desc
+        · subst hdc
+          exact ⟨{ w' with Γ := (x, [VTy.anyValue Ctor.desc]) :: w'.Γ, σ := [.isValue (.boolean b)] :: w'.σ },
+            by simp only [splitP1Und, hl', List.mem_flatMap]
+               exact ⟨_, ha', List.mem_cons.mpr (Or.inl rfl)⟩⟩
+        · exact ⟨_, hsingle a' ha' hdc⟩
+      obtain ⟨u, hu⟩ := hbranch
+      rw [hnil] at hu
+      exact absurd hu (by simp)
 
 /-- Coarse nonempty splitP1 stays nonempty refined. -/
 theorem splitP1_ne_of_worldLe {x : «String»} {dec : VTy → Bool}
@@ -8079,6 +8463,60 @@ theorem boolOnlyTrue_cov {t' t : Ty} {η : HeapCallableTy}
         obtain ⟨a, ha, hac⟩ := hcov c hct
         exact isBoolSing_cover hac (hall a ha)
 
+/-- The for-each element binding (the normalized singleton of v) sits
+    under anyT (the class-atom element world) with decider agreement:
+    a non-object value is covered by its own class; an object
+    singleton by the class carrying its heap callability. -/
+theorem normAtom_tyCov_anyT {η : HeapCallableTy} (v : JSValue) :
+    tyCov η [normalizeAtom η (VTy.isValue v)] anyT := by
+  intro a ha
+  have ha' : a = normalizeAtom η (VTy.isValue v) := (List.mem_singleton.mp ha)
+  subst ha'
+  refine ⟨VTy.anyValue (match v with
+      | .obj l => Ctor.obj (η l) | _ => tagOf v), ?_, ?_⟩
+  · cases v with
+    | obj l =>
+        show VTy.anyValue (Ctor.obj (η l)) ∈ anyT
+        obtain ⟨b, hb⟩ : ∃ b, η l = b := ⟨η l, rfl⟩
+        refine List.mem_map.mpr ⟨Ctor.obj b, ?_, by rw [hb]⟩
+        cases b <;> simp [anyTags, langTags, objTags]
+    | undefined | null | boolean _ | number _ | str _ | listV _
+    | descV _ | compl _ _ => simp [anyT, anyOf, anyTags, langTags, objTags, tagOf]
+  · refine atomCov_flat_intro ?_ ?_ (by
+      intro hcon; obtain ⟨p, q, heq, heq2⟩ := hcon; simp_all)
+    · cases v <;> simp [normalizeAtom, tmovesV]
+    · intro f dec hf
+      unfold predDecide at hf
+      split at hf
+      · injection hf with hf'; subst hf'; cases v <;> simp [normalizeAtom]
+      · injection hf with hf'; subst hf'; cases v <;> simp [normalizeAtom]
+      · injection hf with hf'; subst hf'; cases v <;>
+          simp [normalizeAtom, isCallableAtom, tagOf]
+      · exact absurd hf (by simp)
+
+theorem normAtom_tyLe_anyT {η : HeapCallableTy} (v : JSValue) :
+    tyLe [normalizeAtom η (VTy.isValue v)] anyT := by
+  unfold tyLe tmoves
+  cases v <;>
+    simp [normalizeAtom, anyT, anyOf, anyTags, langTags, objTags, tagOf, tmovesV]
+
+theorem normAtom_slotLe_anyT {η : HeapCallableTy} (v : JSValue) :
+    slotLe [normalizeAtom η (VTy.isValue v)] anyT :=
+  ⟨normAtom_tyLe_anyT v, fun _ => List.cons_ne_nil _ _⟩
+
+theorem single_tyLe_anyT {a : VTy} {c : Ctor} (hc : c ∈ anyTags)
+    (hmv : tmovesV a (.anyValue c) = Bool.true) : tyLe [a] anyT := by
+  unfold tyLe tmoves
+  simp only [List.all_cons, List.all_nil, Bool.true_and, Bool.and_true]
+  rw [List.any_eq_true]
+  exact ⟨.anyValue c, List.mem_map.mpr ⟨c, hc, rfl⟩, hmv⟩
+
+theorem anyT_mem_desc : (VTy.anyValue Ctor.desc) ∈ anyT :=
+  List.mem_map.mpr ⟨Ctor.desc, by decide, rfl⟩
+
+theorem anyT_mem (c : Ctor) (hc : c ∈ anyTags) : (VTy.anyValue c) ∈ anyT :=
+  List.mem_map.mpr ⟨c, hc, rfl⟩
+
 theorem checkRepeatWhileCore_specLe {sigs : SigTable} {r : Ty}
     {w' w : World} {c : Expr} {body rest : List Instr}
     {entryTy' entryTy : Option Ty}
@@ -8831,9 +9269,8 @@ theorem checkSeq_specialize (sigs : SigTable) (r : Ty) (w : World) (seq : List I
       rw [hη]; exact hdec
     simp only [checkSeq.eq_24, hdec, hdec']
     exact fork_specLe
-      (fun v' hv' => splitP1_cov
-        (DecAgree_beq (DecAgree_predDecide hdec)) h hv')
-      (fun hne => splitP1_ne_of_worldLe h hne) (fun u' u hu => ih1 u hsc u' hu)
+      (fun v' hv' => splitP1Und_cov (DecAgree_predDecide hdec) h hv')
+      (fun hne => splitP1Und_ne_of_worldLe h hne) (fun u' u hu => ih1 u hsc u' hu)
   case case32 =>
     rename_i sigs r w x rest f b hdec hlook
     intro w' h
@@ -8917,34 +9354,6 @@ theorem checkSeq_specialize (sigs : SigTable) (r : Ty) (w : World) (seq : List I
         stackCov_cons_intro (tyCov_refl _ _) hcovσ⟩
     simp only [checkSeq, hT, hlook, hlook']
     exact ih1 hsc _ hpush
-  case case51 =>
-    rename_i sigs r w x elems body rest hσne
-    intro w' h
-    obtain ⟨hη, hΓ, hσle, hcovΓ, hcovσ⟩ := h
-    cases hσ' : w'.σ with
-    | nil =>
-        cases hstack : w.σ with
-        | nil => exact absurd hstack hσne
-        | cons t σ =>
-            exfalso
-            simp [hσ', hstack, stackLe] at hσle
-    | cons t' σ'' =>
-        cases hstack : w.σ with
-        | nil =>
-            exfalso
-            simp [hσ', hstack, stackLe] at hσle
-        | cons t σ =>
-            simp only [checkSeq, hσ', hstack]
-            exact trivial
-  case case52 =>
-    rename_i sigs r w rest hσ
-    intro w' h
-    obtain ⟨hη, hΓ, hσle, hcovΓ, hcovσ⟩ := h
-    have hworld : worldLe w' w := ⟨hη, hΓ, hσle, hcovΓ, hcovσ⟩
-    rw [hσ] at hσle
-    cases hσ' : w'.σ with
-    | nil => simp only [checkSeq, hσ, hσ']; exact trivial
-    | cons t' σ'' => rw [hσ'] at hσle; cases hσle
   case case28 =>
     rename_i sigs r w c body rest ih_body ih_bodyJ ih_rest ih_restJ
     intro w' h
@@ -9059,68 +9468,255 @@ theorem checkSeq_specialize (sigs : SigTable) (r : Ty) (w : World) (seq : List I
     intro w' h
     simp [checkSeq, specLe, *]
   case case48 =>
-    rename_i sigs r w x body rest hpop ih2 ih1
+    rename_i sigs r w x body rest hpop t σ' hσ w₀ ih1 ih2 ih3
     intro w' h
     obtain ⟨hη, hΓ, hσle, hcovΓ, hcovσ⟩ := h
-    cases hσ : w.σ with
-    | nil => simp [hσ, popA, popTy] at hpop
-    | cons t σ =>
-        cases hσ' : w'.σ with
-        | nil =>
-            exfalso
-            simp [hσ, hσ', stackLe] at hσle
-        | cons t' σ' =>
-            rw [hσ] at hpop
-            rw [hσ, hσ'] at hσle
+    cases hσs : w.σ with
+    | nil => simp [hσs, popA, popTy] at hpop
+    | cons tc σc =>
+        cases hσs' : w'.σ with
+        | nil => exfalso; simp [hσs, hσs', stackLe] at hσle
+        | cons tc' σc' =>
+            rw [hσs] at hpop
+            rw [hσs, hσs'] at hσle
+            rw [hσs, hσs'] at hcovσ
             obtain ⟨hslot, hrest⟩ := hσle
-            have hp : popTy [.anyValue .list] (t :: σ) = some [] := by
+            obtain ⟨hcovt, -⟩ := hcovσ
+            have hnilc : σc = [] := by
+              simp only [popA, popTy] at hpop
+              split at hpop
+              · exact Option.some.inj hpop
+              · exact absurd hpop (by simp)
+            subst hnilc
+            have hpopc : popA (.anyValue .list) (tc :: []) = some [] := by
               simpa [popA] using hpop
-            obtain ⟨hnil, hpop'⟩ := popTy_some_nil_cov hslot hrest hp
-            have hpopA' : popA (.anyValue .list) (t' :: σ') = some [] := by
-              simpa [popA] using hpop'
-            subst σ'
-            have hw0 : worldLe
-                { w' with Γ := (x, langT) :: w'.Γ, σ := [] }
-                { w with Γ := (x, langT) :: w.Γ, σ := [] } :=
+            obtain ⟨hnil2, hpop2⟩ := popTy_some_nil_cov hslot hrest hpopc
+            have hnilc' : σc' = [] := by
+              cases hσc' : σc' with
+              | nil => rfl
+              | cons b bs =>
+                  rw [hσc'] at hrest
+                  exact absurd hrest (by simp [stackLe])
+            subst hnilc'
+            have hpopA' : popA (.anyValue .list) (tc' :: []) = some [] := by
+              simpa [popA] using hpop2
+            have hw0 : worldLe { w' with σ := [] } { w with σ := [] } :=
+              ⟨hη, hΓ, by simp [stackLe], hcovΓ, by simp [stackCov]⟩
+            have hk := fold_worlds_specLe sigs r rest
+              (fun u v huv => ih3 v hsc u huv)
+            have hanyT : worldLe
+                { w' with σ := [], Γ := (x, anyT) :: w'.Γ }
+                { w with σ := [], Γ := (x, anyT) :: w.Γ } :=
               ⟨hη, envLe_cons hΓ (slotLe_refl _), by simp [stackLe],
                 envCov_cons hcovΓ (tyCov_refl _ _), by simp [stackCov]⟩
-            have hbody := ih2 hsc _ hw0
-            have hk := fold_worlds_specLe sigs r rest
-              (fun u v huv => ih1 v hsc u huv)
-            simp only [checkSeq, hσ, hσ', hpop, hpopA']
-            exact checkLoopBody_spec (.kForStart x body) []
-              (fun fs => fs.foldl (fun acc u => mergeTC acc (checkSeq sigs r u rest)) noFlows)
-              hbody hk
+            have hzero : specLe (checkSeq sigs r { w' with σ := [] } rest)
+                (checkSeq sigs r { w with σ := [] } rest) := ih1 hsc _ hw0
+            have hbody : specLe
+                (checkLoopBody (checkSeq sigs r { w' with σ := [], Γ := (x, anyT) :: w'.Γ } body)
+                  (.kForStart x body) []
+                  (fun wsf => wsf.foldl (fun acc u => mergeTC acc (checkSeq sigs r u rest)) noFlows))
+                (checkLoopBody (checkSeq sigs r { w with σ := [], Γ := (x, anyT) :: w.Γ } body)
+                  (.kForStart x body) []
+                  (fun wsf => wsf.foldl (fun acc u => mergeTC acc (checkSeq sigs r u rest)) noFlows)) :=
+              checkLoopBody_spec _ [] _ (ih2 hsc _ hanyT) hk
+            have hmerge : specLe
+                (mergeTC (checkSeq sigs r { w' with σ := [] } rest)
+                  (checkLoopBody (checkSeq sigs r { w' with σ := [], Γ := (x, anyT) :: w'.Γ } body)
+                    (.kForStart x body) []
+                    (fun wsf => wsf.foldl (fun acc u => mergeTC acc (checkSeq sigs r u rest)) noFlows)))
+                (mergeTC (checkSeq sigs r { w with σ := [] } rest)
+                  (checkLoopBody (checkSeq sigs r { w with σ := [], Γ := (x, anyT) :: w.Γ } body)
+                    (.kForStart x body) []
+                    (fun wsf => wsf.foldl (fun acc u => mergeTC acc (checkSeq sigs r u rest)) noFlows))) :=
+              specLe_merge hzero hbody
+            have hpoint : ∀ (a' a : VTy), atomCov w'.η a' a →
+                specLe (forAtomTCR (.kForStart x body)
+                          (checkSeq sigs r { w' with σ := [] } rest)
+                          (checkLoopBody (checkSeq sigs r
+                              { w' with σ := [], Γ := (x, anyT) :: w'.Γ } body)
+                            (.kForStart x body) []
+                            (fun wsf => wsf.foldl (fun acc u =>
+                               mergeTC acc (checkSeq sigs r u rest)) noFlows)) a')
+                  (forAtomTCR (.kForStart x body)
+                          (checkSeq sigs r { w with σ := [] } rest)
+                          (checkLoopBody (checkSeq sigs r
+                              { w with σ := [], Γ := (x, anyT) :: w.Γ } body)
+                            (.kForStart x body) []
+                            (fun wsf => wsf.foldl (fun acc u =>
+                               mergeTC acc (checkSeq sigs r u rest)) noFlows)) a) := by
+              intro a' a hac
+              cases a with
+              | isValue vv =>
+                  cases vv with
+                  | listV vs =>
+                      have hm := atomCov_tmoves hac
+                      have hlist : a' = VTy.isValue (JSValue.listV vs) := by
+                        cases a' with
+                        | isValue vv' =>
+                            cases vv' with
+                            | listV vs' =>
+                                simp only [tmovesV, beq_iff_eq] at hm
+                                exact congrArg VTy.isValue hm
+                            | undefined | null | boolean _ | number _ | str _
+                            | obj _ | descV _ | compl _ _ =>
+                                exact absurd hm (by simp [tmovesV])
+                        | complN _ | complT | anyValue _ | desc _ | notPresent =>
+                            exact absurd hm (by simp [tmovesV])
+                      subst hlist
+                      cases vs with
+                      | nil => exact hzero
+                      | cons v vs0 => exact hmerge
+                  | undefined | null | boolean _ | number _ | str _
+                  | obj _ | descV _ | compl _ _ => exact trivial
+              | anyValue cc =>
+                  cases cc with
+                  | list =>
+                      cases a' with
+                      | isValue vv' =>
+                          cases vv' with
+                          | listV vs' =>
+                              cases vs' with
+                              | nil => exact specLe_merge_right hzero
+                              | cons v vs0 => exact hmerge
+                          | undefined | null | boolean _ | number _ | str _
+                          | obj _ | descV _ | compl _ _ =>
+                              exact absurd (atomCov_tmoves hac) (by simp [tmovesV, tagOf])
+                      | anyValue cc' =>
+                          cases cc' with
+                          | list => exact hmerge
+                          | undef | null | bool | num | str | obj _ | desc =>
+                              exact absurd (atomCov_tmoves hac) (by simp [tmovesV])
+                      | complN _ | complT | desc _ | notPresent =>
+                          exact absurd (atomCov_tmoves hac) (by simp [tmovesV])
+                  | undef | null | bool | num | str | obj _ | desc =>
+                      exact trivial
+              | complN _ | complT | desc _ | notPresent => exact trivial
+            simp only [checkSeq]
+            rw [hσs, hσs', hpop, hpopA']
+            dsimp only
+            cases hcoarse : tc.foldl (fun accA a => mergeTC accA
+                (forAtomTCR (.kForStart x body)
+                  (checkSeq sigs r { η := w.η, Γ := w.Γ, σ := [] } rest)
+                  (checkLoopBody (checkSeq sigs r
+                      { η := w.η, Γ := (x, anyT) :: w.Γ, σ := [] } body)
+                    (.kForStart x body) []
+                    (fun wsf => wsf.foldl (fun accE u =>
+                       mergeTC accE (checkSeq sigs r u rest)) noFlows))
+                  a)) vacOk with
+            | reject s why => exact specLe_reject _
+            | flows fr =>
+                obtain ⟨fr', hfr', hcovf⟩ :=
+                  fold_specLe_vac (R := atomCov w'.η)
+                    (J := forAtomTCR (.kForStart x body)
+                           (checkSeq sigs r { η := w.η, Γ := w.Γ, σ := [] } rest)
+                           (checkLoopBody (checkSeq sigs r
+                               { η := w.η, Γ := (x, anyT) :: w.Γ, σ := [] } body)
+                             (.kForStart x body) []
+                             (fun wsf => wsf.foldl (fun acc u =>
+                                mergeTC acc (checkSeq sigs r u rest)) noFlows)))
+                    (J' := forAtomTCR (.kForStart x body)
+                           (checkSeq sigs r { η := w'.η, Γ := w'.Γ, σ := [] } rest)
+                           (checkLoopBody (checkSeq sigs r
+                               { η := w'.η, Γ := (x, anyT) :: w'.Γ, σ := [] } body)
+                             (.kForStart x body) []
+                             (fun wsf => wsf.foldl (fun acc u =>
+                                mergeTC acc (checkSeq sigs r u rest)) noFlows)))
+                    tc tc' fr hcovt hpoint hcoarse
+                rw [hfr']
+                exact hcovf
   case case49 =>
+    rename_i sigs r w x body rest hpop hσ
     intro w' h
-    simp [checkSeq, specLe, *]
+    simp only [checkSeq, hσ, popA, popTy]
+    exact trivial
   case case50 =>
-    rename_i sigs r w x elems body rest hσ ih2 ih1
+    rename_i sigs r w x body rest hd tl hpop
+    intro w' h
+    simp only [checkSeq, hpop]
+    exact trivial
+  case case51 =>
+    rename_i sigs r w x body rest hσ ih1
+    intro w' h
+    obtain ⟨hη, hΓ, hσle, hcovΓ, hcovσ⟩ := h
+    have hσs' : w'.σ = [] := by
+      cases hw' : w'.σ with
+      | nil => rfl
+      | cons a as => rw [hw', hσ] at hσle; simp [stackLe] at hσle
+    have hw : worldLe w' w := ⟨hη, hΓ, hσle, hcovΓ, hcovσ⟩
+    simp only [checkSeq, hσ, hσs']
+    exact ih1 hsc w' hw
+  case case52 =>
+    rename_i sigs r w x elems body rest hσ hne ih1 ih2 ih3
+    intro w' h
+    obtain ⟨hη, hΓ, hσle, hcovΓ, hcovσ⟩ := h
+    rw [hσ] at ih2
+    have hσs' : w'.σ = [] := by
+      cases hw' : w'.σ with
+      | nil => rfl
+      | cons a as => rw [hw', hσ] at hσle; simp [stackLe] at hσle
+    have hw : worldLe w' w := ⟨hη, hΓ, hσle, hcovΓ, hcovσ⟩
+    cases hcons : elems with
+    | nil => exact absurd hcons hne
+    | cons v0 vs0 =>
+        have hk := fold_worlds_specLe sigs r rest
+          (fun u v huv => ih3 v hsc u huv)
+        have hanyT : worldLe
+            { w' with Γ := (x, anyT) :: w'.Γ, σ := [] }
+            { w with Γ := (x, anyT) :: w.Γ, σ := [] } :=
+          ⟨hη, envLe_cons hΓ (slotLe_refl _), by simp [stackLe],
+            envCov_cons hcovΓ (tyCov_refl _ _), by simp [stackCov]⟩
+        have hzero : specLe (checkSeq sigs r w' rest) (checkSeq sigs r w rest) :=
+          ih1 hsc w' hw
+        have hbody : specLe
+            (checkLoopBody (checkSeq sigs r { w' with Γ := (x, anyT) :: w'.Γ, σ := [] } body)
+              (.kForBody x [] body) []
+              (fun wsf => wsf.foldl (fun acc u => mergeTC acc (checkSeq sigs r u rest)) noFlows))
+            (checkLoopBody (checkSeq sigs r { w with Γ := (x, anyT) :: w.Γ, σ := [] } body)
+              (.kForBody x [] body) []
+              (fun wsf => wsf.foldl (fun acc u => mergeTC acc (checkSeq sigs r u rest)) noFlows)) :=
+          checkLoopBody_spec _ [] _ (ih2 hsc _ hanyT) hk
+        rw [hcons] at hne
+        simp only [checkSeq]
+        rw [hσ, hσs']
+        exact specLe_merge hzero hbody
+  case case53 =>
+    rename_i sigs r w x elems body rest hσne
     intro w' h
     obtain ⟨hη, hΓ, hσle, hcovΓ, hcovσ⟩ := h
     cases hσ' : w'.σ with
     | nil =>
-        have hw0 : worldLe
-            { w' with Γ := (x, langT) :: w'.Γ, σ := w'.σ }
-            { w with Γ := (x, langT) :: w.Γ, σ := w.σ } :=
-          ⟨hη, envLe_cons hΓ (slotLe_refl _), hσle,
-            envCov_cons hcovΓ (tyCov_refl _ _), hcovσ⟩
-        have hbody := ih2 hsc _ hw0
-        have hbody' : specLe
-            (checkSeq sigs r { w' with Γ := (x, langT) :: w'.Γ, σ := [] } body)
-            (checkSeq sigs r { w with Γ := (x, langT) :: w.Γ, σ := [] } body) := by
-          rw [hσ', hσ] at hbody
-          exact hbody
-        have hk := fold_worlds_specLe sigs r rest
-          (fun u v huv => ih1 v hsc u huv)
-        simp only [checkSeq, hσ, hσ']
-        exact checkLoopBody_spec (.kForBody x [] body) []
-          (fun fs => fs.foldl (fun acc u => mergeTC acc (checkSeq sigs r u rest)) noFlows)
-          hbody' hk
+        cases hstack : w.σ with
+        | nil => exact absurd hstack hσne
+        | cons t σ =>
+            exfalso
+            simp [hσ', hstack, stackLe] at hσle
     | cons t' σ'' =>
-        exfalso
-        simp [hσ, hσ', stackLe] at hσle
-  case case53 =>
+        cases hstack : w.σ with
+        | nil =>
+            exfalso
+            simp [hσ', hstack, stackLe] at hσle
+        | cons t σ =>
+            have hrej : checkSeq sigs r w (Instr.kForBody x elems body :: rest)
+                = TCResult.reject (.kForBody x [] body)
+                    "loop entry stack is not empty" := by
+              cases elems with
+              | nil => rw [checkSeq, hstack]
+              | cons v vs =>
+                  rw [checkSeq, hstack]
+                  intro hcon
+                  exact List.cons_ne_nil _ _ hcon
+            rw [hrej]
+            exact trivial
+  case case54 =>
+    rename_i sigs r w rest hσ
+    intro w' h
+    obtain ⟨hη, hΓ, hσle, hcovΓ, hcovσ⟩ := h
+    have hworld : worldLe w' w := ⟨hη, hΓ, hσle, hcovΓ, hcovσ⟩
+    rw [hσ] at hσle
+    cases hσ' : w'.σ with
+    | nil => simp only [checkSeq, hσ, hσ']; exact trivial
+    | cons t' σ'' => rw [hσ'] at hσle; cases hσle
+  case case55 =>
     rename_i sigs r w rest ts σ' hσ ih1
     intro w' h
     obtain ⟨hη, hΓ, hσle, hcovΓ, hcovσ⟩ := h
@@ -9166,17 +9762,17 @@ theorem checkSeq_specialize (sigs : SigTable) (r : Ty) (w : World) (seq : List I
                 mergeTC acc (assertVerdict sigs r rest σ' w a)) vacOk)
             rw [hfr', hc]
             exact hcov
-  case case54 =>
+  case case56 =>
     rename_i sigs r w i rest hdisj hstep
     intro w' h
     simp only [checkSeq, hstep]
     exact trivial
-  case case55 =>
+  case case57 =>
     rename_i sigs r w i rest n1 n2 n3 n4 n5 n6 n7 n8 n9 n10 n11 n12 n13 n14 n15 n16 n17 n18 n19 n20 n21 n22 n23 n24 n25 n26 n27 ws hstep ih1
     intro w' h
     obtain ⟨ws', hstep', hcov⟩ := step1_cov sigs i w' w h ws hstep
     have hne : ws ≠ [] → ws' ≠ [] := by
-      intro _ 
+      intro _
       exact step1_some_ne sigs i w' ws' hstep'
     have hpoint : ∀ u' u, worldLe u' u →
         specLe (checkSeq sigs r u' rest) (checkSeq sigs r u rest) :=
@@ -9410,10 +10006,8 @@ theorem SR_kRet (sigs : SigTable) (reg : AOReg) (η : HeapCallableTy) (s : FM) (
                         exact ⟨b, hb, atomCov_tmoves hac⟩),
                       fun _ => by simp⟩
                   have hw : worldLe
-                      { η := η, Γ := envTyOf η cenv,
-                        σ := [normalizeAtom η (typeOfV v)] :: ceval.map (fun x => [normalizeAtom η (typeOfV x)]) }
-                      { η := η, Γ := envTyOf η cenv,
-                        σ := complTy (sigCompls sigs ret)
+                      { η := η, Γ := envTyOf η cenv, σ := [normalizeAtom η (typeOfV v)] :: ceval.map (fun x => [normalizeAtom η (typeOfV x)]) }
+                      { η := η, Γ := envTyOf η cenv, σ := complTy (sigCompls sigs ret)
                           :: ceval.map (fun x => [normalizeAtom η (typeOfV x)]) } :=
                     ⟨rfl, envLe_refl _,
                       stackLe_cons_intro hslot (stackLe_refl _),
@@ -9423,8 +10017,7 @@ theorem SR_kRet (sigs : SigTable) (reg : AOReg) (η : HeapCallableTy) (s : FM) (
                     checkSeq_specialize_terminal sigs (sigRetTy sigs cret)
                       _ _ cstmts hsc hw hchk hterm
                   have hgoal : (match checkSeq sigs (sigRetTy sigs cret)
-                      { η := η, Γ := envTyOf η cenv,
-                        σ := [normalizeAtom η (typeOfV v)] :: ceval.map (fun x => [normalizeAtom η (typeOfV x)]) }
+                      { η := η, Γ := envTyOf η cenv, σ := [normalizeAtom η (typeOfV v)] :: ceval.map (fun x => [normalizeAtom η (typeOfV x)]) }
                       cstmts with
                     | TCResult.flows fb => terminal fb = Bool.true
                     | x => False) := by
@@ -9537,28 +10130,23 @@ theorem frameTyped_kEval_varNotPresent_present {sigs : SigTable} {r : Ty}
       { η := η, Γ := envTyOf η env, σ := eval.map (fun y => [normalizeAtom η (typeOfV y)]) }
       (.kEval (.varNotPresent x) :: rest)
       = checkSeq sigs r
-        { η := η, Γ := (x, [normalizeAtom η (typeOfV v)]) :: envTyOf η env,
-          σ := [.isValue (.boolean Bool.false)] :: eval.map (fun y => [normalizeAtom η (typeOfV y)]) }
+        { η := η, Γ := (x, [normalizeAtom η (typeOfV v)]) :: envTyOf η env, σ := [.isValue (.boolean Bool.false)] :: eval.map (fun y => [normalizeAtom η (typeOfV y)]) }
         rest := by
     simp [checkSeq, hΓ, split1, meetTy_typeOfV_notPresent,
       removeTy_typeOfV_notPresent, forkTC, mergeTC_noFlows, normalizeAtom]
   rw [hstep] at h
   have hres : ∃ fb, checkSeq sigs r
-      { η := η, Γ := (x, [normalizeAtom η (typeOfV v)]) :: envTyOf η env,
-        σ := [.isValue (.boolean Bool.false)] :: eval.map (fun y => [normalizeAtom η (typeOfV y)]) }
+      { η := η, Γ := (x, [normalizeAtom η (typeOfV v)]) :: envTyOf η env, σ := [.isValue (.boolean Bool.false)] :: eval.map (fun y => [normalizeAtom η (typeOfV y)]) }
       rest = TCResult.flows fb ∧ terminal fb = Bool.true := by
     cases hres : checkSeq sigs r
-        { η := η, Γ := (x, [normalizeAtom η (typeOfV v)]) :: envTyOf η env,
-          σ := [.isValue (.boolean Bool.false)] :: eval.map (fun y => [normalizeAtom η (typeOfV y)]) }
+        { η := η, Γ := (x, [normalizeAtom η (typeOfV v)]) :: envTyOf η env, σ := [.isValue (.boolean Bool.false)] :: eval.map (fun y => [normalizeAtom η (typeOfV y)]) }
         rest with
     | flows fb => exact ⟨fb, rfl, by rw [hres] at h; exact h⟩
     | reject s why => rw [hres] at h; exact h.elim
   obtain ⟨fb, hchk, hterm⟩ := hres
   have hle : worldLe
-      { η := η, Γ := envTyOf η env,
-        σ := [.isValue (.boolean Bool.false)] :: eval.map (fun y => [normalizeAtom η (typeOfV y)]) }
-      { η := η, Γ := (x, [normalizeAtom η (typeOfV v)]) :: envTyOf η env,
-        σ := [.isValue (.boolean Bool.false)] :: eval.map (fun y => [normalizeAtom η (typeOfV y)]) } :=
+      { η := η, Γ := envTyOf η env, σ := [.isValue (.boolean Bool.false)] :: eval.map (fun y => [normalizeAtom η (typeOfV y)]) }
+      { η := η, Γ := (x, [normalizeAtom η (typeOfV v)]) :: envTyOf η env, σ := [.isValue (.boolean Bool.false)] :: eval.map (fun y => [normalizeAtom η (typeOfV y)]) } :=
     ⟨rfl, envLe_shadow_same hΓ,
       stackLe_cons_intro (slotLe_refl _) (stackLe_refl _),
       envCov_shadow_same hΓ,
@@ -11607,8 +12195,7 @@ theorem split1_pIsObj_singleton {Γ : TyEnv} {x : «String»} {v : JSValue}
     {σ : List Ty}
     (hΓ : tyLookup Γ x = some [normalizeAtom η (typeOfV v)]) :
     split1 x objT { η := η, Γ := Γ, σ := σ }
-      = [{ η := η, Γ := (x, [normalizeAtom η (typeOfV v)]) :: Γ,
-           σ := [.isValue (.boolean (isObjV v))] :: σ }] := by
+      = [{ η := η, Γ := (x, [normalizeAtom η (typeOfV v)]) :: Γ, σ := [.isValue (.boolean (isObjV v))] :: σ }] := by
   cases v with
   | compl b w =>
       cases b <;> cases w <;> simp [split1, hΓ, typeOfV, meetTy, meetAtom,
@@ -11631,21 +12218,17 @@ theorem frameTyped_kTestVar_pIsObj_present {sigs : SigTable} {r : Ty}
   simp only [checkSeq, testTypeP, split1_pIsObj_singleton hΓ, forkTC, List.foldl,
     mergeTC_noFlows] at h
   have hres : ∃ fb, checkSeq sigs r
-      { η := η, Γ := (x, [normalizeAtom η (typeOfV v)]) :: envTyOf η env,
-        σ := [.isValue (.boolean (isObjV v))] :: eval.map (fun y => [normalizeAtom η (typeOfV y)]) }
+      { η := η, Γ := (x, [normalizeAtom η (typeOfV v)]) :: envTyOf η env, σ := [.isValue (.boolean (isObjV v))] :: eval.map (fun y => [normalizeAtom η (typeOfV y)]) }
       rest = TCResult.flows fb ∧ terminal fb = Bool.true := by
     cases hres : checkSeq sigs r
-        { η := η, Γ := (x, [normalizeAtom η (typeOfV v)]) :: envTyOf η env,
-          σ := [.isValue (.boolean (isObjV v))] :: eval.map (fun y => [normalizeAtom η (typeOfV y)]) }
+        { η := η, Γ := (x, [normalizeAtom η (typeOfV v)]) :: envTyOf η env, σ := [.isValue (.boolean (isObjV v))] :: eval.map (fun y => [normalizeAtom η (typeOfV y)]) }
         rest with
     | flows fb => exact ⟨fb, rfl, by rw [hres] at h; exact h⟩
     | reject s why => rw [hres] at h; exact h.elim
   obtain ⟨fb, hchk, hterm⟩ := hres
   have hle : worldLe
-      { η := η, Γ := envTyOf η env,
-        σ := [normalizeAtom η (typeOfV (JSValue.boolean (isObjV v)))] :: eval.map (fun y => [normalizeAtom η (typeOfV y)]) }
-      { η := η, Γ := (x, [normalizeAtom η (typeOfV v)]) :: envTyOf η env,
-        σ := [.isValue (.boolean (isObjV v))] :: eval.map (fun y => [normalizeAtom η (typeOfV y)]) } :=
+      { η := η, Γ := envTyOf η env, σ := [normalizeAtom η (typeOfV (JSValue.boolean (isObjV v)))] :: eval.map (fun y => [normalizeAtom η (typeOfV y)]) }
+      { η := η, Γ := (x, [normalizeAtom η (typeOfV v)]) :: envTyOf η env, σ := [.isValue (.boolean (isObjV v))] :: eval.map (fun y => [normalizeAtom η (typeOfV y)]) } :=
     ⟨rfl, envLe_shadow_same hΓ,
       stackLe_cons_intro (slotLe_refl _) (stackLe_refl _),
       envCov_shadow_same hΓ,
@@ -11706,8 +12289,7 @@ theorem frameTyped_kTestVar_shape_present {sigs : SigTable} {r : Ty}
     (hT : testTypeP p = some T)
     (hsplit : ∀ (Γ : TyEnv) (σ : List Ty), tyLookup Γ x = some [normalizeAtom η (typeOfV v)] →
       split1 x T { η := η, Γ := Γ, σ := σ }
-        = [{ η := η, Γ := (x, [normalizeAtom η (typeOfV v)]) :: Γ,
-             σ := [.isValue (.boolean (f v))] :: σ }])
+        = [{ η := η, Γ := (x, [normalizeAtom η (typeOfV v)]) :: Γ, σ := [.isValue (.boolean (f v))] :: σ }])
     (hΓ : tyLookup (envTyOf η env) x = some [normalizeAtom η (typeOfV v)])
     (h : frameTyped sigs η r ⟨.kTestVar x p :: rest, env, eval, ret⟩) :
     frameTyped sigs η r ⟨rest, env, .boolean (f v) :: eval, ret⟩ := by
@@ -11716,29 +12298,24 @@ theorem frameTyped_kTestVar_shape_present {sigs : SigTable} {r : Ty}
       { η := η, Γ := envTyOf η env, σ := eval.map (fun y => [normalizeAtom η (typeOfV y)]) }
       (.kTestVar x p :: rest)
       = checkSeq sigs r
-        { η := η, Γ := (x, [normalizeAtom η (typeOfV v)]) :: envTyOf η env,
-          σ := [.isValue (.boolean (f v))] :: eval.map (fun y => [normalizeAtom η (typeOfV y)]) }
+        { η := η, Γ := (x, [normalizeAtom η (typeOfV v)]) :: envTyOf η env, σ := [.isValue (.boolean (f v))] :: eval.map (fun y => [normalizeAtom η (typeOfV y)]) }
         rest := by
     cases p <;> simp only [testTypeP] at hT <;> cases hT <;>
       simp [checkSeq, testTypeP, hsplit _ _ hΓ, forkTC, List.foldl,
         mergeTC_noFlows]
   rw [hstep] at h
   have hres : ∃ fb, checkSeq sigs r
-      { η := η, Γ := (x, [normalizeAtom η (typeOfV v)]) :: envTyOf η env,
-        σ := [.isValue (.boolean (f v))] :: eval.map (fun y => [normalizeAtom η (typeOfV y)]) }
+      { η := η, Γ := (x, [normalizeAtom η (typeOfV v)]) :: envTyOf η env, σ := [.isValue (.boolean (f v))] :: eval.map (fun y => [normalizeAtom η (typeOfV y)]) }
       rest = TCResult.flows fb ∧ terminal fb = Bool.true := by
     cases hres : checkSeq sigs r
-        { η := η, Γ := (x, [normalizeAtom η (typeOfV v)]) :: envTyOf η env,
-          σ := [.isValue (.boolean (f v))] :: eval.map (fun y => [normalizeAtom η (typeOfV y)]) }
+        { η := η, Γ := (x, [normalizeAtom η (typeOfV v)]) :: envTyOf η env, σ := [.isValue (.boolean (f v))] :: eval.map (fun y => [normalizeAtom η (typeOfV y)]) }
         rest with
     | flows fb => exact ⟨fb, rfl, by rw [hres] at h; exact h⟩
     | reject s why => rw [hres] at h; exact h.elim
   obtain ⟨fb, hchk, hterm⟩ := hres
   have hle : worldLe
-      { η := η, Γ := envTyOf η env,
-        σ := [normalizeAtom η (typeOfV (JSValue.boolean (f v)))] :: eval.map (fun y => [normalizeAtom η (typeOfV y)]) }
-      { η := η, Γ := (x, [normalizeAtom η (typeOfV v)]) :: envTyOf η env,
-        σ := [.isValue (.boolean (f v))] :: eval.map (fun y => [normalizeAtom η (typeOfV y)]) } :=
+      { η := η, Γ := envTyOf η env, σ := [normalizeAtom η (typeOfV (JSValue.boolean (f v)))] :: eval.map (fun y => [normalizeAtom η (typeOfV y)]) }
+      { η := η, Γ := (x, [normalizeAtom η (typeOfV v)]) :: envTyOf η env, σ := [.isValue (.boolean (f v))] :: eval.map (fun y => [normalizeAtom η (typeOfV y)]) } :=
     ⟨rfl, envLe_shadow_same hΓ,
       stackLe_cons_intro (slotLe_refl _) (stackLe_refl _),
       envCov_shadow_same hΓ,
@@ -11763,8 +12340,7 @@ theorem SR_kTestVar_shape (sigs : SigTable) (reg : AOReg) (η : HeapCallableTy)
     (hsplit : ∀ (v : JSValue) (Γ : TyEnv) (σ : List Ty),
       tyLookup Γ x = some [normalizeAtom η (typeOfV v)] →
       split1 x T { η := η, Γ := Γ, σ := σ }
-        = [{ η := η, Γ := (x, [normalizeAtom η (typeOfV v)]) :: Γ,
-             σ := [.isValue (.boolean (f v))] :: σ }])
+        = [{ η := η, Γ := (x, [normalizeAtom η (typeOfV v)]) :: Γ, σ := [.isValue (.boolean (f v))] :: σ }])
     (hrun : ∀ (heap : Heap) (v : JSValue), applyPrim heap p v = JSValue.boolean (f v)) :
     SR_arm sigs reg η (.kTestVar x p) s r := by
   intro _ _ hsc hpre
@@ -11924,8 +12500,7 @@ theorem split1_pIsType_singleton (s : «String») (v : JSValue)
     (Γ : TyEnv) (σ : List Ty) (x : «String»)
     (hΓ : tyLookup Γ x = some [normalizeAtom η (typeOfV v)]) :
     split1 x (typeMask s) { η := η, Γ := Γ, σ := σ }
-      = [{ η := η, Γ := (x, [normalizeAtom η (typeOfV v)]) :: Γ,
-           σ := [.isValue (.boolean (isTypeResult s v))] :: σ }] := by
+      = [{ η := η, Γ := (x, [normalizeAtom η (typeOfV v)]) :: Γ, σ := [.isValue (.boolean (isTypeResult s v))] :: σ }] := by
   by_cases h1 : s = "Boolean"
   · subst h1
     cases v with
@@ -12078,8 +12653,7 @@ theorem applyPrim_pIsNormalC_eq (heap : Heap) (v : JSValue) :
 theorem splitP1_pIsNormal_machine {Γ : TyEnv} {x : «String»} {v : JSValue}
     {σ : List Ty}
     (hΓ : tyLookup Γ x = some [normalizeAtom η (typeOfV v)]) :
-    { η := η, Γ := (x, [normalizeAtom η (typeOfV v)]) :: Γ,
-      σ := [.isValue (.boolean (normalResult v))] :: σ }
+    { η := η, Γ := (x, [normalizeAtom η (typeOfV v)]) :: Γ, σ := [.isValue (.boolean (normalResult v))] :: σ }
       ∈ splitP1 x normalDec { η := η, Γ := Γ, σ := σ } := by
   cases v with
   | compl b w =>
@@ -12123,31 +12697,26 @@ theorem frameTyped_kTestVar_pIsNormalC_present {sigs : SigTable} {r : Ty}
           obtain ⟨fbm, hchk⟩ :=
             fold_all_flows (J := fun u => checkSeq sigs r u rest) (u0 :: us) fb
               hfold
-              { η := η, Γ := (x, [normalizeAtom η (typeOfV v)]) :: envTyOf η env,
-                σ := [.isValue (.boolean (normalResult v))]
+              { η := η, Γ := (x, [normalizeAtom η (typeOfV v)]) :: envTyOf η env, σ := [.isValue (.boolean (normalResult v))]
                   :: eval.map (fun y => [normalizeAtom η (typeOfV y)]) }
               hmem
           have hfall : fbm.falls = [] :=
             fold_terminal_falls_nil (J := fun u => checkSeq sigs r u rest)
               (u0 :: us) fb hfold hterm0
-              { η := η, Γ := (x, [normalizeAtom η (typeOfV v)]) :: envTyOf η env,
-                σ := [.isValue (.boolean (normalResult v))]
+              { η := η, Γ := (x, [normalizeAtom η (typeOfV v)]) :: envTyOf η env, σ := [.isValue (.boolean (normalResult v))]
                   :: eval.map (fun y => [normalizeAtom η (typeOfV y)]) }
               hmem fbm hchk
           have hexit : fbm.exits = Bool.true :=
             checkSeq_exits sigs r
-              { η := η, Γ := (x, [normalizeAtom η (typeOfV v)]) :: envTyOf η env,
-                σ := [.isValue (.boolean (normalResult v))]
+              { η := η, Γ := (x, [normalizeAtom η (typeOfV v)]) :: envTyOf η env, σ := [.isValue (.boolean (normalResult v))]
                   :: eval.map (fun y => [normalizeAtom η (typeOfV y)]) }
               rest fbm hchk hfall
           have htermm : terminal fbm = Bool.true := by
             simp [terminal, hfall, hexit]
           have hle : worldLe
-              { η := η, Γ := envTyOf η env,
-                σ := [normalizeAtom η (typeOfV (JSValue.boolean (normalResult v)))]
+              { η := η, Γ := envTyOf η env, σ := [normalizeAtom η (typeOfV (JSValue.boolean (normalResult v)))]
                   :: eval.map (fun y => [normalizeAtom η (typeOfV y)]) }
-              { η := η, Γ := (x, [normalizeAtom η (typeOfV v)]) :: envTyOf η env,
-                σ := [.isValue (.boolean (normalResult v))]
+              { η := η, Γ := (x, [normalizeAtom η (typeOfV v)]) :: envTyOf η env, σ := [.isValue (.boolean (normalResult v))]
                   :: eval.map (fun y => [normalizeAtom η (typeOfV y)]) } :=
             ⟨rfl, envLe_shadow_same hΓ,
       stackLe_cons_intro (slotLe_refl _) (stackLe_refl _),
@@ -12232,8 +12801,7 @@ theorem applyPrim_pIsThrowC_eq (heap : Heap) (v : JSValue) :
 theorem splitP1_pIsThrow_machine {Γ : TyEnv} {x : «String»} {v : JSValue}
     {σ : List Ty}
     (hΓ : tyLookup Γ x = some [normalizeAtom η (typeOfV v)]) :
-    { η := η, Γ := (x, [normalizeAtom η (typeOfV v)]) :: Γ,
-      σ := [.isValue (.boolean (throwResult v))] :: σ }
+    { η := η, Γ := (x, [normalizeAtom η (typeOfV v)]) :: Γ, σ := [.isValue (.boolean (throwResult v))] :: σ }
       ∈ splitP1 x throwDec { η := η, Γ := Γ, σ := σ } := by
   cases v with
   | compl b w =>
@@ -12277,31 +12845,26 @@ theorem frameTyped_kTestVar_pIsThrowC_present {sigs : SigTable} {r : Ty}
           obtain ⟨fbm, hchk⟩ :=
             fold_all_flows (J := fun u => checkSeq sigs r u rest) (u0 :: us) fb
               hfold
-              { η := η, Γ := (x, [normalizeAtom η (typeOfV v)]) :: envTyOf η env,
-                σ := [.isValue (.boolean (throwResult v))]
+              { η := η, Γ := (x, [normalizeAtom η (typeOfV v)]) :: envTyOf η env, σ := [.isValue (.boolean (throwResult v))]
                   :: eval.map (fun y => [normalizeAtom η (typeOfV y)]) }
               hmem
           have hfall : fbm.falls = [] :=
             fold_terminal_falls_nil (J := fun u => checkSeq sigs r u rest)
               (u0 :: us) fb hfold hterm0
-              { η := η, Γ := (x, [normalizeAtom η (typeOfV v)]) :: envTyOf η env,
-                σ := [.isValue (.boolean (throwResult v))]
+              { η := η, Γ := (x, [normalizeAtom η (typeOfV v)]) :: envTyOf η env, σ := [.isValue (.boolean (throwResult v))]
                   :: eval.map (fun y => [normalizeAtom η (typeOfV y)]) }
               hmem fbm hchk
           have hexit : fbm.exits = Bool.true :=
             checkSeq_exits sigs r
-              { η := η, Γ := (x, [normalizeAtom η (typeOfV v)]) :: envTyOf η env,
-                σ := [.isValue (.boolean (throwResult v))]
+              { η := η, Γ := (x, [normalizeAtom η (typeOfV v)]) :: envTyOf η env, σ := [.isValue (.boolean (throwResult v))]
                   :: eval.map (fun y => [normalizeAtom η (typeOfV y)]) }
               rest fbm hchk hfall
           have htermm : terminal fbm = Bool.true := by
             simp [terminal, hfall, hexit]
           have hle : worldLe
-              { η := η, Γ := envTyOf η env,
-                σ := [normalizeAtom η (typeOfV (JSValue.boolean (throwResult v)))]
+              { η := η, Γ := envTyOf η env, σ := [normalizeAtom η (typeOfV (JSValue.boolean (throwResult v)))]
                   :: eval.map (fun y => [normalizeAtom η (typeOfV y)]) }
-              { η := η, Γ := (x, [normalizeAtom η (typeOfV v)]) :: envTyOf η env,
-                σ := [.isValue (.boolean (throwResult v))]
+              { η := η, Γ := (x, [normalizeAtom η (typeOfV v)]) :: envTyOf η env, σ := [.isValue (.boolean (throwResult v))]
                   :: eval.map (fun y => [normalizeAtom η (typeOfV y)]) } :=
             ⟨rfl, envLe_shadow_same hΓ,
       stackLe_cons_intro (slotLe_refl _) (stackLe_refl _),
@@ -12370,8 +12933,7 @@ theorem frameTyped_kTestVar_plainBool {sigs : SigTable} {r : Ty}
       { η := η, Γ := envTyOf η env, σ := eval.map (fun y => [normalizeAtom η (typeOfV y)]) }
       (.kTestVar x p :: rest)
       = checkSeq sigs r
-        { η := η, Γ := envTyOf η env,
-          σ := [.anyValue .bool] :: eval.map (fun y => [normalizeAtom η (typeOfV y)]) }
+        { η := η, Γ := envTyOf η env, σ := [.anyValue .bool] :: eval.map (fun y => [normalizeAtom η (typeOfV y)]) }
         rest)
     (h : frameTyped sigs η r ⟨.kTestVar x p :: rest, env, eval, ret⟩) :
     frameTyped sigs η r ⟨rest, env, .boolean b :: eval, ret⟩ := by
@@ -12389,8 +12951,7 @@ theorem SR_kTestVar_plainBool (sigs : SigTable) (reg : AOReg) (η : HeapCallable
         { η := η, Γ := envTyOf η env, σ := eval.map (fun y => [normalizeAtom η (typeOfV y)]) }
         (.kTestVar x p :: rest)
       = checkSeq sigs rd
-        { η := η, Γ := envTyOf η env,
-          σ := [.anyValue .bool] :: eval.map (fun y => [normalizeAtom η (typeOfV y)]) }
+        { η := η, Γ := envTyOf η env, σ := [.anyValue .bool] :: eval.map (fun y => [normalizeAtom η (typeOfV y)]) }
         rest)
     (hnone : ∀ (rd : Ty) (env : Env) (eval : List JSValue)
         (rest : List Instr),
@@ -12488,9 +13049,8 @@ theorem frameTyped_kTestVar_pPred_present {sigs : SigTable} {r : Ty}
     {hsc : sigParamsClosed sigs}
     (hdec : predDecide η f = some dec)
     (hmem : ∀ (Γ : TyEnv) (σ : List Ty), tyLookup Γ x = some [normalizeAtom η (typeOfV v)] →
-      { η := η, Γ := (x, [normalizeAtom η (typeOfV v)]) :: Γ,
-        σ := [.isValue (.boolean (g v))] :: σ }
-      ∈ splitP1 x (fun a => dec a == b)
+      { η := η, Γ := (x, [normalizeAtom η (typeOfV v)]) :: Γ, σ := [.isValue (.boolean (g v))] :: σ }
+      ∈ splitP1Und x b dec
         { η := η, Γ := Γ, σ := σ })
     (hΓ : tyLookup (envTyOf η env) x = some [normalizeAtom η (typeOfV v)])
     (h : frameTyped sigs η r ⟨.kTestVar x (.pPred f b) :: rest, env, eval, ret⟩) :
@@ -12499,19 +13059,19 @@ theorem frameTyped_kTestVar_pPred_present {sigs : SigTable} {r : Ty}
   simp only [checkSeq, hdec] at h
   have hmem0 := hmem (Γ := envTyOf η env)
     (σ := eval.map (fun y => [normalizeAtom η (typeOfV y)])) hΓ
-  have hne : splitP1 x (fun a => dec a == b)
+  have hne : splitP1Und x b dec
       { η := η, Γ := envTyOf η env, σ := eval.map (fun y => [normalizeAtom η (typeOfV y)]) } ≠ [] := by
     intro hnil
     rw [hnil] at hmem0
     cases hmem0
   cases hfork : forkTC (Instr.kTestVar x (Prim.pPred f b))
-      (splitP1 x (fun a => dec a == b)
+      (splitP1Und x b dec
         { η := η, Γ := envTyOf η env, σ := eval.map (fun y => [normalizeAtom η (typeOfV y)]) })
       (fun u => checkSeq sigs r u rest) with
   | flows fb =>
       have hterm0 : terminal fb = Bool.true := by
         rw [hfork] at h; exact h
-      cases hws : splitP1 x (fun a => dec a == b)
+      cases hws : splitP1Und x b dec
           { η := η, Γ := envTyOf η env, σ := eval.map (fun y => [normalizeAtom η (typeOfV y)]) } with
       | nil => exact absurd hws hne
       | cons u0 us =>
@@ -12523,31 +13083,26 @@ theorem frameTyped_kTestVar_pPred_present {sigs : SigTable} {r : Ty}
           obtain ⟨fbm, hchk⟩ :=
             fold_all_flows (J := fun u => checkSeq sigs r u rest) (u0 :: us) fb
               hfold
-              { η := η, Γ := (x, [normalizeAtom η (typeOfV v)]) :: envTyOf η env,
-                σ := [.isValue (.boolean (g v))]
+              { η := η, Γ := (x, [normalizeAtom η (typeOfV v)]) :: envTyOf η env, σ := [.isValue (.boolean (g v))]
                   :: eval.map (fun y => [normalizeAtom η (typeOfV y)]) }
               hmem0
           have hfall : fbm.falls = [] :=
             fold_terminal_falls_nil (J := fun u => checkSeq sigs r u rest)
               (u0 :: us) fb hfold hterm0
-              { η := η, Γ := (x, [normalizeAtom η (typeOfV v)]) :: envTyOf η env,
-                σ := [.isValue (.boolean (g v))]
+              { η := η, Γ := (x, [normalizeAtom η (typeOfV v)]) :: envTyOf η env, σ := [.isValue (.boolean (g v))]
                   :: eval.map (fun y => [normalizeAtom η (typeOfV y)]) }
               hmem0 fbm hchk
           have hexit : fbm.exits = Bool.true :=
             checkSeq_exits sigs r
-              { η := η, Γ := (x, [normalizeAtom η (typeOfV v)]) :: envTyOf η env,
-                σ := [.isValue (.boolean (g v))]
+              { η := η, Γ := (x, [normalizeAtom η (typeOfV v)]) :: envTyOf η env, σ := [.isValue (.boolean (g v))]
                   :: eval.map (fun y => [normalizeAtom η (typeOfV y)]) }
               rest fbm hchk hfall
           have htermm : terminal fbm = Bool.true := by
             simp [terminal, hfall, hexit]
           have hle : worldLe
-              { η := η, Γ := envTyOf η env,
-                σ := [normalizeAtom η (typeOfV (JSValue.boolean (g v)))]
+              { η := η, Γ := envTyOf η env, σ := [normalizeAtom η (typeOfV (JSValue.boolean (g v)))]
                   :: eval.map (fun y => [normalizeAtom η (typeOfV y)]) }
-              { η := η, Γ := (x, [normalizeAtom η (typeOfV v)]) :: envTyOf η env,
-                σ := [.isValue (.boolean (g v))]
+              { η := η, Γ := (x, [normalizeAtom η (typeOfV v)]) :: envTyOf η env, σ := [.isValue (.boolean (g v))]
                   :: eval.map (fun y => [normalizeAtom η (typeOfV y)]) } :=
             ⟨rfl, envLe_shadow_same hΓ,
       stackLe_cons_intro (slotLe_refl _) (stackLe_refl _),
@@ -12566,9 +13121,8 @@ theorem SR_kTestVar_pPred_split (sigs : SigTable) (reg : AOReg) (η : HeapCallab
     (hdec : predDecide η f = some dec)
     (hmem : ∀ (v : JSValue) (Γ : TyEnv) (σ : List Ty),
       tyLookup Γ x = some [normalizeAtom η (typeOfV v)] →
-      { η := η, Γ := (x, [normalizeAtom η (typeOfV v)]) :: Γ,
-        σ := [.isValue (.boolean (g v))] :: σ }
-      ∈ splitP1 x (fun a => dec a == b)
+      { η := η, Γ := (x, [normalizeAtom η (typeOfV v)]) :: Γ, σ := [.isValue (.boolean (g v))] :: σ }
+      ∈ splitP1Und x b dec
         { η := η, Γ := Γ, σ := σ })
     (hrun : ∀ (heap : Heap) (v : JSValue),
       applyPrim heap (.pPred f b) v = JSValue.boolean (g v)) :
@@ -12593,7 +13147,7 @@ theorem SR_kTestVar_pPred_split (sigs : SigTable) (reg : AOReg) (η : HeapCallab
               have h1 : frameTyped sigs η (sigRetTy sigs ret)
                   ⟨.kTestVar x (.pPred f b) :: stmts, env, eval, ret⟩ :=
                 hpre.2.2.2.1.1
-              simp only [frameTyped, frameWorld, checkSeq, hdec, splitP1,
+              simp only [frameTyped, frameWorld, checkSeq, hdec, splitP1Und,
                 hΓ, forkTC] at h1
           | some v =>
               have hΓ : tyLookup (envTyOf η env) x = some [normalizeAtom η (typeOfV v)] := by
@@ -12675,28 +13229,66 @@ theorem fieldsOf_data_eq (value : Option JSValue)
         field_enumerable_ne_writable, field_configurable_ne_value,
         field_configurable_ne_writable]
 
+theorem splitP1Und_of_splitP1 {x : «String»} {b : Bool} {dec : VTy → Bool}
+    {w : World} {u : World}
+    (h : u ∈ splitP1 x (fun a => dec a == b) w) :
+    u ∈ splitP1Und x b dec w := by
+  cases hl : tyLookup w.Γ x with
+  | none =>
+      simp only [splitP1, splitP1Und, hl] at h ⊢
+      cases h
+  | some S =>
+      simp only [splitP1, splitP1Und, hl, List.mem_flatMap] at h ⊢
+      obtain ⟨a, ha, hu⟩ := h
+      refine ⟨a, ha, ?_⟩
+      cases a with
+      | anyValue c =>
+          cases c with
+          | desc =>
+              cases hb : dec (VTy.anyValue Ctor.desc) with
+              | false =>
+                  simp only [splitP1Und, splitP1At, hb, reduceIte, beq_iff_eq] at hu ⊢
+                  cases b with
+                  | false => simp_all
+                  | true => simp_all
+              | true =>
+                  simp only [splitP1Und, splitP1At, hb, reduceIte, beq_iff_eq] at hu ⊢
+                  cases b with
+                  | false => simp_all
+                  | true => simp_all
+          | undef | null | bool | num | str | obj _ | list =>
+              rw [splitP1At] at hu ⊢
+              exact hu
+      | complN _ | complT | isValue _ | desc _ | notPresent =>
+          rw [splitP1At] at hu ⊢
+          exact hu
+
 theorem splitP1_pPred_data_machine (b : Bool) {Γ : TyEnv} {x : «String»}
     {v : JSValue} {σ : List Ty}
     (hΓ : tyLookup Γ x = some [normalizeAtom η (typeOfV v)]) :
-    { η := η, Γ := (x, [normalizeAtom η (typeOfV v)]) :: Γ,
-      σ := [.isValue (.boolean (b == dataPredResult v))] :: σ }
-      ∈ splitP1 x (fun a => dataPredDec a == b)
+    { η := η, Γ := (x, [normalizeAtom η (typeOfV v)]) :: Γ, σ := [.isValue (.boolean (b == dataPredResult v))] :: σ }
+      ∈ splitP1Und x b dataPredDec
         { η := η, Γ := Γ, σ := σ } := by
+  refine splitP1Und_of_splitP1 ?_
+
   cases v with
   | compl b' w =>
       cases b' <;> cases b <;>
-        simp [splitP1, splitP1At, hΓ, typeOfV, dataPredDec, dataPredResult, normalizeAtom]
+        simp [splitP1, splitP1Und, splitP1At, hΓ, typeOfV, dataPredDec,
+          dataPredResult, normalizeAtom, reduceIte, beq_iff_eq]
   | undefined | null | boolean _ | number _ | str _ | obj _ | listV _ =>
       cases b <;>
-        simp [splitP1, splitP1At, hΓ, typeOfV, dataPredDec, dataPredResult, normalizeAtom]
+        simp [splitP1, splitP1Und, splitP1At, hΓ, typeOfV, dataPredDec,
+          dataPredResult, normalizeAtom, reduceIte, beq_iff_eq]
   | descV d =>
       cases d with
       | mk value writable getter setter enumerable configurable =>
-          simp only [splitP1, splitP1At, hΓ, typeOfV, dataPredDec,
+          simp only [splitP1, splitP1Und, splitP1At, hΓ, typeOfV, dataPredDec,
             dataPredResult, normalizeAtom]
           have hd := fieldsOf_data_eq value writable enumerable configurable
             getter setter
-          simp [fieldsOf, fData, fAcc, List.flatMap, splitP1At, hd]
+          simp [fieldsOf, fData, fAcc, List.flatMap, splitP1At, hd, reduceIte,
+            beq_iff_eq]
           cases value <;> cases writable <;> cases getter <;> cases setter <;>
             cases enumerable <;> cases configurable <;> cases b <;> simp
 
@@ -12777,21 +13369,24 @@ theorem fieldsOf_acc_eq (value : Option JSValue)
 theorem splitP1_pPred_acc_machine (b : Bool) {Γ : TyEnv} {x : «String»}
     {v : JSValue} {σ : List Ty}
     (hΓ : tyLookup Γ x = some [normalizeAtom η (typeOfV v)]) :
-    { η := η, Γ := (x, [normalizeAtom η (typeOfV v)]) :: Γ,
-      σ := [.isValue (.boolean (b == accPredResult v))] :: σ }
-      ∈ splitP1 x (fun a => accPredDec a == b)
+    { η := η, Γ := (x, [normalizeAtom η (typeOfV v)]) :: Γ, σ := [.isValue (.boolean (b == accPredResult v))] :: σ }
+      ∈ splitP1Und x b accPredDec
         { η := η, Γ := Γ, σ := σ } := by
+  refine splitP1Und_of_splitP1 ?_
+
   cases v with
   | compl b' w =>
       cases b' <;> cases b <;>
-        simp [splitP1, splitP1At, hΓ, typeOfV, accPredDec, accPredResult, normalizeAtom]
+        simp [splitP1, splitP1Und, splitP1At, hΓ, typeOfV, accPredDec,
+          accPredResult, normalizeAtom, reduceIte, beq_iff_eq]
   | undefined | null | boolean _ | number _ | str _ | obj _ | listV _ =>
       cases b <;>
-        simp [splitP1, splitP1At, hΓ, typeOfV, accPredDec, accPredResult, normalizeAtom]
+        simp [splitP1, splitP1Und, splitP1At, hΓ, typeOfV, accPredDec,
+          accPredResult, normalizeAtom, reduceIte, beq_iff_eq]
   | descV d =>
       cases d with
       | mk value writable getter setter enumerable configurable =>
-          simp only [splitP1, splitP1At, hΓ, typeOfV, accPredDec,
+          simp only [splitP1, splitP1Und, splitP1At, hΓ, typeOfV, accPredDec,
             accPredResult, normalizeAtom]
           have hd := fieldsOf_acc_eq value writable enumerable configurable
             getter setter
@@ -12831,8 +13426,7 @@ theorem splitP1_pPred_callable_obj (heap : Heap) (b : Bool)
     {Γ : TyEnv} {x : «String»} {loc : Nat} {σ : List Ty}
     (hheap : heapCallabilityOk heap η)
     (hΓ : tyLookup Γ x = some [normalizeAtom η (typeOfV (JSValue.obj loc))]) :
-    { η := η, Γ := (x, [normalizeAtom η (typeOfV (JSValue.obj loc))]) :: Γ,
-      σ := [.isValue (.boolean (b == hasCallV heap (JSValue.obj loc)))] :: σ }
+    { η := η, Γ := (x, [normalizeAtom η (typeOfV (JSValue.obj loc))]) :: Γ, σ := [.isValue (.boolean (b == hasCallV heap (JSValue.obj loc)))] :: σ }
       ∈ splitP1 x (fun a => isCallableAtom η a == b)
         { η := η, Γ := Γ, σ := σ } := by
   have hloc : η loc = hasCallV heap (JSValue.obj loc) := by
@@ -12864,18 +13458,21 @@ theorem splitP1_pPred_callable_machine (heap : Heap) (b : Bool)
     {Γ : TyEnv} {x : «String»} {v : JSValue} {σ : List Ty}
     (hheap : heapCallabilityOk heap η)
     (hΓ : tyLookup Γ x = some [normalizeAtom η (typeOfV v)]) :
-    { η := η, Γ := (x, [normalizeAtom η (typeOfV v)]) :: Γ,
-      σ := [.isValue (.boolean (b == hasCallV heap v))] :: σ }
-      ∈ splitP1 x (fun a => isCallableAtom η a == b)
+    { η := η, Γ := (x, [normalizeAtom η (typeOfV v)]) :: Γ, σ := [.isValue (.boolean (b == hasCallV heap v))] :: σ }
+      ∈ splitP1Und x b (isCallableAtom η)
         { η := η, Γ := Γ, σ := σ } := by
+  refine splitP1Und_of_splitP1 ?_
+
   cases v with
-  | obj loc => exact splitP1_pPred_callable_obj heap b hheap hΓ
+  | obj loc => exact splitP1_pPred_callable_obj (σ := σ) heap b hheap hΓ
   | compl abrupt w =>
       cases abrupt <;> cases b <;>
-        simp [splitP1, splitP1At, hΓ, typeOfV, isCallableAtom, hasCallV, normalizeAtom]
+        simp [splitP1, splitP1Und, splitP1At, hΓ, typeOfV, isCallableAtom,
+          hasCallV, normalizeAtom, reduceIte, beq_iff_eq]
   | undefined | null | boolean _ | number _ | str _ | listV _ | descV _ =>
       cases b <;>
-        simp [splitP1, splitP1At, hΓ, typeOfV, isCallableAtom, hasCallV, normalizeAtom]
+        simp [splitP1, splitP1Und, splitP1At, hΓ, typeOfV, isCallableAtom,
+          hasCallV, normalizeAtom, reduceIte, beq_iff_eq]
 
 theorem frameTyped_kTestVar_pPred_callable_present {sigs : SigTable}
     {r : Ty} {heap : Heap} {b : Bool} {x : «String»} {v : JSValue}
@@ -12900,7 +13497,7 @@ theorem frameTyped_kTestVar_pPred_callable_reject_unbound {sigs : SigTable}
     (hΓ : tyLookup (envTyOf η env) x = none) :
     frameTyped sigs η r ⟨.kTestVar x (.pPred "IsCallable" b) :: rest,
         env, eval, ret⟩ = False := by
-  simp [frameTyped, frameWorld, checkSeq, predDecide, splitP1, hΓ, forkTC]
+  simp [frameTyped, frameWorld, checkSeq, predDecide, splitP1Und, hΓ, forkTC]
 
 theorem SR_kTestVar_pPred_callable (sigs : SigTable) (reg : AOReg) (η : HeapCallableTy)
     (b : Bool) (x : «String») (s : FM) (r : Ty) :
@@ -13066,13 +13663,11 @@ theorem frameTyped_kIMeth_getProto_obj {sigs : SigTable} {r : Ty}
       = some (older.map (fun x => [normalizeAtom η (typeOfV x)])) :=
     popAObj_normalizeObj η loc _
   have hchk : checkSeq sigs r
-      { η := η, Γ := envTyOf η env,
-        σ := [normalizeAtom η (typeOfV (JSValue.obj loc))] ::
+      { η := η, Γ := envTyOf η env, σ := [normalizeAtom η (typeOfV (JSValue.obj loc))] ::
           older.map (fun x => [normalizeAtom η (typeOfV x)]) }
       (.kIMeth "GetPrototypeOf" 0 :: rest)
       = checkSeq sigs r
-          { η := η, Γ := envTyOf η env,
-            σ := complTy (mopResult "GetPrototypeOf") ::
+          { η := η, Γ := envTyOf η env, σ := complTy (mopResult "GetPrototypeOf") ::
               older.map (fun x => [normalizeAtom η (typeOfV x)]) } rest := by
     simp [checkSeq, step1, mopArity, popTyN, hpop, forkTC_cons]
   rw [hchk] at h
@@ -13094,13 +13689,11 @@ theorem frameTyped_kIMeth_getProto_null {sigs : SigTable} {r : Ty}
       = some (older.map (fun x => [normalizeAtom η (typeOfV x)])) :=
     popAObj_normalizeObj η loc _
   have hchk : checkSeq sigs r
-      { η := η, Γ := envTyOf η env,
-        σ := [normalizeAtom η (typeOfV (JSValue.obj loc))] ::
+      { η := η, Γ := envTyOf η env, σ := [normalizeAtom η (typeOfV (JSValue.obj loc))] ::
           older.map (fun x => [normalizeAtom η (typeOfV x)]) }
       (.kIMeth "GetPrototypeOf" 0 :: rest)
       = checkSeq sigs r
-          { η := η, Γ := envTyOf η env,
-            σ := complTy (mopResult "GetPrototypeOf") ::
+          { η := η, Γ := envTyOf η env, σ := complTy (mopResult "GetPrototypeOf") ::
               older.map (fun x => [normalizeAtom η (typeOfV x)]) } rest := by
     simp [checkSeq, step1, mopArity, popTyN, hpop, forkTC_cons]
   rw [hchk] at h
