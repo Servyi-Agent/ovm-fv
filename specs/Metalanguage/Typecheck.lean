@@ -411,6 +411,12 @@ def bareOf : Ty → Option Ty
 def typeOfE (sigs : SigTable) (Γ : TyEnv) : Expr → Option Ty
   | .nv x => tyLookup Γ x
   | .nat n => some [.isValue (.number ↑n)]
+  | .const (.listV vs) =>
+      -- a list CONSTANT may not carry completion elements: nothing
+      -- in the lattice abstracts them, and the for-each element world
+      -- (anyT) would be unsound for them (same policy as listE/kMkList)
+      if vs.all (fun v => tmoves [typeOfV v] anyT) then
+        some [typeOfV (.listV vs)] else none
   | .const v => some [typeOfV v]
   | .varNotPresent _ => some [.anyValue .bool]
   | .isNormalC _ | .isThrowC _ | .isCompletion _ => some [.anyValue .bool]
@@ -941,20 +947,6 @@ def splitP1Und (x : «String») (b : Bool) (dec : VTy → Bool)
            { w with Γ := (x, [a]) :: w.Γ, σ := [.isValue (.boolean !b)] :: w.σ }]
       | _ => splitP1At x (fun t => dec t == b) w a)
 
-/-- The element binding of one for-each iteration: the value's own
-    (normalized) type, except that data/accessor descriptors widen to
-    the any-desc class (their predicate verdicts are ambiguous and
-    must be forked, not guessed) and completion elements reject (no
-    class abstracts them — the same policy as list construction). -/
-def forElemTy (η : HeapCallableTy) (v : JSValue) : Option Ty :=
-  match normalizeAtom η (typeOfV v) with
-  | .desc fs =>
-      if fs.any (fun fld => fData.contains fld)
-          || fs.any (fun fld => fAcc.contains fld) then
-        some [.anyValue .desc] else some [.desc fs]
-  | .complN _ | .complT => none
-  | a => some [a]
-
 /- Loop join: every falls-world must come back to a REFINEMENT of
     the loop-entry stack with no parked completion (neutrality). -/
 def checkLoopBody (rbody : TCResult) (site : Instr)
@@ -1119,6 +1111,16 @@ def checkRepeatTestAux (sigs : SigTable) (r : Ty) (w : World)
          (some (normalizeTy w.η t)) bodyEntry bodyInvariant
          tailEntry tailInvariant)
     (tailEntry ())
+
+/-- One kForStart atom's successor worlds: the exact empty singleton
+    takes only the zero-iteration world; an exact nonempty list or the
+    any-list class spawns zero (class only: a nonempty exact list
+    provably iterates) plus one element world. The zero and element
+    results are passed in — this combinator is pure. -/
+def forAtomTCR (site : Instr) (zero elem : TCResult) : VTy → TCResult
+  | .isValue (.listV []) => zero
+  | .isValue (.listV _) | .anyValue .list => mergeTC zero elem
+  | _ => .reject site "for-each over a non-list"
 
 def checkSeq : SigTable → Ty → World → List Instr → TCResult
   | _, _, w, [] => .flows { exits := Bool.false, throws := Bool.false, falls := [w], assumes := [] }
@@ -1302,12 +1304,7 @@ def checkSeq : SigTable → Ty → World → List Instr → TCResult
                   rest)
       | some (_ :: _) => .reject (.kRepeatTest c body) "loop entry stack is not empty"
   | sigs, r, w, .kForStart x body :: rest =>
-      -- per VERDICT ATOM of the popped list slot: an exact singleton
-      -- list forks one world per element (the loop variable typed
-      -- exactly, the empty one being only the zero-iteration world);
-      -- the any-list class spawns the zero world plus one element
-      -- world with the variable at the bare top; anything else is a
-      -- non-list and rejects.
+      -- per VERDICT ATOM of the popped list slot (see forAtomTCR).
       match popA (.anyValue .list) w.σ with
       | none => .reject (.kForStart x body) "for-each over a non-list"
       | some [] =>
@@ -1315,44 +1312,31 @@ def checkSeq : SigTable → Ty → World → List Instr → TCResult
           | t :: _ =>
               let w₀ := { w with σ := [] }
               t.foldl (fun accA a => mergeTC accA
-                (match a with
-                 | .isValue (.listV vs) =>
-                     match vs with
-                     | [] => checkSeq sigs r w₀ rest
-                     | _ => vs.foldl (fun accE v => mergeTC accE
-                         (match forElemTy w₀.η v with
-                          | none => .reject (.kForStart x body) "for-each over a list with a completion element"
-                          | some tx => checkLoopBody (checkSeq sigs r
-                              { w₀ with Γ := (x, tx) :: w₀.Γ } body)
-                            (.kForStart x body) []
-                            (fun wsf => wsf.foldl (fun accF u =>
-                               mergeTC accF (checkSeq sigs r u rest)) noFlows))) noFlows
-                 | .anyValue .list =>
-                     mergeTC (checkSeq sigs r w₀ rest)
-                       (checkLoopBody (checkSeq sigs r
-                           { w₀ with Γ := (x, anyT) :: w₀.Γ } body)
-                         (.kForStart x body) []
-                         (fun wsf => wsf.foldl (fun accE u =>
-                            mergeTC accE (checkSeq sigs r u rest)) noFlows))
-                 | _ => .reject (.kForStart x body) "for-each over a non-list")) vacOk
+                (forAtomTCR (.kForStart x body)
+                  (checkSeq sigs r w₀ rest)
+                  (checkLoopBody (checkSeq sigs r
+                      { w₀ with Γ := (x, anyT) :: w₀.Γ } body)
+                    (.kForStart x body) []
+                    (fun wsf => wsf.foldl (fun accE u =>
+                       mergeTC accE (checkSeq sigs r u rest)) noFlows))
+                  a)) vacOk
           | [] => .reject (.kForStart x body) "for-each over a non-list"
       | some (_ :: _) => .reject (.kForStart x body) "loop entry stack is not empty"
   | sigs, r, w, .kForBody x elems body :: rest =>
-      -- the re-arm: the remaining elements are CONCRETE values, so the
-      -- element worlds are exact; no elements left means the loop is
-      -- finished and the tail runs with the variable as it stands.
+      -- the re-arm: elements remain, so one more iteration runs with
+      -- the loop variable at the bare top (conservative for the
+      -- tail of the list); no elements left means the loop is done.
       match w.σ with
       | [] =>
           match elems with
           | [] => checkSeq sigs r w rest
-          | _ => elems.foldl (fun accE v => mergeTC accE
-              (match forElemTy w.η v with
-               | none => .reject (.kForBody x [] body) "for-each over a list with a completion element"
-               | some tx => checkLoopBody (checkSeq sigs r
-                   { w with Γ := (x, tx) :: w.Γ } body)
-                 (.kForBody x [] body) []
-                 (fun wsf => wsf.foldl (fun accF u =>
-                    mergeTC accF (checkSeq sigs r u rest)) noFlows))) noFlows
+          | _ =>
+              mergeTC (checkSeq sigs r w rest)
+                (checkLoopBody (checkSeq sigs r
+                    { w with Γ := (x, anyT) :: w.Γ } body)
+                  (.kForBody x [] body) []
+                  (fun wsf => wsf.foldl (fun accF u =>
+                     mergeTC accF (checkSeq sigs r u rest)) noFlows))
       | _ => .reject (.kForBody x [] body) "loop entry stack is not empty"
   | sigs, r, w, .kAssert :: rest =>
       -- assert, per VERDICT ATOM. The machine continues ONLY on
@@ -1395,6 +1379,26 @@ decreasing_by
       | (exfalso; simp_all)
       | omega
       | (rename_i l; exact absurd rfl (by intro _; exact l.elim))
+
+def forAtomTC (sigs : SigTable) (r : Ty) (w : World) (x : «String»)
+    (body rest : List Instr) : VTy → TCResult
+  | .isValue (.listV []) => checkSeq sigs r { w with σ := [] } rest
+  | .isValue (.listV _) | .anyValue .list =>
+      mergeTC (checkSeq sigs r { w with σ := [] } rest)
+        (checkLoopBody (checkSeq sigs r
+            { w with σ := [], Γ := (x, anyT) :: w.Γ } body)
+          (.kForStart x body) []
+          (fun wsf => wsf.foldl (fun acc u =>
+             mergeTC acc (checkSeq sigs r u rest)) noFlows))
+  | _ => .reject (.kForStart x body) "for-each over a non-list"
+termination_by sfuel body + sfuel rest + 1
+decreasing_by
+  all_goals
+    first
+      | (simp only [sfuel_cons, ifuel, efuel]; omega)
+      | (simp only [sfuel_cons]; omega)
+      | omega
+
 
 def typecheckSeq (sigs : SigTable) (r : Ty) (Γ : TyEnv) (seq : List Instr) : TCResult :=
   checkSeq sigs r { Γ := Γ, σ := [] } seq
