@@ -18,12 +18,9 @@ import Metalanguage.SubjectReduction
 -- expression-summary covariance (the 53-arm induction)
 #print axioms typeOfE_cov
 -- loop and throw-transfer helpers
-#print axioms terminal_markThrow
-#print axioms boolBranchTC_exits
 #print axioms boolBranchTC_specLe
 #print axioms meetTy_le_left
 #print axioms removeTy_le_left
-#print axioms fork_single_terminal
 -- the one-step machine covariance
 #print axioms step1_cov
 -- the specialization layer: verdict agreement + split covariance
@@ -43,16 +40,12 @@ import Metalanguage.SubjectReduction
 -- the fork lift (#9)
 #print axioms fork_specLe
 -- the no-silent-falls invariant (56 arms)
-#print axioms checkSeq_exits
 -- the terminality-transfer layer (exit preservation)
-#print axioms mergeTC_terminal
-#print axioms fold_exits_true_of
-#print axioms fold_terminal_falls_nil
+#print axioms mergeTC_partial
 #print axioms flatMap_falls_nil
-#print axioms fork_lift
 -- the kRet arm and its tools (the capstone's first full consumer)
 #print axioms checkSeq_kRet_elim
-#print axioms checkSeq_specialize_terminal
+#print axioms checkSeq_specialize_partial
 #print axioms frameOkUnder_elim
 #print axioms SR_kRet
 #print axioms SR_kMkList

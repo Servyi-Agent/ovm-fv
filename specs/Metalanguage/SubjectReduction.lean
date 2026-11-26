@@ -132,13 +132,13 @@ def frameChecksAt (sigs : SigTable) (η : HeapCallableTy) (f : Fr)
     { η := η, Γ := envTyOf η f.env,
       σ := top :: f.eval.map (fun v => [normalizeAtom η (typeOfV v)]) }
       f.stmts with
-  | .flows fb => terminal fb = Bool.true  -- every world returns
+  | .flows fb => partialTerminal fb = Bool.true  -- no path falls off the end
   | _ => False
 
 /-- The frame's check as it stands. -/
 def frameChecks (sigs : SigTable) (η : HeapCallableTy) (f : Fr) : Prop :=
   match checkSeq sigs (sigRetTy sigs f.ret) (frameWorld η f) f.stmts with
-  | .flows fb => terminal fb = Bool.true  -- every world returns
+  | .flows fb => partialTerminal fb = Bool.true  -- no path falls off the end
   | _ => False
 
 def frameOk (sigs : SigTable) (η : HeapCallableTy)
@@ -511,7 +511,7 @@ def certifies (sigs : SigTable) (η : HeapCallableTy) (name : «String»)
   match checkSeq sigs (sigRetTy sigs name)
       { η := η, Γ := zipTy ps ts, σ := []} (compileSteps prog) with
   | .flows fb =>
-      terminal fb = Bool.true
+      partialTerminal fb = Bool.true
         ∧ (fb.throws = Bool.true → complCanThrow (sigCompls sigs name) = Bool.true)
   | _ => False
 
@@ -521,7 +521,7 @@ theorem certifies_flows_elim {sigs : SigTable} {η : HeapCallableTy}
     (h : certifies sigs η name ps ts prog) :
     ∃ fb, checkSeq sigs (sigRetTy sigs name)
         { η := η, Γ := zipTy ps ts, σ := []} (compileSteps prog)
-        = TCResult.flows fb ∧ terminal fb = Bool.true
+        = TCResult.flows fb ∧ partialTerminal fb = Bool.true
         ∧ (fb.throws = Bool.true
             → complCanThrow (sigCompls sigs name) = Bool.true) := by
   cases hb : checkSeq sigs (sigRetTy sigs name)
@@ -2243,13 +2243,13 @@ theorem normalizeTy_cov {η : HeapCallableTy} {t' t : Ty}
 
 theorem terminal_markThrow (sigs : SigTable) (ex : Expr) (res : TCResult) :
     (match markThrow sigs ex res with
-      | .flows fb => terminal fb = Bool.true
+      | .flows fb => partialTerminal fb = Bool.true
       | _ => False) ↔
       (match res with
-        | .flows fb => terminal fb = Bool.true
+        | .flows fb => partialTerminal fb = Bool.true
         | _ => False) := by
   cases res with
-  | flows fb => simp [markThrow, terminal]
+  | flows fb => simp [markThrow, partialTerminal]
   | reject s why => exact Iff.rfl
 
 theorem typeOfE_cov (sigs : SigTable) (Γ' Γ : TyEnv) {η : HeapCallableTy} :
@@ -4163,97 +4163,6 @@ theorem ne_reject_of_flows {res : TCResult} {fb : Flows}
   rw [hsw] at h
   exact TCResult.noConfusion h
 
-/-- The noFlows-seeded fork fold over a NONEMPTY successor set: an
-    empty-falls total forces every component to fall-empty, and the
-    head component's IH forces its exits — hence the fold's exits. -/
-theorem fold_noFlows_exits {sigs : SigTable} {r : Ty} {rest : List Instr}
-    (ih1 : ∀ (u : World) (fbu : Flows), checkSeq sigs r u rest = TCResult.flows fbu
-      → fbu.falls = [] → fbu.exits = Bool.true) :
-    ∀ (ws : Worlds) (fr : Flows),
-      ws.foldl (fun acc u => mergeTC acc (checkSeq sigs r u rest)) noFlows = TCResult.flows fr
-        → fr.falls = [] → ws ≠ [] → fr.exits = Bool.true := by
-  intro ws
-  induction ws with
-  | nil => intro fr _ _ hne; exact absurd rfl hne
-  | cons u us ihw =>
-      intro fr heq hf _
-      have hstep : (u :: us).foldl (fun acc u => mergeTC acc (checkSeq sigs r u rest)) noFlows
-          = us.foldl (fun acc u => mergeTC acc (checkSeq sigs r u rest))
-              (mergeTC noFlows (checkSeq sigs r u rest)) := rfl
-      rw [hstep] at heq
-      cases hK : checkSeq sigs r u rest with
-      | reject s w =>
-          rw [hK] at heq
-          have hseed : mergeTC noFlows (TCResult.reject s w) = TCResult.reject s w := rfl
-          rw [hseed, fold_reject_absorb _ s w us] at heq
-          exact TCResult.noConfusion heq
-      | flows fbu =>
-          have hseed : mergeTC noFlows (TCResult.flows fbu)
-              = TCResult.flows
-                  { exits := Bool.false || fbu.exits, throws := Bool.false || fbu.throws,
-                    falls := [] ++ fbu.falls,
-                    diverges := Bool.false || fbu.diverges,
-                    assumes := [] ++ fbu.assumes } := rfl
-          rw [hK, hseed] at heq
-          cases us with
-          | nil =>
-              have hinj := TCResult.flows.inj heq
-              subst hinj
-              show Bool.false || fbu.exits = Bool.true
-              rw [ih1 u fbu hK hf]
-              rfl
-          | cons v vs =>
-              obtain ⟨-, heq2⟩ := fold_merge_flows (fun u => checkSeq sigs r u rest)
-                (v :: vs) _ (ne_reject_of_flows heq)
-              rw [heq2] at heq
-              have hinj := TCResult.flows.inj heq
-              subst hinj
-              have hf' : fbu.falls = [] := by
-                cases hfb : fbu.falls with
-                | nil => rfl
-                | cons x xs =>
-                    rw [hfb] at hf
-                    simp only [fallsT, List.nil_append, List.cons_append] at hf
-                    exact absurd hf (List.cons_ne_nil _ _)
-              show (Bool.false || fbu.exits)
-                  || (v :: vs).any (fun u => exitsT (checkSeq sigs r u rest)) = Bool.true
-              rw [ih1 u fbu hK hf']
-              simp
-
-/-- forkTC preserves the invariant: a flows result is a nonempty
-    fold, and the head component carries the exits. -/
-theorem forkTC_exits {sigs : SigTable} {r : Ty} {site : Instr} {rest : List Instr}
-    {ws : Worlds} {fb : Flows}
-    (h : forkTC site ws (fun u => checkSeq sigs r u rest) = TCResult.flows fb)
-    (hf : fb.falls = [])
-    (ih1 : ∀ (u : World) (fbu : Flows), checkSeq sigs r u rest = TCResult.flows fbu
-      → fbu.falls = [] → fbu.exits = Bool.true) :
-    fb.exits = Bool.true := by
-  cases ws with
-  | nil => rw [forkTC] at h; exact TCResult.noConfusion h
-  | cons u us =>
-      have hfok : forkTC site (u :: us) (fun u => checkSeq sigs r u rest)
-          = (u :: us).foldl (fun acc u => mergeTC acc (checkSeq sigs r u rest)) noFlows := by
-        simp only [forkTC]
-      rw [hfok] at h
-      exact fold_noFlows_exits ih1 _ _ h hf (by simp)
-
-/-- markThrow preserves falls and exits. -/
-theorem markThrow_exits {sigs : SigTable} {ex : Expr} {res : TCResult} {fb : Flows}
-    (h : markThrow sigs ex res = TCResult.flows fb) (hf : fb.falls = [])
-    (ih : ∀ fb', res = TCResult.flows fb' → fb'.falls = [] → fb'.exits = Bool.true) :
-    fb.exits = Bool.true := by
-  cases hres : res with
-  | reject s w => rw [hres] at h; simp only [markThrow] at h; exact TCResult.noConfusion h
-  | flows fb' =>
-      rw [hres] at h
-      simp only [markThrow] at h
-      have hinj := TCResult.flows.inj h
-      subst hinj
-      have hf' : fb'.falls = [] := hf
-      show fb'.exits = Bool.true
-      exact ih fb' hres hf'
-
 /-- THE NO-SILENT-FALLS INVARIANT: every checkSeq result that is
     flows with empty falls EXITED. The load-bearing structural fact
     of the checker — type_safety's frame demand (terminal) is
@@ -4938,38 +4847,6 @@ theorem step1_cov (sigs : SigTable) (i : Instr) :
                                             (stackCov_cons_intro
                                               (tyCov_refl _ _) hcovσ.2)⟩
                                       · cases h2
-theorem boolBranchTC_exits {site : Instr} {ts : Ty}
-    {trueResult falseResult : TCResult} {fb : Flows}
-    (h : ts.foldl
-      (fun acc a => mergeTC acc
-        (match a with
-         | .isValue (.boolean Bool.true) => trueResult
-         | .isValue (.boolean Bool.false) => falseResult
-         | .anyValue .bool => mergeTC trueResult falseResult
-         | _ => .reject site "loop verdict is not boolean"))
-      vacOk = TCResult.flows fb) :
-    fb.exits = Bool.true := by
-  have hnr : ∀ s w, ts.foldl
-      (fun acc a => mergeTC acc
-        (match a with
-         | .isValue (.boolean Bool.true) => trueResult
-         | .isValue (.boolean Bool.false) => falseResult
-         | .anyValue .bool => mergeTC trueResult falseResult
-         | _ => .reject site "loop verdict is not boolean"))
-      vacOk ≠ TCResult.reject s w := by
-    intro s w hsw
-    exact TCResult.noConfusion (h.symm.trans hsw)
-  obtain ⟨-, heq⟩ := fold_merge_flows
-    (fun a => match a with
-      | .isValue (.boolean Bool.true) => trueResult
-      | .isValue (.boolean Bool.false) => falseResult
-      | .anyValue .bool => mergeTC trueResult falseResult
-      | _ => .reject site "loop verdict is not boolean")
-    ts vacOk hnr
-  have hinj := TCResult.flows.inj (h.symm.trans heq)
-  subst hinj
-  simp [exitsT, vacOk]
-
 /- ## Generic fold/exit helpers for the verdict- and element-folds. -/
 
 /-- A fold from a flows seed with exits = true keeps exits = true
@@ -5056,381 +4933,6 @@ theorem foldl_exits_gen {α : Type} (J : α → TCResult)
           | cons b bs =>
               refine ih _ fb ⟨_, rfl⟩ (by rw [has]; exact List.cons_ne_nil _ _) h hf
 
-/- ## THE NO-SILENT-FALLS INVARIANT: every checkSeq result that is
-    flows with empty falls EXITED (re-derived on the flat
-    completion universe). -/
-theorem checkSeq_exits (sigs : SigTable) (r : Ty) (w : World) (seq : List Instr) :
-    ∀ (fb : Flows), checkSeq sigs r w seq = TCResult.flows fb →
-      fb.falls = [] → fb.exits = Bool.true := by
-  induction sigs, r, w, seq using checkSeq.induct
-  case case1 =>
-    rename_i sigs r w
-    intro fb h hf
-    simp only [checkSeq] at h
-    cases h
-    have hf' : [w] = [] := hf
-    exact absurd hf' (List.cons_ne_nil _ _)
-  case case2 =>
-    rename_i sigs r w tail ts σ' hσ hle
-    intro fb h hf
-    simp only [checkSeq, hσ, hle] at h
-    have hinj := TCResult.flows.inj h
-    subst hinj
-    rfl
-  case case3 =>
-    rename_i sigs r w tail ts σ' hσ hnt
-    intro fb h hf
-    simp only [checkSeq, hσ] at h
-    split at h
-    · next hcond => exact absurd hcond hnt
-    · exact TCResult.noConfusion h
-  case case4 =>
-    rename_i sigs r w tail hσ
-    intro fb h hf
-    simp only [checkSeq, hσ] at h
-    exact TCResult.noConfusion h
-  case case5 =>
-    rename_i sigs r w t e rest hσ
-    intro fb h hf
-    simp only [checkSeq, hσ] at h
-    exact TCResult.noConfusion h
-  case case6 =>
-    rename_i sigs r w t e rest ts σ' hσ ih2 ih1
-    intro fb h hf
-    simp only [checkSeq, hσ] at h
-    obtain ⟨-, heq⟩ := fold_merge_flows _ ts vacOk (ne_reject_of_flows h)
-    rw [heq] at h
-    have hinj := TCResult.flows.inj h
-    subst hinj
-    rfl
-  case case7 =>
-    rename_i sigs r w x rest hlook ih1
-    intro fb h hf
-    simp only [checkSeq, hlook] at h
-    exact ih1 fb h hf
-  case case8 =>
-    rename_i sigs r w x rest S hlook ih1
-    intro fb h hf
-    simp only [checkSeq, hlook] at h
-    exact forkTC_exits h hf ih1
-  case case9 =>
-    rename_i sigs r w x rest ih1
-    intro fb h hf
-    rw [checkSeq.eq_5] at h
-    exact ih1 fb h hf
-  case case10 =>
-    rename_i sigs r w x rest ih1
-    intro fb h hf
-    rw [checkSeq.eq_6] at h
-    exact ih1 fb h hf
-  case case11 =>
-    rename_i sigs r w x rest ih1
-    intro fb h hf
-    rw [checkSeq.eq_7] at h
-    exact ih1 fb h hf
-  case case12 =>
-    rename_i sigs r w x rest ih1
-    intro fb h hf
-    rw [checkSeq.eq_8] at h
-    exact ih1 fb h hf
-  case case13 =>
-    rename_i sigs r w x rest ih1
-    intro fb h hf
-    rw [checkSeq.eq_9] at h
-    exact ih1 fb h hf
-  case case14 =>
-    rename_i sigs r w x rest ih1
-    intro fb h hf
-    rw [checkSeq.eq_10] at h
-    exact ih1 fb h hf
-  case case15 =>
-    rename_i sigs r w x rest ih1
-    intro fb h hf
-    rw [checkSeq.eq_11] at h
-    exact ih1 fb h hf
-  case case16 =>
-    rename_i sigs r w x rest ih1
-    intro fb h hf
-    rw [checkSeq.eq_12] at h
-    exact ih1 fb h hf
-  case case17 =>
-    rename_i sigs r w x rest ih1
-    intro fb h hf
-    rw [checkSeq.eq_13] at h
-    exact ih1 fb h hf
-  case case18 =>
-    rename_i sigs r w x rest ih1
-    intro fb h hf
-    rw [checkSeq.eq_14] at h
-    exact ih1 fb h hf
-  case case19 =>
-    rename_i sigs r w s x rest ih1
-    intro fb h hf
-    rw [checkSeq.eq_15] at h
-    exact ih1 fb h hf
-  case case20 =>
-    rename_i sigs r w x rest ih1
-    intro fb h hf
-    rw [checkSeq.eq_16] at h
-    exact ih1 fb h hf
-  case case21 =>
-    rename_i sigs r w x rest ih1
-    intro fb h hf
-    rw [checkSeq.eq_17] at h
-    exact ih1 fb h hf
-  case case22 =>
-    rename_i sigs r w x rest ih1
-    intro fb h hf
-    rw [checkSeq.eq_18] at h
-    exact ih1 fb h hf
-
-  case case23 =>
-    rename_i sigs r w ty x rest ih1
-    intro fb h hf
-    rw [checkSeq.eq_19] at h
-    exact ih1 fb h hf
-  case case24 =>
-    rename_i sigs r w nm x rest ih1
-    intro fb h hf
-    rw [checkSeq.eq_20] at h
-    exact ih1 fb h hf
-  case case25 =>
-    rename_i sigs r w b f x rest hfused ih1
-    intro fb h hf
-    rw [checkSeq.eq_21, if_pos hfused] at h
-    exact ih1 fb h hf
-  case case26 =>
-    rename_i sigs r w b f x rest hfused hty
-    intro fb h hf
-    simp only [checkSeq] at h
-    split at h
-    · next hcond => exact absurd hcond hfused
-    · rw [hty] at h
-      dsimp only at h
-      exact TCResult.noConfusion h
-  case case27 =>
-    rename_i sigs r w b f x rest hfused S hty ih1
-    intro fb h hf
-    simp only [checkSeq] at h
-    split at h
-    · next hcond => exact absurd hcond hfused
-    · rw [hty] at h
-      dsimp only at h
-      exact markThrow_exits h hf ih1
-  case case28 =>
-    rename_i sigs r w c body rest
-    intro fb h hf
-    simp only [checkSeq] at h
-    exact markThrow_exits h hf (fun fb' hres _ => by
-      simp only [checkRepeatWhileAux] at hres
-      repeat' split at hres
-      all_goals first
-        | exact boolBranchTC_exits hres
-        | cases hres)
-  case case29 =>
-    rename_i sigs r w ex rest hdisj hty
-    intro fb h hf
-    simp only [checkSeq, hty] at h
-    exact TCResult.noConfusion h
-  case case30 =>
-    rename_i sigs r w ex rest hdisj S hty ih1
-    intro fb h hf
-    simp only [checkSeq, hty] at h
-    exact markThrow_exits h hf ih1
-  case case31 =>
-    rename_i sigs r w x rest f b dec hdec ih1
-    intro fb h hf
-    rw [checkSeq.eq_24, hdec] at h
-    exact forkTC_exits h hf ih1
-  case case32 =>
-    rename_i sigs r w x rest f b hdec hlook
-    intro fb h hf
-    rw [checkSeq.eq_24, hdec, hlook] at h
-    dsimp only at h
-    exact TCResult.noConfusion h
-  case case33 =>
-    rename_i sigs r w x rest f b hdec S hlook ih1
-    intro fb h hf
-    rw [checkSeq.eq_24, hdec, hlook] at h
-    first
-    | exact ih1 fb h hf
-    | (dsimp only at h; exact ih1 fb h hf)
-    | exact ih1 fb (by dsimp only at h; exact h) hf
-  case case34 =>
-    rename_i sigs r w x rest dec hdec ih1
-    intro fb h hf
-    rw [checkSeq.eq_25] at h
-    exact forkTC_exits h hf ih1
-  case case35 =>
-    rename_i sigs r w x rest hdec hlook
-    intro fb h hf
-    exact absurd hlook (by simp [primDecide])
-  case case36 =>
-    rename_i sigs r w x rest hdec S hlook ih1
-    intro fb h hf
-    exact absurd hlook (by simp [primDecide])
-  case case37 =>
-    rename_i sigs r w x rest dec hdec ih1
-    intro fb h hf
-    rw [checkSeq.eq_26] at h
-    exact forkTC_exits h hf ih1
-  case case38 =>
-    rename_i sigs r w x rest hdec hlook
-    intro fb h hf
-    exact absurd hlook (by simp [primDecide])
-  case case39 =>
-    rename_i sigs r w x rest hdec S hlook ih1
-    intro fb h hf
-    exact absurd hlook (by simp [primDecide])
-  case case40 =>
-    rename_i sigs r w x p rest ps hT hpred hn hc ih1
-    intro fb h hf
-    simp only [checkSeq, hpred, hn, hc, hT] at h
-    exact forkTC_exits h hf ih1
-  case case41 =>
-    rename_i sigs r w x p rest hT hlook hpred hn hc
-    intro fb h hf
-    simp only [checkSeq, hpred, hn, hc, hT, hlook] at h
-    exact TCResult.noConfusion h
-  case case42 =>
-    rename_i sigs r w x p rest hT S hlook hpred hn hc ih1
-    intro fb h hf
-    simp only [checkSeq, hpred, hn, hc, hT, hlook] at h
-    exact ih1 fb h hf
-  case case43 =>
-    rename_i sigs r w c body rest hpop
-    intro fb h hf
-    simp only [checkSeq, hpop] at h
-    exact TCResult.noConfusion h
-  case case44 =>
-    rename_i sigs r w c body rest hpop hnil
-    intro fb h hf
-    simp only [checkSeq, hpop, hnil] at h
-    exact TCResult.noConfusion h
-  case case45 =>
-    intro fb h hf
-    simp_all only [checkSeq, boolBranchTC]
-    exact boolBranchTC_exits h
-  case case46 =>
-    rename_i sigs r w c body rest hd htl hpop
-    intro fb h hf
-    simp only [checkSeq, hpop] at h
-    exact TCResult.noConfusion h
-  case case47 =>
-    rename_i sigs r w x body rest hpop
-    intro fb h hf
-    simp only [checkSeq, hpop] at h
-    exact TCResult.noConfusion h
-  case case48 =>
-    intro fb h hf
-    simp_all only [checkSeq]
-    exact foldl_exits_true _ _ vacOk fb ⟨_, rfl, rfl⟩ h
-  case case49 =>
-    intro fb h hf
-    simp_all only [checkSeq]
-    exact TCResult.noConfusion h
-  case case50 =>
-    intro fb h hf
-    simp_all only [checkSeq]
-    exact TCResult.noConfusion h
-  case case51 =>
-    rename_i sigs r w x body rest hσ ih1
-    intro fb h hf
-    simp only [checkSeq, hσ] at h
-    exact ih1 fb h hf
-  case case52 =>
-    rename_i sigs r w x elems body rest hσ hne ih1 ih2 ih3
-    intro fb h hf
-    cases hcons : elems with
-    | nil => exact (hne hcons).elim
-    | cons v0 vs0 =>
-        simp only [checkSeq, hσ] at h
-        cases hrest : checkSeq sigs r w rest with
-        | reject s w' =>
-            rw [hrest] at h
-            exact TCResult.noConfusion h
-        | flows fr1 =>
-            rw [hrest] at h
-            cases hbody : checkSeq sigs r { w with Γ := (x, anyT) :: w.Γ, σ := [] } body with
-            | reject s w' =>
-                rw [hbody] at h
-                simp only [checkLoopBody] at h
-                exact TCResult.noConfusion h
-            | flows fb1 =>
-                rw [hbody] at h
-                simp only [checkLoopBody] at h
-                split at h
-                · cases hkf : fb1.falls.foldl
-                      (fun acc u => mergeTC acc (checkSeq sigs r u rest)) noFlows with
-                  | reject s w' =>
-                      rw [hkf] at h
-                      dsimp only at h
-                      exact TCResult.noConfusion h
-                  | flows fr =>
-                      rw [hkf] at h
-                      dsimp only at h
-                      have hinj := TCResult.flows.inj h
-                      subst hinj
-                      match hfalls : fb1.falls with
-                      | [] =>
-                          have hfr1 : fr1.falls = [] := by
-                            have hall := hf
-                            cases hr1 : fr1.falls with
-                            | nil => rfl
-                            | cons a as => rw [hr1] at hall; simp at hall
-                          have hex1 := ih1 fr1 hrest hfr1
-                          show (fr1.exits || (fb1.exits || fr.exits)) = Bool.true
-                          rw [hex1]; simp
-                      | u :: us =>
-                          have hfr : fr.falls = [] := by
-                            have hall := hf
-                            cases hrr : fr.falls with
-                            | nil => rfl
-                            | cons a as => rw [hrr] at hall; simp at hall
-                          rw [fold_noFlows_exits ih3 _ fr hkf hfr (by simp [hfalls])]
-                          simp
-                · exact TCResult.noConfusion h
-  case case53 =>
-    rename_i sigs r w x elems body rest hσne
-    intro fb h hf
-    cases hσ : w.σ with
-    | nil => exact (hσne hσ).elim
-    | cons a as =>
-        cases elems with
-        | nil => simp only [checkSeq, hσ] at h; exact TCResult.noConfusion h
-        | cons v vs => simp only [checkSeq, hσ] at h; exact TCResult.noConfusion h
-  case case54 =>
-    rename_i sigs r w rest hσ
-    intro fb h hf
-    simp only [checkSeq, hσ] at h
-    exact TCResult.noConfusion h
-  case case55 =>
-    rename_i sigs r w rest ts σ' hσ ih1
-    intro fb h hf
-    simp only [checkSeq, hσ] at h
-    obtain ⟨-, heq⟩ := fold_merge_flows _ ts vacOk (ne_reject_of_flows h)
-    rw [heq] at h
-    have hinj := TCResult.flows.inj h
-    subst hinj
-    rfl
-  case case56 =>
-    rename_i sigs r w i rest hdisj hstep
-    intro fb h hf
-    simp only [checkSeq, hstep] at h
-    exact TCResult.noConfusion h
-  case case57 =>
-    rename_i sigs r w i rest hdisj ws' hstep ih1
-    intro fb h hf
-    simp only [checkSeq, hstep] at h
-    exact forkTC_exits h hf ih1
-
-
-/- ## Proof layer VI: the completion-stack identities
-
-    Completions are stack values; every protocol step is a plain
-    σ-operation. Runtime slots are singletons, so the identities
-    are stated for singleton tops. -/
-
 theorem checkSeq_kTest_normal {sigs : SigTable} {r : Ty} {W : World} {p : VTy}
     {σ' : List Ty} {rest : List Instr} (hσ : W.σ = [VTy.complN p] :: σ') :
     checkSeq sigs r W (.kTest :: rest)
@@ -5513,11 +5015,12 @@ theorem checkSeq_pWrapC_slot {sigs : SigTable} {r : Ty} {W : World} {t : VTy}
     singleton map (typeOfV completion-aware). Each arm is the
     identity transported across frameChecks. -/
 
-theorem merge_vacOk_terminal {sigs : SigTable} {r : Ty} {W : World} {seq : List Instr}
+theorem merge_vacOk_partial {sigs : SigTable} {r : Ty} {W : World} {seq : List Instr}
     {fb : Flows}
     (h : mergeTC vacOk (checkSeq sigs r W seq) = TCResult.flows fb)
-    (ht : terminal fb = Bool.true) :
-    ∃ fbr, checkSeq sigs r W seq = TCResult.flows fbr ∧ terminal fbr = Bool.true := by
+    (ht : partialTerminal fb = Bool.true) :
+    ∃ fbr, checkSeq sigs r W seq = TCResult.flows fbr ∧
+      partialTerminal fbr = Bool.true := by
   cases hres : checkSeq sigs r W seq with
   | reject s w =>
       have hrej : mergeTC vacOk (TCResult.reject s w) = TCResult.reject s w := rfl
@@ -5527,18 +5030,14 @@ theorem merge_vacOk_terminal {sigs : SigTable} {r : Ty} {W : World} {seq : List 
       refine ⟨fbr, rfl, ?_⟩
       have hmerge : mergeTC vacOk (TCResult.flows fbr)
           = TCResult.flows
-              { exits := Bool.true || fbr.exits, throws := Bool.false || fbr.throws,
+              { exits := Bool.false || fbr.exits, throws := Bool.false || fbr.throws,
                 falls := [] ++ fbr.falls,
                 diverges := Bool.false || fbr.diverges,
                 assumes := [] ++ fbr.assumes } := rfl
       rw [hres, hmerge] at h
       have hinj := TCResult.flows.inj h
       subst hinj
-      unfold terminal at ht ⊢
-      have hfl : fbr.falls = [] := by simpa using ht
-      rw [checkSeq_exits sigs r W seq fbr hres hfl]
-      simp only [hfl]
-      trivial
+      exact ht
 
 /-- kIte on a DECIDED singleton verdict: the fold is exactly the
     vacOk-merge of the chosen branch's continuation. -/
@@ -5603,12 +5102,12 @@ theorem sr_kIte_loud {sigs : SigTable} {η : HeapCallableTy} {t e : List Instr}
     its step transfers. The abstraction function is frameWorld
     (defined with the bridge, above). -/
 
-/-- The type machine accepts the abstracted frame: every
-    exploration path returns inside r. -/
+/-- The type machine accepts the abstracted frame: no exploration
+    path falls off the end (partial correctness — paths may diverge). -/
 def frameTyped (sigs : SigTable) (η : HeapCallableTy) (r : Ty)
     (f : Fr) : Prop :=
   match checkSeq sigs r (frameWorld η f) f.stmts with
-  | .flows fb => terminal fb = Bool.true  -- every world returns
+  | .flows fb => partialTerminal fb = Bool.true  -- every world returns
   | _ => False
 
 theorem frameTyped_eq_frameChecks (sigs : SigTable) (η : HeapCallableTy)
@@ -5646,7 +5145,7 @@ theorem frameTyped_kIte {sigs : SigTable} {η : HeapCallableTy} {b : Bool}
               exact h.elim
           | flows fbm =>
               rw [hm] at h
-              obtain ⟨fbr', hfb, htr⟩ := merge_vacOk_terminal hm h
+              obtain ⟨fbr', hfb, htr⟩ := merge_vacOk_partial hm h
               have hbr' : fbr' = fbr := TCResult.flows.inj (hfb.symm.trans hres)
               subst hbr'
               exact htr
@@ -5671,7 +5170,7 @@ theorem frameTyped_kIte {sigs : SigTable} {η : HeapCallableTy} {b : Bool}
               exact h.elim
           | flows fbm =>
               rw [hm] at h
-              obtain ⟨fbr', hfb, htr⟩ := merge_vacOk_terminal hm h
+              obtain ⟨fbr', hfb, htr⟩ := merge_vacOk_partial hm h
               have hbr' : fbr' = fbr := TCResult.flows.inj (hfb.symm.trans hres)
               subst hbr'
               exact htr
@@ -5750,7 +5249,7 @@ theorem frameTyped_kRepeatTest_false {sigs : SigTable} {η : HeapCallableTy}
           (checkSeq sigs r { η := η, Γ := envTyOf η env, σ := [] } rest) with
       | reject s w => rw [hm] at h; exact h.elim
       | flows fb =>
-          obtain ⟨fbr, hres, hterm⟩ := merge_vacOk_terminal hm
+          obtain ⟨fbr, hres, hterm⟩ := merge_vacOk_partial hm
             (by rw [hm] at h; exact h)
           rw [hres]
           exact hterm
@@ -5883,7 +5382,7 @@ def frameOkUnder (sigs : SigTable) (η : HeapCallableTy)
     { η := η, Γ := envTyOf η f.env, σ := complTy (sigCompls sigs callee)
           :: f.eval.map (fun v => [normalizeAtom η (typeOfV v)]) }
     f.stmts with
-  | .flows fb => terminal fb = Bool.true
+  | .flows fb => partialTerminal fb = Bool.true
   | _ => False
 
 /-- Each frame at its own destiny; the frame under f anticipates
@@ -6869,7 +6368,7 @@ theorem machineRet_cons_congr {sigs : SigTable} {f g : Fr} {fs : List Fr}
 theorem frameChecks_elim {sigs : SigTable} {η : HeapCallableTy} {f : Fr}
     (h : frameChecks sigs η f) :
     ∃ fb, checkSeq sigs (sigRetTy sigs f.ret) (frameWorld η f) f.stmts
-        = TCResult.flows fb ∧ terminal fb = Bool.true := by
+        = TCResult.flows fb ∧ partialTerminal fb = Bool.true := by
   cases hc : checkSeq sigs (sigRetTy sigs f.ret) (frameWorld η f) f.stmts with
   | flows fb =>
       exact ⟨fb, rfl, by rw [frameChecks, hc] at h; exact h⟩
@@ -6883,7 +6382,7 @@ theorem frameOkUnder_elim {sigs : SigTable} {η : HeapCallableTy} {n : «String�
     ∃ fb, checkSeq sigs (sigRetTy sigs f.ret)
       { η := η, Γ := envTyOf η f.env, σ := complTy (sigCompls sigs n)
             :: f.eval.map (fun v => [normalizeAtom η (typeOfV v)]) }
-      f.stmts = TCResult.flows fb ∧ terminal fb = Bool.true := by
+      f.stmts = TCResult.flows fb ∧ partialTerminal fb = Bool.true := by
   cases hch : checkSeq sigs (sigRetTy sigs f.ret)
       { η := η, Γ := envTyOf η f.env, σ := complTy (sigCompls sigs n)
             :: f.eval.map (fun v => [normalizeAtom η (typeOfV v)]) }
@@ -7686,25 +7185,15 @@ def worldsLe (ws' ws : Worlds) : Prop :=
   ∀ u' ∈ ws', ∃ u ∈ ws, worldLe u' u
 
 /-- Merge of two terminal flows is terminal. -/
-theorem mergeTC_terminal {f₁ f₂ : Flows}
-    (h₁ : terminal f₁ = Bool.true) (h₂ : terminal f₂ = Bool.true) :
-    terminal { exits := f₁.exits || f₂.exits, throws := f₁.throws || f₂.throws,
-               falls := f₁.falls ++ f₂.falls, assumes := f₁.assumes ++ f₂.assumes }
-      = Bool.true := by
-  obtain ⟨e1, th1, fa1, as1⟩ := f₁
-  obtain ⟨e2, th2, fa2, as2⟩ := f₂
-  unfold terminal at h₁ h₂ ⊢
-  simp only [Bool.and_eq_true] at h₁ h₂ ⊢
-  obtain ⟨he₁, hf₁⟩ := h₁
-  obtain ⟨he₂, hf₂⟩ := h₂
-  refine ⟨?_, ?_⟩
-  · rw [he₁, he₂]; rfl
-  · cases fa1 with
-    | nil =>
-        rw [List.nil_append]
-        exact hf₂
-    | cons x xs =>
-        exact absurd hf₁ (fun hc => Bool.noConfusion hc)
+theorem mergeTC_partial {f₁ f₂ : Flows}
+    (h₁ : partialTerminal f₁ = Bool.true) (h₂ : partialTerminal f₂ = Bool.true) :
+    partialTerminal { exits := f₁.exits || f₂.exits, throws := f₁.throws || f₂.throws,
+                      falls := f₁.falls ++ f₂.falls,
+                      diverges := f₁.diverges || f₂.diverges,
+                      assumes := f₁.assumes ++ f₂.assumes } = Bool.true := by
+  simp only [partialTerminal, List.isEmpty_iff] at h₁ h₂ ⊢
+  rw [h₁, h₂, List.append_eq_nil_iff]
+  exact ⟨rfl, rfl⟩
 
 /-- Extraction from a noFlows-seeded fold that is flows: every
     component is flows. (By fold_merge_flows with acc = noFlows.) -/
@@ -7721,50 +7210,10 @@ theorem fold_all_flows {J : World → TCResult} :
   obtain ⟨hmem, -⟩ := fold_merge_flows J ws noFlows hnr
   exact hmem u hu
 
-/-- Extraction: the fold's total exits is the disjunction of the
-    component exits (any coarse component exiting is enough, and a
-    covered refined world inherits its cover's exit). -/
-theorem fold_exits_true_of {J : World → TCResult} :
+theorem fold_falls_nil {J : World → TCResult} :
     ∀ (ws : Worlds) (fb : Flows),
       ws.foldl (fun acc u => mergeTC acc (J u)) noFlows = TCResult.flows fb
-        → terminal fb = Bool.true → ws ≠ []
-        → ∃ u ∈ ws, exitsT (J u) = Bool.true := by
-  -- the fold's record has exits := false || any exits; terminality
-  -- forces the disjunction true, i.e. SOME component exits
-  intro ws fb heq hterm hne
-  have hnr : ∀ s w, ws.foldl (fun acc u => mergeTC acc (J u)) noFlows
-      ≠ TCResult.reject s w := by
-    intro s w hsw
-    rw [hsw] at heq
-    exact TCResult.noConfusion heq
-  obtain ⟨-, heqf⟩ := fold_merge_flows J ws noFlows hnr
-  rw [heqf] at heq
-  have hinj := TCResult.flows.inj heq
-  obtain ⟨fb2⟩ := hinj
-  -- terminal of the merged record: exits disjunction true
-  unfold terminal at hterm
-  simp only [Bool.and_eq_true] at hterm
-  obtain ⟨hexs, -⟩ := hterm
-  simp only [exitsT, noFlows, Bool.or_eq_true, Bool.false_or] at hexs
-  by_cases hany : ws.any (fun u => exitsT (J u)) = Bool.true
-  · obtain ⟨u, hu, hex⟩ := List.any_eq_true.mp hany
-    exact ⟨u, hu, hex⟩
-  · exfalso
-    have hf : ws.any (fun u => exitsT (J u)) = Bool.false := by
-      cases hc : ws.any (fun u => exitsT (J u)) with
-      | true => exact absurd hc hany
-      | false => rfl
-    have : (List.any ws fun a =>
-        match J a with
-        | TCResult.flows f => f.exits
-        | TCResult.reject _ _ => Bool.false) = Bool.false := hf
-    rw [this] at hexs
-    exact Bool.noConfusion hexs
-
-theorem fold_terminal_falls_nil {J : World → TCResult} :
-    ∀ (ws : Worlds) (fb : Flows),
-      ws.foldl (fun acc u => mergeTC acc (J u)) noFlows = TCResult.flows fb
-        → terminal fb = Bool.true
+        → partialTerminal fb = Bool.true
         → ∀ u ∈ ws, ∀ fbu, J u = TCResult.flows fbu → fbu.falls = [] := by
   intro ws fb heq hterm u hu fbu hJu
   have hnr : ∀ s w, ws.foldl (fun acc u => mergeTC acc (J u)) noFlows
@@ -7782,17 +7231,15 @@ theorem fold_terminal_falls_nil {J : World → TCResult} :
         assumes := assumesT noFlows ++ ws.flatMap (fun a => assumesT (J a)) } :=
     heq.symm.trans heqf
   have hfb2 := TCResult.flows.inj hinj2
-  rw [hfb2] at hterm
-  unfold terminal at hterm
-  simp only [Bool.and_eq_true] at hterm
-  obtain ⟨-, hfl0⟩ := hterm
+  subst hfb2
+  have hfl : (fallsT noFlows ++ ws.flatMap (fun a => fallsT (J a))) = [] :=
+    List.isEmpty_iff.mp (by simpa only [partialTerminal] using hterm)
+  have hsplit := List.append_eq_nil_iff.mp hfl
+  have h2 : ws.flatMap (fun a => fallsT (J a)) = [] := hsplit.2
   cases hfb : fbu.falls with
-  | nil => rfl
+  | nil => simpa [fallsT, noFlows] using hfl
   | cons x xs =>
       exfalso
-      -- the component's fall world x appears in the total falls
-      -- (via fold_merge_flows's record), contradicting terminality
-      obtain ⟨-, heqf2⟩ := fold_merge_flows J ws noFlows hnr
       -- total falls include the component's falls (x :: xs)
       have hmem' : x ∈ fallsT (J u) := by
         have h1 : fallsT (J u) = fbu.falls := by
@@ -7804,10 +7251,7 @@ theorem fold_terminal_falls_nil {J : World → TCResult} :
         exact List.mem_cons.mpr (Or.inl rfl)
       have hx : x ∈ ws.flatMap (fun a => fallsT (J a)) :=
         List.mem_flatMap.mpr ⟨u, hu, hmem'⟩
-      -- hfl0: the record's total falls are empty
-      obtain hnil := List.isEmpty_iff.mp hfl0
-      rw [show fallsT noFlows = ([] : Worlds) from rfl, List.nil_append] at hnil
-      rw [hnil] at hx
+      rw [h2] at hx
       cases hx
 
 /-- flatMap of falls is empty when every world's falls are. -/
@@ -7825,91 +7269,6 @@ theorem flatMap_falls_nil {J : World → TCResult} :
       show fallsT (J u) ++ List.flatMap (fun a => fallsT (J a)) us = []
       rw [h1, ih h2]
       rfl
-
-/-- THE FORK-LIFT: if the coarse fork-fold over ws is terminal, and
-    the per-world transfers hold (falls: without needing exit;
-    terminal: exit preserved), then the refined fold over a
-    surjectively-covered ws' is terminal. -/
-theorem fork_lift {J' J : World → TCResult}
-    (hPf : ∀ (u' u : World), worldLe u' u →
-      ∀ fbu, J u = TCResult.flows fbu → fbu.falls = []
-        → ∃ fbu', J' u' = TCResult.flows fbu' ∧ fbu'.falls = [])
-    (hPe : ∀ (u' u : World), worldLe u' u →
-      ∀ fbu, J u = TCResult.flows fbu → terminal fbu = Bool.true
-        → ∃ fbu', J' u' = TCResult.flows fbu' ∧ terminal fbu' = Bool.true) :
-    ∀ (ws' ws : Worlds),
-      (∀ u' ∈ ws', ∃ u ∈ ws, worldLe u' u)
-      → (∀ u ∈ ws, ∃ u' ∈ ws', worldLe u' u)
-      → ∀ fb, ws.foldl (fun acc u => mergeTC acc (J u)) noFlows
-          = TCResult.flows fb → terminal fb = Bool.true
-        → ∀ fb', ws'.foldl (fun acc u => mergeTC acc (J' u)) noFlows
-            = TCResult.flows fb' → terminal fb' = Bool.true := by
-  intro ws' ws hcov hsurj fb heq hterm fb' heq'
-  -- ws is nonempty: an empty coarse fold is not terminal
-  have hne : ws ≠ [] := by
-    intro h
-    subst ws
-    have hfb : fb =
-        { exits := Bool.false, throws := Bool.false,
-          falls := [], assumes := [] } :=
-      TCResult.flows.inj (show TCResult.flows fb = noFlows from heq.symm)
-    rw [hfb] at hterm
-    exact Bool.noConfusion hterm
-  -- the refined fold never rejects (it equals flows fb')
-  have hnr' : ∀ s w, ws'.foldl (fun acc u => mergeTC acc (J' u)) noFlows
-      ≠ TCResult.reject s w := by
-    intro s w hsw
-    rw [hsw] at heq'
-    exact TCResult.noConfusion heq'
-  -- SOME coarse world exits
-  obtain ⟨u₀, hu₀, hex₀⟩ := fold_exits_true_of (J := J) ws fb heq hterm hne
-  obtain ⟨fbu, hJu⟩ := fold_all_flows (J := J) ws fb heq u₀ hu₀
-  rw [hJu] at hex₀
-  have hext : fbu.exits = Bool.true := hex₀
-  have hfni : fbu.falls = [] :=
-    fold_terminal_falls_nil (J := J) ws fb heq hterm u₀ hu₀ fbu hJu
-  have htermu : terminal fbu = Bool.true := by
-    show (fbu.exits && List.isEmpty fbu.falls) = Bool.true
-    rw [hext, hfni]
-    rfl
-  -- its refined counterpart exits too
-  obtain ⟨u₀', hu₀', hle₀⟩ := hsurj u₀ hu₀
-  obtain ⟨fbu', hJu', htermu'⟩ := hPe u₀' u₀ hle₀ fbu hJu htermu
-  have hexu' : exitsT (J' u₀') = Bool.true := by
-    show (match J' u₀' with
-      | TCResult.flows f => f.exits
-      | TCResult.reject _ _ => Bool.false) = Bool.true
-    rw [hJu']
-    exact ((Bool.and_eq_true _ _).mp htermu').1
-  -- EVERY refined world has empty falls (coarse covers never fall)
-  have hfallall : ∀ u' ∈ ws', fallsT (J' u') = [] := by
-    intro u' hu'
-    obtain ⟨u, hu, hle⟩ := hcov u' hu'
-    obtain ⟨fbu2, hJu2⟩ := fold_all_flows (J := J) ws fb heq u hu
-    have hf2 : fbu2.falls = [] :=
-      fold_terminal_falls_nil (J := J) ws fb heq hterm u hu fbu2 hJu2
-    obtain ⟨fbu'2, hJu'2, hfall'2⟩ := hPf u' u hle fbu2 hJu2 hf2
-    have h1 : fallsT (J' u') = fbu'2.falls := by
-      show (match J' u' with
-        | TCResult.flows f => f.falls
-        | TCResult.reject _ _ => []) = fbu'2.falls
-      rw [hJu'2]
-    rw [h1]
-    exact hfall'2
-  -- assemble the refined record's terminality
-  obtain ⟨-, heqf'⟩ := fold_merge_flows J' ws' noFlows hnr'
-  have hfb' := TCResult.flows.inj (heq'.symm.trans heqf')
-  rw [hfb']
-  show (exitsT noFlows || List.any ws' (fun a => exitsT (J' a)))
-      && List.isEmpty (fallsT noFlows
-          ++ List.flatMap (fun a => fallsT (J' a)) ws') = Bool.true
-  have hany : List.any ws' (fun a => exitsT (J' a)) = Bool.true :=
-    List.any_eq_true.mpr ⟨u₀', hu₀', hexu'⟩
-  have hfm : List.flatMap (fun a => fallsT (J' a)) ws' = [] :=
-    flatMap_falls_nil (J := J') ws' hfallall
-  rw [show exitsT noFlows = Bool.false from rfl, hany, Bool.false_or,
-      show fallsT noFlows = ([] : Worlds) from rfl, List.nil_append, hfm]
-  rfl
 
 /- ## Proof layer XXII: the vacOk-seeded verdict fork lift (kIte) -/
 
@@ -9780,22 +9139,21 @@ theorem checkSeq_specialize (sigs : SigTable) (r : Ty) (w : World) (seq : List I
     simp only [checkSeq, hstep, hstep']
     exact fork_specLe hcov hne hpoint
 
-/-- THE TERMINALITY COROLLARY: specialization preserves
-    terminality. specLe carries the falls; checkSeq_exits turns
-    empty falls into the exit bit. No separate induction needed. -/
-theorem checkSeq_specialize_terminal (sigs : SigTable) (r : Ty)
+/-- THE PARTIAL-TERMINALITY COROLLARY: specialization preserves
+    the judgment (no falls). specLe carries the falls directly —
+    no separate induction needed. -/
+theorem checkSeq_specialize_partial (sigs : SigTable) (r : Ty)
     (w w' : World) (seq : List Instr) (hsc : sigParamsClosed sigs)
     (hle : worldLe w' w) {fb : Flows}
     (h : checkSeq sigs r w seq = TCResult.flows fb)
-    (ht : terminal fb = Bool.true) :
+    (ht : partialTerminal fb = Bool.true) :
     ∃ fb', checkSeq sigs r w' seq = TCResult.flows fb'
-      ∧ terminal fb' = Bool.true := by
+      ∧ partialTerminal fb' = Bool.true := by
   have hspec := checkSeq_specialize sigs r w seq hsc w' hle
   rw [h] at hspec
   obtain ⟨fb', h', hcov⟩ := specLe_flows_elim hspec
   refine ⟨fb', h', ?_⟩
-  have hf : fb.falls = [] :=
-    List.isEmpty_iff.mp ((Bool.and_eq_true _ _).mp ht).2
+  have hf : fb.falls = [] := List.isEmpty_iff.mp (of_decide_eq_true ht)
   have hf' : fb'.falls = [] := by
     match hfl : fb'.falls with
     | [] => rfl
@@ -9806,64 +9164,7 @@ theorem checkSeq_specialize_terminal (sigs : SigTable) (r : Ty)
         obtain ⟨u, hu, -⟩ := hcov v hvm
         rw [hf] at hu
         cases hu
-  have he := checkSeq_exits sigs r w' seq fb' h' hf'
-  exact (Bool.and_eq_true _ _).mpr ⟨he, List.isEmpty_iff.mpr hf'⟩
-
-theorem fork_single_terminal {sigs : SigTable} {r : Ty} {site : Instr}
-    {ws : Worlds} {w : World} {seq : List Instr} {fb : Flows}
-    (hsc : sigParamsClosed sigs)
-    (hne : ws ≠ [])
-    (hcov : ∀ u ∈ ws, worldLe u w)
-    (hcoarse : checkSeq sigs r w seq = TCResult.flows fb)
-    (hterm : terminal fb = Bool.true) :
-    ∃ fb', forkTC site ws (fun u => checkSeq sigs r u seq)
-      = TCResult.flows fb' ∧ terminal fb' = Bool.true := by
-  have hbranch : ∀ u ∈ ws, ∃ fbu,
-      checkSeq sigs r u seq = TCResult.flows fbu ∧ terminal fbu = Bool.true := by
-    intro u hu
-    obtain ⟨fbu, hflu, htermu⟩ :=
-      checkSeq_specialize_terminal sigs r w u seq hsc (hcov u hu) hcoarse hterm
-    exact ⟨fbu, hflu, htermu⟩
-  obtain ⟨ffold, hfold⟩ := fold_flows_exists ws noFlows
-    ⟨{ exits := Bool.false, throws := Bool.false, falls := [], assumes := [] }, rfl⟩
-    (fun u hu => ⟨(hbranch u hu).choose, (hbranch u hu).choose_spec.1⟩)
-  cases ws with
-  | nil => exact absurd rfl hne
-  | cons u us =>
-      have hfork : forkTC site (u :: us)
-          (fun v => checkSeq sigs r v seq) = TCResult.flows ffold := by
-        simp only [forkTC, hfold]
-      refine ⟨ffold, hfork, ?_⟩
-      have hsingle : [w].foldl
-          (fun acc v => mergeTC acc (checkSeq sigs r v seq)) noFlows
-          = TCResult.flows fb := by
-        simp [List.foldl_cons, List.foldl_nil, mergeTC, noFlows, hcoarse]
-      refine fork_lift
-        (J' := fun v => checkSeq sigs r v seq)
-        (J := fun v => checkSeq sigs r v seq) ?_ ?_ (u :: us) [w] ?_ ?_ fb
-        hsingle hterm ffold hfold
-      · intro u' v hle fbu hflu hcfalls
-        have hs := checkSeq_specialize sigs r v seq hsc u' hle
-        rw [hflu] at hs
-        obtain ⟨fbu', hflu', hcov⟩ := specLe_flows_elim hs
-        refine ⟨fbu', hflu', ?_⟩
-        cases hfl : fbu'.falls with
-        | nil => rfl
-        | cons x xs =>
-            have hx : x ∈ fbu'.falls := by
-              rw [hfl]
-              exact List.mem_cons.mpr (Or.inl rfl)
-            obtain ⟨y, hy, -⟩ := hcov x hx
-            rw [hcfalls] at hy
-            cases hy
-      · intro u' v hle fbu hflu hcterm
-        exact checkSeq_specialize_terminal sigs r v u' seq hsc hle hflu hcterm
-      · intro u' hu'
-        exact ⟨w, List.mem_cons.mpr (Or.inl rfl), hcov u' hu'⟩
-      · intro v hv
-        have hvw : v = w := by simpa using hv
-        subst hvw
-        exact ⟨u, List.mem_cons.mpr (Or.inl rfl), hcov u (List.mem_cons.mpr (Or.inl rfl))⟩
+  exact of_decide_eq_true (List.isEmpty_iff.mpr hf')
 
 /- ## THE kRet ARM: the anticipated union becomes the delivered
     singleton. The callee's own kRet acceptance (inverted from its
@@ -10014,12 +9315,12 @@ theorem SR_kRet (sigs : SigTable) (reg : AOReg) (η : HeapCallableTy) (s : FM) (
                       envCov_refl _ _,
                       stackCov_cons_intro hcov (stackCov_refl _ _)⟩
                   obtain ⟨fb', h', ht'⟩ :=
-                    checkSeq_specialize_terminal sigs (sigRetTy sigs cret)
+                    checkSeq_specialize_partial sigs (sigRetTy sigs cret)
                       _ _ cstmts hsc hw hchk hterm
                   have hgoal : (match checkSeq sigs (sigRetTy sigs cret)
                       { η := η, Γ := envTyOf η cenv, σ := [normalizeAtom η (typeOfV v)] :: ceval.map (fun x => [normalizeAtom η (typeOfV x)]) }
                       cstmts with
-                    | TCResult.flows fb => terminal fb = Bool.true
+                    | TCResult.flows fb => partialTerminal fb = Bool.true
                     | x => False) := by
                     rw [h']
                     exact ht'
@@ -10137,7 +9438,7 @@ theorem frameTyped_kEval_varNotPresent_present {sigs : SigTable} {r : Ty}
   rw [hstep] at h
   have hres : ∃ fb, checkSeq sigs r
       { η := η, Γ := (x, [normalizeAtom η (typeOfV v)]) :: envTyOf η env, σ := [.isValue (.boolean Bool.false)] :: eval.map (fun y => [normalizeAtom η (typeOfV y)]) }
-      rest = TCResult.flows fb ∧ terminal fb = Bool.true := by
+      rest = TCResult.flows fb ∧ partialTerminal fb = Bool.true := by
     cases hres : checkSeq sigs r
         { η := η, Γ := (x, [normalizeAtom η (typeOfV v)]) :: envTyOf η env, σ := [.isValue (.boolean Bool.false)] :: eval.map (fun y => [normalizeAtom η (typeOfV y)]) }
         rest with
@@ -10152,7 +9453,7 @@ theorem frameTyped_kEval_varNotPresent_present {sigs : SigTable} {r : Ty}
       envCov_shadow_same hΓ,
       stackCov_cons_intro (tyCov_refl _ _) (stackCov_refl _ _)⟩
   obtain ⟨fb', hchk', hterm'⟩ :=
-    checkSeq_specialize_terminal sigs r _ _ rest hsc hle hchk hterm
+    checkSeq_specialize_partial sigs r _ _ rest hsc hle hchk hterm
   simp only [typeOfV, normalizeAtom] at hchk' ⊢
   rw [hchk']
   exact hterm'
@@ -10595,16 +9896,16 @@ theorem frameTyped_pushRefine {sigs : SigTable} {r : Ty} {v : JSValue}
     (h : (match checkSeq sigs r
         { η := η, Γ := envTyOf η env, σ := T :: eval'.map (fun x => [normalizeAtom η (typeOfV x)]) }
         rest with
-      | .flows fb => terminal fb = Bool.true
+      | .flows fb => partialTerminal fb = Bool.true
       | x => False)) :
     (match checkSeq sigs r
         { η := η, Γ := envTyOf η env, σ := [normalizeAtom η (typeOfV v)] :: eval'.map (fun x => [normalizeAtom η (typeOfV x)]) }
         rest with
-      | .flows fb => terminal fb = Bool.true
+      | .flows fb => partialTerminal fb = Bool.true
       | x => False) := by
   have hres : ∃ fb, checkSeq sigs r
       { η := η, Γ := envTyOf η env, σ := T :: eval'.map (fun x => [normalizeAtom η (typeOfV x)]) }
-      rest = TCResult.flows fb ∧ terminal fb = Bool.true := by
+      rest = TCResult.flows fb ∧ partialTerminal fb = Bool.true := by
     cases hres : checkSeq sigs r
         { η := η, Γ := envTyOf η env, σ := T :: eval'.map (fun x => [normalizeAtom η (typeOfV x)]) }
         rest with
@@ -10619,7 +9920,7 @@ theorem frameTyped_pushRefine {sigs : SigTable} {r : Ty} {v : JSValue}
       envCov_refl _ _,
       stackCov_cons_intro hcov (stackCov_refl _ _)⟩
   obtain ⟨fb', h', ht'⟩ :=
-    checkSeq_specialize_terminal sigs r _ _ rest hsc hw hchk hterm
+    checkSeq_specialize_partial sigs r _ _ rest hsc hw hchk hterm
   rw [h']
   exact ht'
 
@@ -10648,7 +9949,7 @@ theorem frameTyped_kMkList {sigs : SigTable} {r : Ty} {n : Nat}
     exact h0
   have hcoarse : (match checkSeq sigs r
       { η := η, Γ := envTyOf η env, σ := [.anyValue .list] :: σ' } rest with
-    | .flows fb => terminal fb = Bool.true
+    | .flows fb => partialTerminal fb = Bool.true
     | x => False) := by
     rw [hstep] at h
     exact h
@@ -12219,7 +11520,7 @@ theorem frameTyped_kTestVar_pIsObj_present {sigs : SigTable} {r : Ty}
     mergeTC_noFlows] at h
   have hres : ∃ fb, checkSeq sigs r
       { η := η, Γ := (x, [normalizeAtom η (typeOfV v)]) :: envTyOf η env, σ := [.isValue (.boolean (isObjV v))] :: eval.map (fun y => [normalizeAtom η (typeOfV y)]) }
-      rest = TCResult.flows fb ∧ terminal fb = Bool.true := by
+      rest = TCResult.flows fb ∧ partialTerminal fb = Bool.true := by
     cases hres : checkSeq sigs r
         { η := η, Γ := (x, [normalizeAtom η (typeOfV v)]) :: envTyOf η env, σ := [.isValue (.boolean (isObjV v))] :: eval.map (fun y => [normalizeAtom η (typeOfV y)]) }
         rest with
@@ -12234,7 +11535,7 @@ theorem frameTyped_kTestVar_pIsObj_present {sigs : SigTable} {r : Ty}
       envCov_shadow_same hΓ,
       stackCov_cons_intro (tyCov_refl _ _) (stackCov_refl _ _)⟩
   obtain ⟨fb', hchk', hterm'⟩ :=
-    checkSeq_specialize_terminal sigs r _ _ rest hsc hle hchk hterm
+    checkSeq_specialize_partial sigs r _ _ rest hsc hle hchk hterm
   rw [hchk']
   exact hterm'
 
@@ -12306,7 +11607,7 @@ theorem frameTyped_kTestVar_shape_present {sigs : SigTable} {r : Ty}
   rw [hstep] at h
   have hres : ∃ fb, checkSeq sigs r
       { η := η, Γ := (x, [normalizeAtom η (typeOfV v)]) :: envTyOf η env, σ := [.isValue (.boolean (f v))] :: eval.map (fun y => [normalizeAtom η (typeOfV y)]) }
-      rest = TCResult.flows fb ∧ terminal fb = Bool.true := by
+      rest = TCResult.flows fb ∧ partialTerminal fb = Bool.true := by
     cases hres : checkSeq sigs r
         { η := η, Γ := (x, [normalizeAtom η (typeOfV v)]) :: envTyOf η env, σ := [.isValue (.boolean (f v))] :: eval.map (fun y => [normalizeAtom η (typeOfV y)]) }
         rest with
@@ -12321,7 +11622,7 @@ theorem frameTyped_kTestVar_shape_present {sigs : SigTable} {r : Ty}
       envCov_shadow_same hΓ,
       stackCov_cons_intro (tyCov_refl _ _) (stackCov_refl _ _)⟩
   obtain ⟨fb', hchk', hterm'⟩ :=
-    checkSeq_specialize_terminal sigs r _ _ rest hsc hle hchk hterm
+    checkSeq_specialize_partial sigs r _ _ rest hsc hle hchk hterm
   rw [hchk']
   exact hterm'
 
@@ -12683,7 +11984,7 @@ theorem frameTyped_kTestVar_pIsNormalC_present {sigs : SigTable} {r : Ty}
         { η := η, Γ := envTyOf η env, σ := eval.map (fun y => [normalizeAtom η (typeOfV y)]) })
       (fun u => checkSeq sigs r u rest) with
   | flows fb =>
-      have hterm0 : terminal fb = Bool.true := by
+      have hterm0 : partialTerminal fb = Bool.true := by
         rw [hfork] at h; exact h
       cases hws : splitP1 x normalDec
           { η := η, Γ := envTyOf η env, σ := eval.map (fun y => [normalizeAtom η (typeOfV y)]) } with
@@ -12701,18 +12002,13 @@ theorem frameTyped_kTestVar_pIsNormalC_present {sigs : SigTable} {r : Ty}
                   :: eval.map (fun y => [normalizeAtom η (typeOfV y)]) }
               hmem
           have hfall : fbm.falls = [] :=
-            fold_terminal_falls_nil (J := fun u => checkSeq sigs r u rest)
+            fold_falls_nil (J := fun u => checkSeq sigs r u rest)
               (u0 :: us) fb hfold hterm0
               { η := η, Γ := (x, [normalizeAtom η (typeOfV v)]) :: envTyOf η env, σ := [.isValue (.boolean (normalResult v))]
                   :: eval.map (fun y => [normalizeAtom η (typeOfV y)]) }
               hmem fbm hchk
-          have hexit : fbm.exits = Bool.true :=
-            checkSeq_exits sigs r
-              { η := η, Γ := (x, [normalizeAtom η (typeOfV v)]) :: envTyOf η env, σ := [.isValue (.boolean (normalResult v))]
-                  :: eval.map (fun y => [normalizeAtom η (typeOfV y)]) }
-              rest fbm hchk hfall
-          have htermm : terminal fbm = Bool.true := by
-            simp [terminal, hfall, hexit]
+          have htermm : partialTerminal fbm = Bool.true := by
+            simp [partialTerminal, hfall]
           have hle : worldLe
               { η := η, Γ := envTyOf η env, σ := [normalizeAtom η (typeOfV (JSValue.boolean (normalResult v)))]
                   :: eval.map (fun y => [normalizeAtom η (typeOfV y)]) }
@@ -12723,7 +12019,7 @@ theorem frameTyped_kTestVar_pIsNormalC_present {sigs : SigTable} {r : Ty}
       envCov_shadow_same hΓ,
       stackCov_cons_intro (tyCov_refl _ _) (stackCov_refl _ _)⟩
           obtain ⟨fb', hchk', hterm'⟩ :=
-            checkSeq_specialize_terminal sigs r _ _ rest hsc hle hchk htermm
+            checkSeq_specialize_partial sigs r _ _ rest hsc hle hchk htermm
           simp only [typeOfV, normalizeAtom] at hchk' ⊢
           rw [hchk']
           exact hterm'
@@ -12831,7 +12127,7 @@ theorem frameTyped_kTestVar_pIsThrowC_present {sigs : SigTable} {r : Ty}
         { η := η, Γ := envTyOf η env, σ := eval.map (fun y => [normalizeAtom η (typeOfV y)]) })
       (fun u => checkSeq sigs r u rest) with
   | flows fb =>
-      have hterm0 : terminal fb = Bool.true := by
+      have hterm0 : partialTerminal fb = Bool.true := by
         rw [hfork] at h; exact h
       cases hws : splitP1 x throwDec
           { η := η, Γ := envTyOf η env, σ := eval.map (fun y => [normalizeAtom η (typeOfV y)]) } with
@@ -12849,18 +12145,13 @@ theorem frameTyped_kTestVar_pIsThrowC_present {sigs : SigTable} {r : Ty}
                   :: eval.map (fun y => [normalizeAtom η (typeOfV y)]) }
               hmem
           have hfall : fbm.falls = [] :=
-            fold_terminal_falls_nil (J := fun u => checkSeq sigs r u rest)
+            fold_falls_nil (J := fun u => checkSeq sigs r u rest)
               (u0 :: us) fb hfold hterm0
               { η := η, Γ := (x, [normalizeAtom η (typeOfV v)]) :: envTyOf η env, σ := [.isValue (.boolean (throwResult v))]
                   :: eval.map (fun y => [normalizeAtom η (typeOfV y)]) }
               hmem fbm hchk
-          have hexit : fbm.exits = Bool.true :=
-            checkSeq_exits sigs r
-              { η := η, Γ := (x, [normalizeAtom η (typeOfV v)]) :: envTyOf η env, σ := [.isValue (.boolean (throwResult v))]
-                  :: eval.map (fun y => [normalizeAtom η (typeOfV y)]) }
-              rest fbm hchk hfall
-          have htermm : terminal fbm = Bool.true := by
-            simp [terminal, hfall, hexit]
+          have htermm : partialTerminal fbm = Bool.true := by
+            simp [partialTerminal, hfall]
           have hle : worldLe
               { η := η, Γ := envTyOf η env, σ := [normalizeAtom η (typeOfV (JSValue.boolean (throwResult v)))]
                   :: eval.map (fun y => [normalizeAtom η (typeOfV y)]) }
@@ -12871,7 +12162,7 @@ theorem frameTyped_kTestVar_pIsThrowC_present {sigs : SigTable} {r : Ty}
       envCov_shadow_same hΓ,
       stackCov_cons_intro (tyCov_refl _ _) (stackCov_refl _ _)⟩
           obtain ⟨fb', hchk', hterm'⟩ :=
-            checkSeq_specialize_terminal sigs r _ _ rest hsc hle hchk htermm
+            checkSeq_specialize_partial sigs r _ _ rest hsc hle hchk htermm
           simp only [typeOfV, normalizeAtom] at hchk' ⊢
           rw [hchk']
           exact hterm'
@@ -13069,7 +12360,7 @@ theorem frameTyped_kTestVar_pPred_present {sigs : SigTable} {r : Ty}
         { η := η, Γ := envTyOf η env, σ := eval.map (fun y => [normalizeAtom η (typeOfV y)]) })
       (fun u => checkSeq sigs r u rest) with
   | flows fb =>
-      have hterm0 : terminal fb = Bool.true := by
+      have hterm0 : partialTerminal fb = Bool.true := by
         rw [hfork] at h; exact h
       cases hws : splitP1Und x b dec
           { η := η, Γ := envTyOf η env, σ := eval.map (fun y => [normalizeAtom η (typeOfV y)]) } with
@@ -13087,18 +12378,13 @@ theorem frameTyped_kTestVar_pPred_present {sigs : SigTable} {r : Ty}
                   :: eval.map (fun y => [normalizeAtom η (typeOfV y)]) }
               hmem0
           have hfall : fbm.falls = [] :=
-            fold_terminal_falls_nil (J := fun u => checkSeq sigs r u rest)
+            fold_falls_nil (J := fun u => checkSeq sigs r u rest)
               (u0 :: us) fb hfold hterm0
               { η := η, Γ := (x, [normalizeAtom η (typeOfV v)]) :: envTyOf η env, σ := [.isValue (.boolean (g v))]
                   :: eval.map (fun y => [normalizeAtom η (typeOfV y)]) }
               hmem0 fbm hchk
-          have hexit : fbm.exits = Bool.true :=
-            checkSeq_exits sigs r
-              { η := η, Γ := (x, [normalizeAtom η (typeOfV v)]) :: envTyOf η env, σ := [.isValue (.boolean (g v))]
-                  :: eval.map (fun y => [normalizeAtom η (typeOfV y)]) }
-              rest fbm hchk hfall
-          have htermm : terminal fbm = Bool.true := by
-            simp [terminal, hfall, hexit]
+          have htermm : partialTerminal fbm = Bool.true := by
+            simp [partialTerminal, hfall]
           have hle : worldLe
               { η := η, Γ := envTyOf η env, σ := [normalizeAtom η (typeOfV (JSValue.boolean (g v)))]
                   :: eval.map (fun y => [normalizeAtom η (typeOfV y)]) }
@@ -13109,7 +12395,7 @@ theorem frameTyped_kTestVar_pPred_present {sigs : SigTable} {r : Ty}
       envCov_shadow_same hΓ,
       stackCov_cons_intro (tyCov_refl _ _) (stackCov_refl _ _)⟩
           obtain ⟨fb', hchk', hterm'⟩ :=
-            checkSeq_specialize_terminal sigs r _ _ rest hsc hle hchk htermm
+            checkSeq_specialize_partial sigs r _ _ rest hsc hle hchk htermm
           simp only [typeOfV, normalizeAtom] at hchk' ⊢
           rw [hchk']
           exact hterm'

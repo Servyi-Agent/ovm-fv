@@ -514,12 +514,14 @@ structure Flows where
   assumes : List «String»
   deriving Repr
 
-/-- Frame-level demand: every world exits (returns), none falls. -/
+/-- Legacy total-correctness predicate: every world exits (returns),
+    none falls. NOT the judgment anymore (see partialTerminal); kept
+    only where an exit bit is still proven honestly. -/
 def terminal (f : Flows) : Bool :=
   f.exits && f.falls.isEmpty
 
-/-- Partial-correctness terminality: no finite path falls off the end.
-    A path may diverge; it need not exit. -/
+/-- THE judgment: partial-correctness terminality — no finite path
+    falls off the end. A path may diverge; it need not exit. -/
 def partialTerminal (f : Flows) : Bool :=
   f.falls.isEmpty
 
@@ -983,9 +985,10 @@ def noFlows : TCResult :=
   .flows { exits := Bool.false, throws := Bool.false, falls := [], assumes := [] }
 
 /-- The vacuous OK (conjunction seed): the empty index set accepts.
-    A bottom (unreachable) slot folds to this. -/
+    A bottom (unreachable) slot folds to this. With no paths at all,
+    nothing exited — the exit bit stays honest (false). -/
 def vacOk : TCResult :=
-  .flows { exits := Bool.true, throws := Bool.false, falls := [], assumes := [] }
+  .flows { exits := Bool.false, throws := Bool.false, falls := [], assumes := [] }
 
 /-- Fork fold over CONCRETE successor worlds: an empty successor set
     is a stuck (or unreachable) world and rejects — it is the dual
@@ -1060,7 +1063,7 @@ def checkRepeatWhileCore (sigs : SigTable) (r : Ty) (w : World)
                               | .reject site why => .reject site why
                               | .flows fr =>
                                   .flows
-                                    { exits := Bool.true
+                                    { exits := fj.exits || fr.exits
                                     , throws := fj.throws || fr.throws
                                     , falls :=
                                         if boolOnlyTrue tj then []
