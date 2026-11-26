@@ -629,11 +629,10 @@ def fstep (reg : AOReg) : FM → FM
         -- re-armed kRepeatWhile re-enters with the same tail.
         done (⟨(if b then body ++ [.kRepeatWhile c body] ++ rest else rest), env, eval, f.ret⟩ :: fs)
     | .kRepeatTest _ _ :: _, _, _ => .fell (f :: fs) heap nl 0
-    | .kForStart _x _body :: rest, env, .listV [] :: eval =>
-        done (⟨rest, env, eval, f.ret⟩ :: fs)
-    | .kForStart x body :: rest, env, .listV (v :: vs) :: eval =>
-        done (⟨.kEval (.const v) :: .kSet x :: body
-                    ++ [.kForBody x vs body] ++ rest, env, eval, f.ret⟩ :: fs)
+    -- the head just pops the list and materializes the loop
+    -- stepper; all iteration logic lives in kForBody
+    | .kForStart x body :: rest, env, .listV vs :: eval =>
+        done (⟨.kForBody x vs body :: rest, env, eval, f.ret⟩ :: fs)
     | .kForStart _ _ :: _, _, _ => .fell (f :: fs) heap nl 0           -- For each over non-List: loud
     | .kForBody x (v :: vs) body :: rest, env, eval =>
         done (⟨.kEval (.const v) :: .kSet x :: body
