@@ -200,7 +200,7 @@ def langCT : Ty := complTy [Pending.normal langT, Pending.throw]
 
 def tcOk (sigs : SigTable) (r : Ty) (Γ : TyEnv) (seq : List Instr) : Bool :=
   match typecheckSeq sigs r Γ seq with
-  | .flows f => terminal f && f.assumes.isEmpty
+  | .flows f => partialTerminal f && f.assumes.isEmpty
   | _ => Bool.false
 
 def tcReject (sigs : SigTable) (r : Ty) (Γ : TyEnv) (seq : List Instr) : Bool :=
