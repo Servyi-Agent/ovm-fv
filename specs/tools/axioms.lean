@@ -54,6 +54,8 @@ import Metalanguage.SubjectReduction
 #print axioms SR_kIte
 #print axioms SR_kPop
 #print axioms SR_kSet
+-- the for-each head: pop the list, materialize the stepper
+#print axioms SR_kForStart
 #print axioms SR_kEval_const
 #print axioms SR_kEval_nat
 #print axioms SR_kEval_nv

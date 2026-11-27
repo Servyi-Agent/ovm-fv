@@ -5342,6 +5342,202 @@ theorem frameTyped_kEval_const {sigs : SigTable} {η : HeapCallableTy} {v : JSVa
   rw [checkSeq_kEval_const hok] at h
   exact h
 
+/- ## Proof layer XVIIb: the kForStart transfer (for-each head)
+
+    The head pops the list and materializes the stepper (kForBody);
+    the atom-fold's zero/element cases ARE the kForBody checker's
+    exhausted/remaining cases, so the transfer is two merge-vacOk
+    extractions plus the site-irrelevance of checkLoopBody. -/
+
+/-- General merge-vacOk extraction (merge_vacOk_partial, stated for
+    any TCResult): a flows outcome with empty falls forces the
+    merged-in result itself to be flows with empty falls. -/
+theorem merge_vacOk_flows {res : TCResult} {fb : Flows}
+    (h : mergeTC vacOk res = TCResult.flows fb)
+    (ht : partialTerminal fb = Bool.true) :
+    ∃ fbr, res = TCResult.flows fbr ∧ partialTerminal fbr = Bool.true := by
+  cases hres : res with
+  | reject s w =>
+      rw [hres] at h
+      exact TCResult.noConfusion h
+  | flows fbr =>
+      refine ⟨fbr, rfl, ?_⟩
+      have hmerge : mergeTC vacOk (TCResult.flows fbr)
+          = TCResult.flows
+              { exits := Bool.false || fbr.exits, throws := Bool.false || fbr.throws,
+                falls := [] ++ fbr.falls,
+                diverges := Bool.false || fbr.diverges,
+                assumes := [] ++ fbr.assumes } := rfl
+      rw [hres, hmerge] at h
+      have hinj := TCResult.flows.inj h
+      subst hinj
+      exact ht
+
+/-- mergeTC's right-position reject dominates: no left argument can
+    turn the merge into a flows outcome. -/
+theorem mergeTC_reject_right_flows {X : TCResult} {s : Instr} {w : «String»} {f : Flows}
+    (h : mergeTC X (TCResult.reject s w) = TCResult.flows f) : False := by
+  cases X with
+  | reject s' w' => exact TCResult.noConfusion h
+  | flows fz =>
+      have hrej : mergeTC (TCResult.flows fz) (TCResult.reject s w)
+          = TCResult.reject s w := rfl
+      rw [hrej] at h
+      exact TCResult.noConfusion h
+
+/-- checkLoopBody's site argument is irrelevant while the outcome is
+    flows: the site only names the non-neutral reject. -/
+theorem checkLoopBody_site_flows {rbody : TCResult} {site₁ site₂ : Instr}
+    {σ₀ : List Ty} {k : Worlds → TCResult} {fb : Flows}
+    (h : checkLoopBody rbody site₁ σ₀ k = TCResult.flows fb) :
+    checkLoopBody rbody site₂ σ₀ k = TCResult.flows fb := by
+  cases rbody with
+  | reject s w =>
+      rw [checkLoopBody] at h
+      exact TCResult.noConfusion h
+  | flows fbody =>
+      simp only [checkLoopBody] at h ⊢
+      by_cases hneu : fbody.falls.all (fun w =>
+          w.σ.length == σ₀.length
+            && (List.zip w.σ σ₀).all (fun (t, u) => tmoves t u)) = true
+      · rw [if_pos hneu] at h ⊢
+        exact h
+      · rw [if_neg hneu] at h
+        exact TCResult.noConfusion h
+
+/-- kForStart at the singleton list slot: the atom-fold over the
+    singleton is exactly the vacOk-merge of forAtomTCR at that atom. -/
+theorem checkSeq_kForStart_singleton {sigs : SigTable} {r : Ty} {W : World}
+    {x : «String»} {body rest : List Instr} {vs : List JSValue}
+    (hσ : W.σ = [[VTy.isValue (JSValue.listV vs)]]) :
+    checkSeq sigs r W (Instr.kForStart x body :: rest)
+      = mergeTC vacOk
+          (forAtomTCR (Instr.kForStart x body)
+            (checkSeq sigs r { W with σ := [] } rest)
+            (checkLoopBody (checkSeq sigs r
+                { W with σ := [], Γ := (x, anyT) :: W.Γ } body)
+              (Instr.kForStart x body) []
+              (fun wsf => wsf.foldl (fun accE u =>
+                 mergeTC accE (checkSeq sigs r u rest)) noFlows))
+            (VTy.isValue (JSValue.listV vs))) := by
+  simp only [checkSeq, hσ, popA, popTy, tmoves, tmovesV, tagOf,
+    List.all_cons, List.all_nil, List.any_cons, List.any_nil,
+    List.foldl_cons, List.foldl_nil]
+  simp
+
+/-- kForBody at the empty stack, exhausted: the loop is done. -/
+theorem checkSeq_kForBody_nil {sigs : SigTable} {r : Ty} {W : World}
+    {x : «String»} {body rest : List Instr}
+    (hσ : W.σ = []) :
+    checkSeq sigs r W (Instr.kForBody x [] body :: rest)
+      = checkSeq sigs r W rest := by
+  simp only [checkSeq, hσ]
+
+/-- kForBody at the empty stack, elements remaining: the merge of the
+    zero world and one more anyT-element iteration. -/
+theorem checkSeq_kForBody_cons {sigs : SigTable} {r : Ty} {W : World}
+    {x : «String»} {body rest : List Instr} {v : JSValue} {vs : List JSValue}
+    (hσ : W.σ = []) :
+    checkSeq sigs r W (Instr.kForBody x (v :: vs) body :: rest)
+      = mergeTC (checkSeq sigs r W rest)
+          (checkLoopBody (checkSeq sigs r
+              { W with Γ := (x, anyT) :: W.Γ } body)
+            (Instr.kForBody x [] body) []
+            (fun wsf => wsf.foldl (fun accF u =>
+               mergeTC accF (checkSeq sigs r u rest)) noFlows)) := by
+  simp only [checkSeq, hσ]
+
+/-- kForStart transfer: the head pops the list and materializes the
+    stepper. The premise forces the list to be the only slot (the
+    checker rejects a nonempty loop-entry stack); the atom-fold's
+    zero/merge cases are then exactly the kForBody checker's
+    exhausted/remaining cases. -/
+theorem frameTyped_kForStart {sigs : SigTable} {η : HeapCallableTy} {r : Ty}
+    {x : «String»} {body rest : List Instr} {env : Env} {eval : List JSValue}
+    {vs : List JSValue} {ret : «String»}
+    (h : frameTyped sigs η r ⟨Instr.kForStart x body :: rest, env, .listV vs :: eval, ret⟩) :
+    frameTyped sigs η r ⟨Instr.kForBody x vs body :: rest, env, eval, ret⟩ := by
+  simp only [frameTyped, frameWorld, Fr.stmts, Fr.env, Fr.eval, List.map_cons] at h ⊢
+  cases hev : eval with
+  | nil =>
+      subst hev
+      simp only [List.map_nil, typeOfV, normalizeAtom] at h ⊢
+      rw [checkSeq_kForStart_singleton rfl] at h
+      cases hvs : vs with
+      | nil =>
+          subst hvs
+          simp only [forAtomTCR] at h
+          rw [checkSeq_kForBody_nil rfl]
+          cases hm : mergeTC vacOk
+              (checkSeq sigs r { η := η, Γ := envTyOf η env, σ := [] } rest) with
+          | reject s w => rw [hm] at h; exact h.elim
+          | flows fb =>
+              obtain ⟨fz, hz, hpt⟩ := merge_vacOk_flows hm (by rw [hm] at h; exact h)
+              rw [hz]
+              exact hpt
+      | cons v vs' =>
+          subst hvs
+          simp only [forAtomTCR] at h
+          rw [checkSeq_kForBody_cons rfl]
+          cases hscr : mergeTC vacOk
+              (mergeTC (checkSeq sigs r { η := η, Γ := envTyOf η env, σ := [] } rest)
+                (checkLoopBody (checkSeq sigs r
+                    { η := η, Γ := (x, anyT) :: envTyOf η env, σ := [] } body)
+                  (Instr.kForStart x body) []
+                  (fun wsf => wsf.foldl (fun accE u =>
+                     mergeTC accE (checkSeq sigs r u rest)) noFlows))) with
+          | reject s w =>
+              rw [hscr] at h
+              exact h.elim
+          | flows fbM =>
+              obtain ⟨fM, hM, hptM⟩ := merge_vacOk_flows hscr (by rw [hscr] at h; exact h)
+              cases hE : checkLoopBody (checkSeq sigs r
+                  { η := η, Γ := (x, anyT) :: envTyOf η env, σ := [] } body)
+                (Instr.kForStart x body) []
+                (fun wsf => wsf.foldl (fun accE u =>
+                   mergeTC accE (checkSeq sigs r u rest)) noFlows) with
+              | reject s w =>
+                  rw [hE] at hM
+                  exact (mergeTC_reject_right_flows hM).elim
+              | flows fe₁ =>
+                  rw [hE] at hM
+                  rw [checkLoopBody_site_flows hE]
+                  rw [hM]
+                  exact hptM
+  | cons w eval' =>
+      rw [hev] at h
+      simp only [checkSeq, popA, popTy, tmoves, tmovesV, tagOf,
+        List.all_cons, List.all_nil, List.any_cons, List.any_nil,
+        normalizeAtom, typeOfV, List.map_cons, reduceIte] at h
+      simp at h
+
+/-- The loud kForStart states: the type machine rejects an empty stack. -/
+theorem frameTyped_kForStart_reject_nil {sigs : SigTable} {η : HeapCallableTy} {r : Ty}
+    {x : «String»} {body rest : List Instr} {env : Env} {ret : «String»} :
+    frameTyped sigs η r ⟨Instr.kForStart x body :: rest, env, [], ret⟩ = False := by
+  simp only [frameTyped, frameWorld, List.map, checkSeq, popA, popTy]
+
+/-- The loud kForStart states: the type machine rejects a non-list. -/
+theorem frameTyped_kForStart_reject_nonlist {sigs : SigTable} {η : HeapCallableTy}
+    {r : Ty} {x : «String»} {body rest : List Instr} {env : Env}
+    {eval' : List JSValue} {ret : «String»} {v : JSValue}
+    (hv : ∀ vs, v ≠ JSValue.listV vs) :
+    frameTyped sigs η r ⟨Instr.kForStart x body :: rest, env, v :: eval', ret⟩ = False := by
+  cases v with
+  | listV vs => exact absurd rfl (hv vs)
+  | undefined | null | boolean _ | number _ | str _ | obj _ | descV _ =>
+      simp only [frameTyped, frameWorld, List.map, List.map_cons, typeOfV,
+        normalizeAtom, checkSeq, popA, popTy, tmoves, tmovesV, tagOf,
+        List.all_cons, List.all_nil, List.any_cons, List.any_nil]
+      simp
+  | compl a b =>
+      cases a <;>
+        simp only [frameTyped, frameWorld, List.map, List.map_cons, typeOfV,
+          normalizeAtom, checkSeq, popA, popTy, tmoves, tmovesV, tagOf,
+          List.all_cons, List.all_nil, List.any_cons, List.any_nil]
+      all_goals simp
+
+
 /- ## Proof layer XVIII: THE SR_arm PREDICATE and the arm theorems
 
     SR_arm h s r, literally as specified: s is ANY value machine
@@ -5659,6 +5855,21 @@ theorem mem_locsList : ∀ {vs : List JSValue} {l : Nat},
       · exact ⟨v, List.mem_cons.mpr (Or.inl rfl), h⟩
       · obtain ⟨v', hv', hl⟩ := ih h
         exact ⟨v', List.mem_cons.mpr (Or.inr hv'), hl⟩
+
+theorem mem_locsList_of_flatMap : ∀ (vs : List JSValue) (l : Nat),
+    l ∈ vs.flatMap locsOf → l ∈ locsList vs := by
+  intro vs
+  induction vs with
+  | nil => intro l h; rcases List.mem_flatMap.mp h with ⟨v, hv, _⟩; cases hv
+  | cons v rest ih =>
+      intro l h
+      rcases List.mem_flatMap.mp h with ⟨v', hv', hl⟩
+      rcases List.mem_cons.mp hv' with rfl | hv''
+      · simp only [locsList]
+        exact List.mem_append.mpr (Or.inl hl)
+      · simp only [locsList]
+        exact List.mem_append.mpr (Or.inr (ih l (List.mem_flatMap.mpr ⟨v', hv'', hl⟩)))
+
 
 theorem heapOk_drop_eval {heap : Heap} {nl : Nat} {i : Instr} {stmts : List Instr}
     {env : Env} {w : JSValue} {eval : List JSValue} {ret : «String»} {fs : List Fr}
@@ -6123,6 +6334,62 @@ theorem SR_kSet (sigs : SigTable) (reg : AOReg) (η : HeapCallableTy)
                 ⟨frameTyped_kSet hpre.2.2.2.1.1, hpre.2.2.2.1.2⟩, ?_⟩
               rw [machineRet_head_swap]
               exact hpre.2.2.2.2
+
+/-- The kForStart arm: the head pops the list and materializes the
+    stepper; the loud states (empty stack, non-list) are untyped. -/
+theorem SR_kForStart (sigs : SigTable) (reg : AOReg) (η : HeapCallableTy)
+    (x : «String») (body : List Instr) (s : FM) (r : Ty) :
+    SR_arm sigs reg η (Instr.kForStart x body) s r := by
+  intro _ _ _ hpre
+  cases s with
+  | fdone v fs heap nl n => exact ⟨η, hpre⟩
+  | fell fs heap nl n => exact ⟨η, hpre⟩
+  | frames fs heap nl =>
+      cases fs with
+      | nil => exact ⟨η, hpre⟩
+      | cons f fs' =>
+          obtain ⟨stmts, env, eval, ret⟩ := f
+          simp only [withHead, stateTyped, framesTypedFrom] at hpre ⊢
+          cases eval with
+          | nil =>
+              have h1 : frameTyped sigs η (sigRetTy sigs ret)
+                  ⟨Instr.kForStart x body :: stmts, env, [], ret⟩ := hpre.2.2.2.1.1
+              rw [frameTyped_kForStart_reject_nil] at h1
+              exact h1.elim
+          | cons w eval' =>
+              cases w with
+              | listV vs =>
+                  refine ⟨η, hpre.1, ?_,
+                    framesWf_cons_intro (f := ⟨Instr.kForBody x vs body :: stmts, env, eval', ret⟩)
+                      ?_ hpre.2.2.1.2,
+                    ⟨frameTyped_kForStart hpre.2.2.2.1.1, hpre.2.2.2.1.2⟩, ?_⟩
+                  · exact heapOk_cons_mono
+                      (f := ⟨Instr.kForStart x body :: stmts, env, JSValue.listV vs :: eval', ret⟩)
+                      (g := ⟨Instr.kForBody x vs body :: stmts, env, eval', ret⟩) (by
+                      intro l hl
+                      show l ∈ (locsOf (JSValue.listV vs) ++ List.flatMap locsOf eval')
+                          ++ List.flatMap locsOf (List.map Prod.snd env)
+                      rcases List.mem_append.mp hl with hl | hl
+                      · exact List.mem_append.mpr (Or.inl (List.mem_append.mpr (Or.inr hl)))
+                      · exact List.mem_append.mpr (Or.inr hl)) hpre.2.1
+                  · refine ⟨instrWf_kForBody_intro ?_
+                      (instrWf_kForStart_elim hpre.2.2.1.1.1), hpre.2.2.1.1.2⟩
+                    intro l hl
+                    have hll : l ∈ locsList vs := mem_locsList_of_flatMap vs l hl
+                    have hlocs : locsOf (JSValue.listV vs) = locsList vs := by simp [locsOf]
+                    have hmem : l ∈ (locsOf (JSValue.listV vs) ++ List.flatMap locsOf eval')
+                        ++ List.flatMap locsOf (List.map Prod.snd env) :=
+                      List.mem_append.mpr (Or.inl (List.mem_append.mpr
+                        (Or.inl (by rw [hlocs]; exact hll))))
+                    exact hpre.2.1.1 l hmem
+                  · rw [machineRet_head_swap]
+                    exact hpre.2.2.2.2
+              | undefined | null | boolean _ | number _ | str _ | obj _ | descV _ | compl _ _ =>
+                  have h1 : frameTyped sigs η (sigRetTy sigs ret)
+                      ⟨Instr.kForStart x body :: stmts, env, _ :: eval', ret⟩ := hpre.2.2.2.1.1
+                  rw [frameTyped_kForStart_reject_nonlist
+                    (by intro vs hv; exact JSValue.noConfusion hv)] at h1
+                  exact h1.elim
 
 /-- The kEval-const arm (a pushing arm; all value shapes). -/
 theorem SR_kEval_const (sigs : SigTable) (reg : AOReg) (η : HeapCallableTy)
