@@ -1115,15 +1115,66 @@ def checkRepeatTestAux (sigs : SigTable) (r : Ty) (w : World)
          tailEntry tailInvariant)
     (tailEntry ())
 
+/-- The for-each element gate: the stepper materializes the element
+    through kEval (.const v), whose completion-element check must pass,
+    and binds the loop variable at the element's singleton — which
+    must sit below the element world's anyT binding. Both fail exactly
+    when v carries a completion (a completion element can never be
+    abstracted by anyT). -/
+def forElemOk (sigs : SigTable) (v : JSValue) : Bool :=
+  match typeOfE sigs [] (.const v) with
+  | some t => tmoves t anyT
+  | none => Bool.false
+
 /-- One kForStart atom's successor worlds: the exact empty singleton
     takes only the zero-iteration world; an exact nonempty list or the
     any-list class spawns zero (class only: a nonempty exact list
-    provably iterates) plus one element world. The zero and element
-    results are passed in — this combinator is pure. -/
-def forAtomTCR (site : Instr) (zero elem : TCResult) : VTy → TCResult
+    provably iterates) plus one element world — the exact nonempty
+    list's FIRST element must pass the element gate (the any-list
+    class is the static approximation; runtime states always check the
+    exact singleton). -/
+def forAtomTCR (site : Instr) (sigs : SigTable)
+    (zero elem : TCResult) : VTy → TCResult
   | .isValue (.listV []) => zero
-  | .isValue (.listV _) | .anyValue .list => mergeTC zero elem
+  | .isValue (.listV (v :: _)) =>
+      if forElemOk sigs v then mergeTC zero elem
+      else .reject site "for-each element is not a bare value"
+  | .anyValue .list => mergeTC zero elem
   | _ => .reject site "for-each over a non-list"
+
+/-- The for-each loop discipline (mirrors checkRepeatWhileCore): the
+    body is checked once at the entry with the loop variable at the
+    bare top; every body-written variable (the loop variable included)
+    is then joined to the bare top and the body is RE-CHECKED at the
+    join — the re-entry invariant covering every later iteration
+    (later iterations enter below the join: the loop variable is
+    rebound below anyT before each run, the other written variables
+    drift below their joined bindings). The tail is checked at the
+    invariant. Both body checks must fall through stack-neutral. The
+    three sub-results are PARAMETERS (the caller computes them; see
+    the kForStart/kForBody arms) — this combinator is pure. -/
+def checkForCore (r : Ty) (w₀ : World) (x : «String») (body rest : List Instr)
+    (site : Instr) (bodyEntry bodyInvariant tailInvariant : TCResult) : TCResult :=
+  match bodyEntry with
+  | .reject s why => .reject s why
+  | .flows fb =>
+      if worldsStacksEmpty fb.falls then
+        match bodyInvariant with
+        | .reject s why => .reject s why
+        | .flows fj =>
+            if worldsStacksEmpty fj.falls
+                && envGenericStable w₀.η
+                    (genericJoinEnv w₀.η w₀.Γ fb.falls (x :: instrsWrites body)) fj.falls
+                    (x :: instrsWrites body) then
+              match tailInvariant with
+              | .flows fr => .flows
+                  { exits := fb.exits || fj.exits || fr.exits
+                  , throws := fb.throws || fj.throws || fr.throws
+                  , falls := fr.falls
+                  , assumes := fb.assumes ++ fj.assumes ++ fr.assumes }
+              | res => res
+            else .reject site "loop invariant is not stable"
+      else .reject site "loop body is not stack-neutral"
 
 def checkSeq : SigTable → Ty → World → List Instr → TCResult
   | _, _, w, [] => .flows { exits := Bool.false, throws := Bool.false, falls := [w], assumes := [] }
@@ -1307,7 +1358,10 @@ def checkSeq : SigTable → Ty → World → List Instr → TCResult
                   rest)
       | some (_ :: _) => .reject (.kRepeatTest c body) "loop entry stack is not empty"
   | sigs, r, w, .kForStart x body :: rest =>
-      -- per VERDICT ATOM of the popped list slot (see forAtomTCR).
+      -- per VERDICT ATOM of the popped list slot (see forAtomTCR);
+      -- the element world runs the loop-invariant discipline (see
+      -- checkForCore): the body at the entry, the body again at the
+      -- join of the entry's falls, the tail at the join.
       match popA (.anyValue .list) w.σ with
       | none => .reject (.kForStart x body) "for-each over a non-list"
       | some [] =>
@@ -1315,31 +1369,54 @@ def checkSeq : SigTable → Ty → World → List Instr → TCResult
           | t :: _ =>
               let w₀ := { w with σ := [] }
               t.foldl (fun accA a => mergeTC accA
-                (forAtomTCR (.kForStart x body)
+                (forAtomTCR (.kForStart x body) sigs
                   (checkSeq sigs r w₀ rest)
-                  (checkLoopBody (checkSeq sigs r
-                      { w₀ with Γ := (x, anyT) :: w₀.Γ } body)
-                    (.kForStart x body) []
-                    (fun wsf => wsf.foldl (fun accE u =>
-                       mergeTC accE (checkSeq sigs r u rest)) noFlows))
+                  (checkForCore r w₀ x body rest (.kForStart x body)
+                    (checkSeq sigs r { w₀ with Γ := (x, anyT) :: w₀.Γ } body)
+                    (checkSeq sigs r
+                      ({ w₀ with Γ := (genericJoinEnv w₀.η w₀.Γ
+                        (match checkSeq sigs r { w₀ with Γ := (x, anyT) :: w₀.Γ } body with
+                         | .flows fb => fb.falls
+                         | .reject _ _ => []) (x :: instrsWrites body)) } : World)
+                      body)
+                    (checkSeq sigs r
+                      ({ w₀ with Γ := (genericJoinEnv w₀.η w₀.Γ
+                        (match checkSeq sigs r { w₀ with Γ := (x, anyT) :: w₀.Γ } body with
+                         | .flows fb => fb.falls
+                         | .reject _ _ => []) (x :: instrsWrites body)) } : World)
+                      rest))
                   a)) vacOk
           | [] => .reject (.kForStart x body) "for-each over a non-list"
       | some (_ :: _) => .reject (.kForStart x body) "loop entry stack is not empty"
   | sigs, r, w, .kForBody x elems body :: rest =>
-      -- the re-arm: elements remain, so one more iteration runs with
-      -- the loop variable at the bare top (conservative for the
-      -- tail of the list); no elements left means the loop is done.
+      -- the re-arm: elements remain, so at least one more iteration
+      -- runs (the phantom zero-merge keeps the atom-fold shape); the
+      -- head element must pass the element gate (the expansion
+      -- materializes it through kEval (.const v)); no elements left
+      -- means the loop is done.
       match w.σ with
       | [] =>
           match elems with
           | [] => checkSeq sigs r w rest
-          | _ =>
-              mergeTC (checkSeq sigs r w rest)
-                (checkLoopBody (checkSeq sigs r
-                    { w with Γ := (x, anyT) :: w.Γ } body)
-                  (.kForBody x [] body) []
-                  (fun wsf => wsf.foldl (fun accF u =>
-                     mergeTC accF (checkSeq sigs r u rest)) noFlows))
+          | v :: _ =>
+              if forElemOk sigs v then
+                mergeTC (checkSeq sigs r w rest)
+                  (checkForCore r w x body rest (.kForBody x [] body)
+                    (checkSeq sigs r { w with Γ := (x, anyT) :: w.Γ } body)
+                    (checkSeq sigs r
+                      ({ w with Γ := (genericJoinEnv w.η w.Γ
+                        (match checkSeq sigs r { w with Γ := (x, anyT) :: w.Γ } body with
+                         | .flows fb => fb.falls
+                         | .reject _ _ => []) (x :: instrsWrites body)) } : World)
+                      body)
+                    (checkSeq sigs r
+                      ({ w with Γ := (genericJoinEnv w.η w.Γ
+                        (match checkSeq sigs r { w with Γ := (x, anyT) :: w.Γ } body with
+                         | .flows fb => fb.falls
+                         | .reject _ _ => []) (x :: instrsWrites body)) } : World)
+                      rest))
+              else .reject (.kForBody x [] body)
+                  "for-each element is not a bare value"
       | _ => .reject (.kForBody x [] body) "loop entry stack is not empty"
   | sigs, r, w, .kAssert :: rest =>
       -- assert, per VERDICT ATOM. The machine continues ONLY on

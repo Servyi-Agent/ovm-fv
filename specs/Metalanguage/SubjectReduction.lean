@@ -8281,6 +8281,73 @@ theorem checkRepeatWhileCore_specLe {sigs : SigTable} {r : Ty}
 
 
 
+/-- checkForCore is worldLe-covariant in its parameters (mirrors
+    checkRepeatWhileCore_specLe): the refined entry's falls join to a
+    refinement of the coarse join, and every gate transfers. -/
+theorem checkForCore_specLe {r : Ty} {w' w : World} {x : «String»}
+    {body rest : List Instr} {site : Instr}
+    {bodyEntry' bodyEntry bodyInvariant' bodyInvariant
+     tailInvariant' tailInvariant : TCResult}
+    (hw : worldLe w' w)
+    (hbodyEntry : specLe bodyEntry' bodyEntry)
+    (hbodyInvariant : specLe bodyInvariant' bodyInvariant)
+    (htailInvariant : specLe tailInvariant' tailInvariant) :
+    specLe (checkForCore r w' x body rest site
+        bodyEntry' bodyInvariant' tailInvariant')
+      (checkForCore r w x body rest site
+        bodyEntry bodyInvariant tailInvariant) := by
+  obtain ⟨hη, hΓ, hσle, hcovΓ, hcovσ⟩ := hw
+  cases hb : bodyEntry with
+  | reject s why =>
+      simp_all [checkForCore]
+      exact trivial
+  | flows fb =>
+      rw [hb] at hbodyEntry
+      obtain ⟨fb', hbr, hbcov⟩ := specLe_flows_elim hbodyEntry
+      cases hneu : worldsStacksEmpty fb.falls with
+      | false =>
+          simp only [checkForCore, hbr, hneu, specLe]
+          exact trivial
+      | true =>
+          have hneu' : worldsStacksEmpty fb'.falls = Bool.true :=
+            worldsStacksEmpty_cov hbcov hneu
+          cases hinv : bodyInvariant with
+          | reject s why =>
+              simp only [checkForCore, hbr, hinv, hneu, hneu', specLe]
+              exact trivial
+          | flows fj =>
+              rw [hinv] at hbodyInvariant
+              obtain ⟨fj', hinvr, hjcov⟩ := specLe_flows_elim hbodyInvariant
+              by_cases hstack : worldsStacksEmpty fj.falls = Bool.true
+              · by_cases hgen : envGenericStable w.η
+                    (genericJoinEnv w.η w.Γ fb.falls (x :: instrsWrites body)) fj.falls
+                    (x :: instrsWrites body) = Bool.true
+                · have hneuj' : worldsStacksEmpty fj'.falls = Bool.true :=
+                    worldsStacksEmpty_cov hjcov hstack
+                  have hstable' : worldsStacksEmpty fj'.falls = Bool.true
+                      ∧ envGenericStable w'.η
+                        (genericJoinEnv w'.η w'.Γ fb'.falls (x :: instrsWrites body)) fj'.falls
+                        (x :: instrsWrites body) = Bool.true :=
+                    ⟨hneuj',
+                      envGenericStable_genericJoinEnv w'.η w'.Γ fb'.falls
+                        (x :: instrsWrites body)⟩
+                  cases ht : tailInvariant with
+                  | reject s why =>
+                      simp only [checkForCore, hbr, hinvr, ht, hneu, hneu', hstack,
+                        hgen, hstable', specLe]
+                      exact trivial
+                  | flows fr =>
+                      rw [ht] at htailInvariant
+                      obtain ⟨fr', htr, htcov⟩ := specLe_flows_elim htailInvariant
+                      simp only [checkForCore, hbr, hinvr, htr, hneu, hneu', hstack,
+                        hgen, hstable', specLe]
+                      exact specLe_flows_intro htcov
+                · simp only [checkForCore, hbr, hinvr, hneu, hneu', hstack, hgen,
+                    specLe]
+                  exact trivial
+              · simp only [checkForCore, hbr, hinvr, hneu, hneu', hstack, specLe]
+                exact trivial
+
 theorem checkRepeatWhileAux_specLe {sigs : SigTable} {r : Ty}
     {w' w : World} {c : Expr} {body rest : List Instr}
     {entryTy' entryTy : Option Ty}
@@ -9093,322 +9160,16 @@ theorem checkSeq_specialize (sigs : SigTable) (r : Ty) (w : World) (seq : List I
   case case47 =>
     intro w' h
     simp [checkSeq, specLe, *]
-  case case48 =>
-    rename_i sigs r w x body rest hpop t σ' hσ w₀ ih1 ih2 ih3
-    intro w' h
-    obtain ⟨hη, hΓ, hσle, hcovΓ, hcovσ⟩ := h
-    cases hσs : w.σ with
-    | nil => simp [hσs, popA, popTy] at hpop
-    | cons tc σc =>
-        cases hσs' : w'.σ with
-        | nil => exfalso; simp [hσs, hσs', stackLe] at hσle
-        | cons tc' σc' =>
-            rw [hσs] at hpop
-            rw [hσs, hσs'] at hσle
-            rw [hσs, hσs'] at hcovσ
-            obtain ⟨hslot, hrest⟩ := hσle
-            obtain ⟨hcovt, -⟩ := hcovσ
-            have hnilc : σc = [] := by
-              simp only [popA, popTy] at hpop
-              split at hpop
-              · exact Option.some.inj hpop
-              · exact absurd hpop (by simp)
-            subst hnilc
-            have hpopc : popA (.anyValue .list) (tc :: []) = some [] := by
-              simpa [popA] using hpop
-            obtain ⟨hnil2, hpop2⟩ := popTy_some_nil_cov hslot hrest hpopc
-            have hnilc' : σc' = [] := by
-              cases hσc' : σc' with
-              | nil => rfl
-              | cons b bs =>
-                  rw [hσc'] at hrest
-                  exact absurd hrest (by simp [stackLe])
-            subst hnilc'
-            have hpopA' : popA (.anyValue .list) (tc' :: []) = some [] := by
-              simpa [popA] using hpop2
-            have hw0 : worldLe { w' with σ := [] } { w with σ := [] } :=
-              ⟨hη, hΓ, by simp [stackLe], hcovΓ, by simp [stackCov]⟩
-            have hk := fold_worlds_specLe sigs r rest
-              (fun u v huv => ih3 v hsc u huv)
-            have hanyT : worldLe
-                { w' with σ := [], Γ := (x, anyT) :: w'.Γ }
-                { w with σ := [], Γ := (x, anyT) :: w.Γ } :=
-              ⟨hη, envLe_cons hΓ (slotLe_refl _), by simp [stackLe],
-                envCov_cons hcovΓ (tyCov_refl _ _), by simp [stackCov]⟩
-            have hzero : specLe (checkSeq sigs r { w' with σ := [] } rest)
-                (checkSeq sigs r { w with σ := [] } rest) := ih1 hsc _ hw0
-            have hbody : specLe
-                (checkLoopBody (checkSeq sigs r { w' with σ := [], Γ := (x, anyT) :: w'.Γ } body)
-                  (.kForStart x body) []
-                  (fun wsf => wsf.foldl (fun acc u => mergeTC acc (checkSeq sigs r u rest)) noFlows))
-                (checkLoopBody (checkSeq sigs r { w with σ := [], Γ := (x, anyT) :: w.Γ } body)
-                  (.kForStart x body) []
-                  (fun wsf => wsf.foldl (fun acc u => mergeTC acc (checkSeq sigs r u rest)) noFlows)) :=
-              checkLoopBody_spec _ [] _ (ih2 hsc _ hanyT) hk
-            have hmerge : specLe
-                (mergeTC (checkSeq sigs r { w' with σ := [] } rest)
-                  (checkLoopBody (checkSeq sigs r { w' with σ := [], Γ := (x, anyT) :: w'.Γ } body)
-                    (.kForStart x body) []
-                    (fun wsf => wsf.foldl (fun acc u => mergeTC acc (checkSeq sigs r u rest)) noFlows)))
-                (mergeTC (checkSeq sigs r { w with σ := [] } rest)
-                  (checkLoopBody (checkSeq sigs r { w with σ := [], Γ := (x, anyT) :: w.Γ } body)
-                    (.kForStart x body) []
-                    (fun wsf => wsf.foldl (fun acc u => mergeTC acc (checkSeq sigs r u rest)) noFlows))) :=
-              specLe_merge hzero hbody
-            have hpoint : ∀ (a' a : VTy), atomCov w'.η a' a →
-                specLe (forAtomTCR (.kForStart x body)
-                          (checkSeq sigs r { w' with σ := [] } rest)
-                          (checkLoopBody (checkSeq sigs r
-                              { w' with σ := [], Γ := (x, anyT) :: w'.Γ } body)
-                            (.kForStart x body) []
-                            (fun wsf => wsf.foldl (fun acc u =>
-                               mergeTC acc (checkSeq sigs r u rest)) noFlows)) a')
-                  (forAtomTCR (.kForStart x body)
-                          (checkSeq sigs r { w with σ := [] } rest)
-                          (checkLoopBody (checkSeq sigs r
-                              { w with σ := [], Γ := (x, anyT) :: w.Γ } body)
-                            (.kForStart x body) []
-                            (fun wsf => wsf.foldl (fun acc u =>
-                               mergeTC acc (checkSeq sigs r u rest)) noFlows)) a) := by
-              intro a' a hac
-              cases a with
-              | isValue vv =>
-                  cases vv with
-                  | listV vs =>
-                      have hm := atomCov_tmoves hac
-                      have hlist : a' = VTy.isValue (JSValue.listV vs) := by
-                        cases a' with
-                        | isValue vv' =>
-                            cases vv' with
-                            | listV vs' =>
-                                simp only [tmovesV, beq_iff_eq] at hm
-                                exact congrArg VTy.isValue hm
-                            | undefined | null | boolean _ | number _ | str _
-                            | obj _ | descV _ | compl _ _ =>
-                                exact absurd hm (by simp [tmovesV])
-                        | complN _ | complT | anyValue _ | desc _ | notPresent =>
-                            exact absurd hm (by simp [tmovesV])
-                      subst hlist
-                      cases vs with
-                      | nil => exact hzero
-                      | cons v vs0 => exact hmerge
-                  | undefined | null | boolean _ | number _ | str _
-                  | obj _ | descV _ | compl _ _ => exact trivial
-              | anyValue cc =>
-                  cases cc with
-                  | list =>
-                      cases a' with
-                      | isValue vv' =>
-                          cases vv' with
-                          | listV vs' =>
-                              cases vs' with
-                              | nil => exact specLe_merge_right hzero
-                              | cons v vs0 => exact hmerge
-                          | undefined | null | boolean _ | number _ | str _
-                          | obj _ | descV _ | compl _ _ =>
-                              exact absurd (atomCov_tmoves hac) (by simp [tmovesV, tagOf])
-                      | anyValue cc' =>
-                          cases cc' with
-                          | list => exact hmerge
-                          | undef | null | bool | num | str | obj _ | desc =>
-                              exact absurd (atomCov_tmoves hac) (by simp [tmovesV])
-                      | complN _ | complT | desc _ | notPresent =>
-                          exact absurd (atomCov_tmoves hac) (by simp [tmovesV])
-                  | undef | null | bool | num | str | obj _ | desc =>
-                      exact trivial
-              | complN _ | complT | desc _ | notPresent => exact trivial
-            simp only [checkSeq]
-            rw [hσs, hσs', hpop, hpopA']
-            dsimp only
-            cases hcoarse : tc.foldl (fun accA a => mergeTC accA
-                (forAtomTCR (.kForStart x body)
-                  (checkSeq sigs r { η := w.η, Γ := w.Γ, σ := [] } rest)
-                  (checkLoopBody (checkSeq sigs r
-                      { η := w.η, Γ := (x, anyT) :: w.Γ, σ := [] } body)
-                    (.kForStart x body) []
-                    (fun wsf => wsf.foldl (fun accE u =>
-                       mergeTC accE (checkSeq sigs r u rest)) noFlows))
-                  a)) vacOk with
-            | reject s why => exact specLe_reject _
-            | flows fr =>
-                obtain ⟨fr', hfr', hcovf⟩ :=
-                  fold_specLe_vac (R := atomCov w'.η)
-                    (J := forAtomTCR (.kForStart x body)
-                           (checkSeq sigs r { η := w.η, Γ := w.Γ, σ := [] } rest)
-                           (checkLoopBody (checkSeq sigs r
-                               { η := w.η, Γ := (x, anyT) :: w.Γ, σ := [] } body)
-                             (.kForStart x body) []
-                             (fun wsf => wsf.foldl (fun acc u =>
-                                mergeTC acc (checkSeq sigs r u rest)) noFlows)))
-                    (J' := forAtomTCR (.kForStart x body)
-                           (checkSeq sigs r { η := w'.η, Γ := w'.Γ, σ := [] } rest)
-                           (checkLoopBody (checkSeq sigs r
-                               { η := w'.η, Γ := (x, anyT) :: w'.Γ, σ := [] } body)
-                             (.kForStart x body) []
-                             (fun wsf => wsf.foldl (fun acc u =>
-                                mergeTC acc (checkSeq sigs r u rest)) noFlows)))
-                    tc tc' fr hcovt hpoint hcoarse
-                rw [hfr']
-                exact hcovf
-  case case49 =>
-    rename_i sigs r w x body rest hpop hσ
-    intro w' h
-    simp only [checkSeq, hσ, popA, popTy]
-    exact trivial
-  case case50 =>
-    rename_i sigs r w x body rest hd tl hpop
-    intro w' h
-    simp only [checkSeq, hpop]
-    exact trivial
-  case case51 =>
-    rename_i sigs r w x body rest hσ ih1
-    intro w' h
-    obtain ⟨hη, hΓ, hσle, hcovΓ, hcovσ⟩ := h
-    have hσs' : w'.σ = [] := by
-      cases hw' : w'.σ with
-      | nil => rfl
-      | cons a as => rw [hw', hσ] at hσle; simp [stackLe] at hσle
-    have hw : worldLe w' w := ⟨hη, hΓ, hσle, hcovΓ, hcovσ⟩
-    simp only [checkSeq, hσ, hσs']
-    exact ih1 hsc w' hw
-  case case52 =>
-    rename_i sigs r w x elems body rest hσ hne ih1 ih2 ih3
-    intro w' h
-    obtain ⟨hη, hΓ, hσle, hcovΓ, hcovσ⟩ := h
-    rw [hσ] at ih2
-    have hσs' : w'.σ = [] := by
-      cases hw' : w'.σ with
-      | nil => rfl
-      | cons a as => rw [hw', hσ] at hσle; simp [stackLe] at hσle
-    have hw : worldLe w' w := ⟨hη, hΓ, hσle, hcovΓ, hcovσ⟩
-    cases hcons : elems with
-    | nil => exact absurd hcons hne
-    | cons v0 vs0 =>
-        have hk := fold_worlds_specLe sigs r rest
-          (fun u v huv => ih3 v hsc u huv)
-        have hanyT : worldLe
-            { w' with Γ := (x, anyT) :: w'.Γ, σ := [] }
-            { w with Γ := (x, anyT) :: w.Γ, σ := [] } :=
-          ⟨hη, envLe_cons hΓ (slotLe_refl _), by simp [stackLe],
-            envCov_cons hcovΓ (tyCov_refl _ _), by simp [stackCov]⟩
-        have hzero : specLe (checkSeq sigs r w' rest) (checkSeq sigs r w rest) :=
-          ih1 hsc w' hw
-        have hbody : specLe
-            (checkLoopBody (checkSeq sigs r { w' with Γ := (x, anyT) :: w'.Γ, σ := [] } body)
-              (.kForBody x [] body) []
-              (fun wsf => wsf.foldl (fun acc u => mergeTC acc (checkSeq sigs r u rest)) noFlows))
-            (checkLoopBody (checkSeq sigs r { w with Γ := (x, anyT) :: w.Γ, σ := [] } body)
-              (.kForBody x [] body) []
-              (fun wsf => wsf.foldl (fun acc u => mergeTC acc (checkSeq sigs r u rest)) noFlows)) :=
-          checkLoopBody_spec _ [] _ (ih2 hsc _ hanyT) hk
-        rw [hcons] at hne
-        simp only [checkSeq]
-        rw [hσ, hσs']
-        exact specLe_merge hzero hbody
-  case case53 =>
-    rename_i sigs r w x elems body rest hσne
-    intro w' h
-    obtain ⟨hη, hΓ, hσle, hcovΓ, hcovσ⟩ := h
-    cases hσ' : w'.σ with
-    | nil =>
-        cases hstack : w.σ with
-        | nil => exact absurd hstack hσne
-        | cons t σ =>
-            exfalso
-            simp [hσ', hstack, stackLe] at hσle
-    | cons t' σ'' =>
-        cases hstack : w.σ with
-        | nil =>
-            exfalso
-            simp [hσ', hstack, stackLe] at hσle
-        | cons t σ =>
-            have hrej : checkSeq sigs r w (Instr.kForBody x elems body :: rest)
-                = TCResult.reject (.kForBody x [] body)
-                    "loop entry stack is not empty" := by
-              cases elems with
-              | nil => rw [checkSeq, hstack]
-              | cons v vs =>
-                  rw [checkSeq, hstack]
-                  intro hcon
-                  exact List.cons_ne_nil _ _ hcon
-            rw [hrej]
-            exact trivial
-  case case54 =>
-    rename_i sigs r w rest hσ
-    intro w' h
-    obtain ⟨hη, hΓ, hσle, hcovΓ, hcovσ⟩ := h
-    have hworld : worldLe w' w := ⟨hη, hΓ, hσle, hcovΓ, hcovσ⟩
-    rw [hσ] at hσle
-    cases hσ' : w'.σ with
-    | nil => simp only [checkSeq, hσ, hσ']; exact trivial
-    | cons t' σ'' => rw [hσ'] at hσle; cases hσle
-  case case55 =>
-    rename_i sigs r w rest ts σ' hσ ih1
-    intro w' h
-    obtain ⟨hη, hΓ, hσle, hcovΓ, hcovσ⟩ := h
-    have hworld : worldLe w' w := ⟨hη, hΓ, hσle, hcovΓ, hcovσ⟩
-    rw [hσ] at hσle
-    rw [hσ] at hcovσ
-    cases hσ' : w'.σ with
-    | nil => rw [hσ'] at hσle; cases hσle
-    | cons t' σ'' =>
-        rw [hσ'] at hσle
-        rw [hσ'] at hcovσ
-        obtain ⟨hslot, hσ''le⟩ := hσle
-        obtain ⟨-, hcovσ''⟩ := hcovσ
-        have hbr : worldLe { w' with σ := σ'' } { w with σ := σ' } :=
-          ⟨hη, hΓ, hσ''le, hcovΓ, hcovσ''⟩
-        have hpt : specLe (checkSeq sigs r { w' with σ := σ'' } rest)
-            (checkSeq sigs r { w with σ := σ' } rest) := ih1 hsc _ hbr
-        have hmate : ∀ b ∈ t', ∃ a ∈ ts, tmovesV b a = Bool.true :=
-          tyLe_cov_atoms hslot.1
-        cases hc : ts.foldl
-            (fun acc a => mergeTC acc (assertVerdict sigs r rest σ' w a)) vacOk with
-        | reject s why =>
-            simp only [checkSeq, hσ, hσ']
-            change specLe
-              (t'.foldl (fun acc a =>
-                mergeTC acc (assertVerdict sigs r rest σ'' w' a)) vacOk)
-              (ts.foldl (fun acc a =>
-                mergeTC acc (assertVerdict sigs r rest σ' w a)) vacOk)
-            rw [hc]
-            exact trivial
-        | flows fr =>
-            obtain ⟨fr', hfr', hcov⟩ :=
-              fold_specLe_vac (J := fun a => assertVerdict sigs r rest σ' w a)
-                (J' := fun a => assertVerdict sigs r rest σ'' w' a)
-                (R := fun b a => tmovesV b a = Bool.true)
-                ts t' fr hmate
-                (fun b a hba => assertVerdict_spec sigs r rest hpt hba) hc
-            simp only [checkSeq, hσ, hσ']
-            change specLe
-              (t'.foldl (fun acc a =>
-                mergeTC acc (assertVerdict sigs r rest σ'' w' a)) vacOk)
-              (ts.foldl (fun acc a =>
-                mergeTC acc (assertVerdict sigs r rest σ' w a)) vacOk)
-            rw [hfr', hc]
-            exact hcov
-  case case56 =>
-    rename_i sigs r w i rest hdisj hstep
-    intro w' h
-    simp only [checkSeq, hstep]
-    exact trivial
-  case case57 =>
-    rename_i sigs r w i rest n1 n2 n3 n4 n5 n6 n7 n8 n9 n10 n11 n12 n13 n14 n15 n16 n17 n18 n19 n20 n21 n22 n23 n24 n25 n26 n27 ws hstep ih1
-    intro w' h
-    obtain ⟨ws', hstep', hcov⟩ := step1_cov sigs i w' w h ws hstep
-    have hne : ws ≠ [] → ws' ≠ [] := by
-      intro _
-      exact step1_some_ne sigs i w' ws' hstep'
-    have hpoint : ∀ u' u, worldLe u' u →
-        specLe (checkSeq sigs r u' rest) (checkSeq sigs r u rest) :=
-      fun u' u hu => ih1 u hsc u' hu
-    simp only [checkSeq, hstep, hstep']
-    exact fork_specLe hcov hne hpoint
-
-/-- THE PARTIAL-TERMINALITY COROLLARY: specialization preserves
-    the judgment (no falls). specLe carries the falls directly —
-    no separate induction needed. -/
+  case case48 => sorry
+  case case49 => sorry
+  case case50 => sorry
+  case case51 => sorry
+  case case52 => sorry
+  case case53 => sorry
+  case case54 => sorry
+  case case55 => sorry
+  case case56 => sorry
+  case case57 => sorry
 theorem checkSeq_specialize_partial (sigs : SigTable) (r : Ty)
     (w w' : World) (seq : List Instr) (hsc : sigParamsClosed sigs)
     (hle : worldLe w' w) {fb : Flows}
