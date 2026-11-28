@@ -679,7 +679,11 @@ def ifuel : Instr → Nat
   | .kEval e => efuel e + 1
   | .kIte t e => sfuel t + sfuel e + 2
   | .kRepeatWhile _ b | .kRepeatTest _ b => sfuel b + 2
-  | .kForStart _ b | .kForBody _ _ b => sfuel b + 2
+  | .kForStart _ b => sfuel b + 2
+  -- the simulation of a concrete elems list costs one kEval/kSet/body
+  -- block per element; the fuel scales accordingly (structural on the
+  -- elems, dominated by the body's fuel)
+  | .kForBody _ vs b => (sfuel b + 3) * (vs.length + 2) + 1
   | _ => 1
 
 def sfuel : List Instr → Nat
@@ -1115,32 +1119,6 @@ def checkRepeatTestAux (sigs : SigTable) (r : Ty) (w : World)
          tailEntry tailInvariant)
     (tailEntry ())
 
-/-- The for-each element gate: the stepper materializes the element
-    through kEval (.const v), whose completion-element check must pass,
-    and binds the loop variable at the element's singleton — which
-    must sit below the element world's anyT binding. Both fail exactly
-    when v carries a completion (a completion element can never be
-    abstracted by anyT). -/
-def forElemOk (sigs : SigTable) (v : JSValue) : Bool :=
-  match typeOfE sigs [] (.const v) with
-  | some t => tmoves t anyT
-  | none => Bool.false
-
-/-- One kForStart atom's successor worlds: the exact empty singleton
-    takes only the zero-iteration world; an exact nonempty list or the
-    any-list class spawns zero (class only: a nonempty exact list
-    provably iterates) plus one element world — the exact nonempty
-    list's FIRST element must pass the element gate (the any-list
-    class is the static approximation; runtime states always check the
-    exact singleton). -/
-def forAtomTCR (site : Instr) (sigs : SigTable)
-    (zero elem : TCResult) : VTy → TCResult
-  | .isValue (.listV []) => zero
-  | .isValue (.listV (v :: _)) =>
-      if forElemOk sigs v then mergeTC zero elem
-      else .reject site "for-each element is not a bare value"
-  | .anyValue .list => mergeTC zero elem
-  | _ => .reject site "for-each over a non-list"
 
 /-- The for-each loop discipline (mirrors checkRepeatWhileCore): the
     body is checked once at the entry with the loop variable at the
@@ -1176,6 +1154,7 @@ def checkForCore (r : Ty) (w₀ : World) (x : «String») (body rest : List Inst
             else .reject site "loop invariant is not stable"
       else .reject site "loop body is not stack-neutral"
 
+mutual
 def checkSeq : SigTable → Ty → World → List Instr → TCResult
   | _, _, w, [] => .flows { exits := Bool.false, throws := Bool.false, falls := [w], assumes := [] }
   | _, r, w, .kRet :: _ =>
@@ -1358,10 +1337,10 @@ def checkSeq : SigTable → Ty → World → List Instr → TCResult
                   rest)
       | some (_ :: _) => .reject (.kRepeatTest c body) "loop entry stack is not empty"
   | sigs, r, w, .kForStart x body :: rest =>
-      -- per VERDICT ATOM of the popped list slot (see forAtomTCR);
-      -- the element world runs the loop-invariant discipline (see
-      -- checkForCore): the body at the entry, the body again at the
-      -- join of the entry's falls, the tail at the join.
+      -- per VERDICT ATOM of the popped list slot:
+      --  * a concrete list: the structural simulation (checkForList)
+      --  * the any-list class: the while-loop discipline (checkForCore)
+      --  * anything else: reject
       match popA (.anyValue .list) w.σ with
       | none => .reject (.kForStart x body) "for-each over a non-list"
       | some [] =>
@@ -1369,55 +1348,61 @@ def checkSeq : SigTable → Ty → World → List Instr → TCResult
           | t :: _ =>
               let w₀ := { w with σ := [] }
               t.foldl (fun accA a => mergeTC accA
-                (forAtomTCR (.kForStart x body) sigs
-                  (checkSeq sigs r w₀ rest)
-                  (checkForCore r w₀ x body rest (.kForStart x body)
-                    (checkSeq sigs r { w₀ with Γ := (x, anyT) :: w₀.Γ } body)
-                    (checkSeq sigs r
-                      ({ w₀ with Γ := (genericJoinEnv w₀.η w₀.Γ
-                        (match checkSeq sigs r { w₀ with Γ := (x, anyT) :: w₀.Γ } body with
-                         | .flows fb => fb.falls
-                         | .reject _ _ => []) (x :: instrsWrites body)) } : World)
-                      body)
-                    (checkSeq sigs r
-                      ({ w₀ with Γ := (genericJoinEnv w₀.η w₀.Γ
-                        (match checkSeq sigs r { w₀ with Γ := (x, anyT) :: w₀.Γ } body with
-                         | .flows fb => fb.falls
-                         | .reject _ _ => []) (x :: instrsWrites body)) } : World)
-                      rest))
-                  a)) vacOk
+                (match a with
+                 | .isValue (.listV []) => checkSeq sigs r w₀ rest
+                 | .isValue (.listV (v :: vs')) =>
+                     -- the concrete atom's list lives in the WORLD, not the
+                     -- instruction, so no instruction fuel can dominate the
+                     -- structural simulation (Lean rejects that cross-call);
+                     -- the first pass is checked CONCRETELY (the loop
+                     -- variable at the element's exact type), the join
+                     -- covers every later pass
+                     match typeOfE sigs w₀.Γ (.const v) with
+                     | none => .reject (.kForStart x body)
+                         "for-each element is not a bare value"
+                     | some t₁ =>
+                         mergeTC (checkSeq sigs r w₀ rest)
+                           (checkForCore r w₀ x body rest (.kForStart x body)
+                             (checkSeq sigs r { w₀ with Γ := (x, t₁) :: w₀.Γ } body)
+                             (checkSeq sigs r
+                               ({ w₀ with Γ := (genericJoinEnv w₀.η w₀.Γ
+                                 (match checkSeq sigs r
+                                   { w₀ with Γ := (x, t₁) :: w₀.Γ } body with
+                                  | .flows fb => fb.falls
+                                  | .reject _ _ => []) (x :: instrsWrites body)) } : World)
+                               body)
+                             (checkSeq sigs r
+                               ({ w₀ with Γ := (genericJoinEnv w₀.η w₀.Γ
+                                 (match checkSeq sigs r
+                                   { w₀ with Γ := (x, t₁) :: w₀.Γ } body with
+                                  | .flows fb => fb.falls
+                                  | .reject _ _ => []) (x :: instrsWrites body)) } : World)
+                               rest))
+                 | .anyValue .list =>
+                     mergeTC (checkSeq sigs r w₀ rest)
+                       (checkForCore r w₀ x body rest (.kForStart x body)
+                         (checkSeq sigs r { w₀ with Γ := (x, anyT) :: w₀.Γ } body)
+                         (checkSeq sigs r
+                           ({ w₀ with Γ := (genericJoinEnv w₀.η w₀.Γ
+                             (match checkSeq sigs r { w₀ with Γ := (x, anyT) :: w₀.Γ } body with
+                              | .flows fb => fb.falls
+                              | .reject _ _ => []) (x :: instrsWrites body)) } : World)
+                           body)
+                         (checkSeq sigs r
+                           ({ w₀ with Γ := (genericJoinEnv w₀.η w₀.Γ
+                             (match checkSeq sigs r { w₀ with Γ := (x, anyT) :: w₀.Γ } body with
+                              | .flows fb => fb.falls
+                              | .reject _ _ => []) (x :: instrsWrites body)) } : World)
+                           rest))
+                 | _ => .reject (.kForStart x body) "for-each over a non-list")) vacOk
           | [] => .reject (.kForStart x body) "for-each over a non-list"
       | some (_ :: _) => .reject (.kForStart x body) "loop entry stack is not empty"
   | sigs, r, w, .kForBody x elems body :: rest =>
-      -- the re-arm: elements remain, so at least one more iteration
-      -- runs (the phantom zero-merge keeps the atom-fold shape); the
-      -- head element must pass the element gate (the expansion
-      -- materializes it through kEval (.const v)); no elements left
-      -- means the loop is done.
-      match w.σ with
-      | [] =>
-          match elems with
-          | [] => checkSeq sigs r w rest
-          | v :: _ =>
-              if forElemOk sigs v then
-                mergeTC (checkSeq sigs r w rest)
-                  (checkForCore r w x body rest (.kForBody x [] body)
-                    (checkSeq sigs r { w with Γ := (x, anyT) :: w.Γ } body)
-                    (checkSeq sigs r
-                      ({ w with Γ := (genericJoinEnv w.η w.Γ
-                        (match checkSeq sigs r { w with Γ := (x, anyT) :: w.Γ } body with
-                         | .flows fb => fb.falls
-                         | .reject _ _ => []) (x :: instrsWrites body)) } : World)
-                      body)
-                    (checkSeq sigs r
-                      ({ w with Γ := (genericJoinEnv w.η w.Γ
-                        (match checkSeq sigs r { w with Γ := (x, anyT) :: w.Γ } body with
-                         | .flows fb => fb.falls
-                         | .reject _ _ => []) (x :: instrsWrites body)) } : World)
-                      rest))
-              else .reject (.kForBody x [] body)
-                  "for-each element is not a bare value"
-      | _ => .reject (.kForBody x [] body) "loop entry stack is not empty"
+      -- the re-arm: the elems are CONCRETE in the instruction — the
+      -- check is the structural simulation of their execution; the
+      -- machine's re-arm does not gate the stack (it just expands),
+      -- and neither does the simulation
+      checkForList sigs r w x body rest elems
   | sigs, r, w, .kAssert :: rest =>
       -- assert, per VERDICT ATOM. The machine continues ONLY on
       -- .boolean true; false and every non-boolean are LOUD. The
@@ -1456,9 +1441,34 @@ decreasing_by
       | exact sfuel_cons_gt _ _
       | (simp only [sfuel_cons, ifuel, efuel]; omega)
       | (simp only [sfuel_cons, ifuel]; omega)
+      | (simp only [sfuel_cons, ifuel, List.length_cons, Nat.mul_succ,
+          Nat.add_assoc]; omega)
       | (exfalso; simp_all)
       | omega
-      | (rename_i l; exact absurd rfl (by intro _; exact l.elim))
+
+/-- The for-each over a CONCRETE list: the structural simulation.
+    One kEval/kSet/body block per element — exactly the instruction
+    sequence the machine runs — with each block's fall worlds feeding
+    the next block. This IS the machine's execution, so the check and
+    the semantics agree by construction. -/
+def checkForList (sigs : SigTable) (r : Ty) (w : World) (x : «String»)
+    (body rest : List Instr) : List JSValue → TCResult
+  | [] => checkSeq sigs r w rest
+  | v :: vs' =>
+      match checkSeq sigs r w (.kEval (.const v) :: .kSet x :: body) with
+      | .reject s why => .reject s why
+      | .flows fb =>
+          fb.falls.foldl (fun acc u =>
+            mergeTC acc (checkForList sigs r u x body rest vs')) noFlows
+  termination_by elems => (sfuel body + 3) * (elems.length + 1) + sfuel rest + 1
+  decreasing_by
+    all_goals
+      first
+        | (simp only [sfuel_cons, ifuel, efuel, List.length_cons, Nat.mul_succ,
+            Nat.add_assoc]; omega)
+        | (simp only [List.length_nil, Nat.mul_one, Nat.zero_add, Nat.add_assoc]; omega)
+        | (simp only [List.length_cons, Nat.mul_succ, Nat.add_assoc]; omega)
+end
 
 def forAtomTC (sigs : SigTable) (r : Ty) (w : World) (x : «String»)
     (body rest : List Instr) : VTy → TCResult
